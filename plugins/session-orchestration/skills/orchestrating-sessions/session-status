@@ -764,7 +764,7 @@ all_landed() {
 }
 # keeps_nothing WT REPO: removing WT loses nothing. No uncommitted or untracked file (untracked listed whatever
 # status.showUntrackedFiles says), no hidden edit (skip-worktree, assume-unchanged), and each ignored file, which `git
-# worktree remove` deletes too, also in REPO's checkout: a file the same, a folder holding every file of WT's the same.
+# worktree remove` deletes too, also in REPO's checkout: a file the same, a folder holding every file of WT's the same, a symlink at a path REPO has too.
 # Build output and caches pass; a .env or notes only WT has don't.
 keeps_nothing() {
   local s p
@@ -775,7 +775,8 @@ keeps_nothing() {
     case $p in
       # a file only the main checkout has is fine; WT often sits inside REPO, so name REPO's folder exactly
       */) [ -d "$2/$p" ] && [ -z "$(diff -rq "$1/$p" "$2/$p" 2>&1 | grep -vF -e "Only in $2/${p%/}: " -e "Only in $2/$p")" ] ;;
-      *) cmp -s "$1/$p" "$2/$p" ;;
+      # an ignored symlink (a linked .claude/tasks) is listed without the slash even to a folder; removal drops only the link
+      *) if [ -L "$1/$p" ]; then [ -e "$2/$p" ] || [ -L "$2/$p" ]; else cmp -s "$1/$p" "$2/$p" 2>/dev/null; fi ;;
     esac || return 1
   done < <(sed -n 's/^!! //p' <<<"$s")
 }
