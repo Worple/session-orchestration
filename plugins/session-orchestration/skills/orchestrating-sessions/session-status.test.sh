@@ -741,6 +741,18 @@ export SESSION_STATUS_SOCK_DIR=$tmp/socks; mkdir -p "$tmp/socks"; addr=uds:$tmp/
 setacct .claude-work "$(sess "$rid" rev idle $$)"; calls >/dev/null
 [ "$(run --address rev)" = "$addr" ] && [ "$(run --address "${rid:0:8}")" = "$addr" ] &&
   [ "$(run --address nobody 2>/dev/null; echo $?)" = 2 ] && [ "$(run --address "${rid:0:4}" 2>/dev/null; echo $?)" = 2 ] || { echo "--address failed: $(run --address rev 2>&1)"; exit 1; }
+# --other (SendMessage by name): the other account's socket; exit 4 once this account carries the name live too (the
+# engine reaches that one itself), and 3 when a listing failed, never a guess.
+xid=33333333-2222-3333-4444-555555555555
+[ "$(run --address rev --other)" = "$addr" ] && [ "$(run --address rev --x 2>/dev/null; echo $?)" = 2 ] &&
+  [ "$(run --address "${rid:0:8}" --other 2>/dev/null; echo $?)" = 2 ] || { echo "--address --other failed: $(run --address rev --other 2>&1)"; exit 1; }
+setacct cfg "$(sess "$xid" rev idle $$)"
+[ "$(run --address rev --other 2>&1; echo $?)" = "$(printf 'rev is live under this account: SendMessage reaches it by name\n4')" ] || { echo "--address --other, here too: $(run --address rev --other 2>&1)"; exit 1; }
+setacct cfg "$(sess "$xid" rev '' null)"
+[ "$(run --address rev --other)" = "$addr" ] || { echo "--address --other, retired here: $(run --address rev --other 2>&1)"; exit 1; }
+echo 'not json' > "$tmp/agents-cfg.json"
+[ "$(run --address rev --other 2>/dev/null; echo $?)" = 3 ] || { echo "--address --other, a failed listing: not exit 3"; exit 1; }
+setacct cfg ""
 for st in idle busy waiting; do setacct .claude-work "$(sess "$rid" rev $st $$)"
   out=$(run --send-when-idle "$rid" x)
   [ "$out" = "send: SendMessage to \"$addr\" now (\"rev\", $st, live under another account); the text is yours to send" ] &&

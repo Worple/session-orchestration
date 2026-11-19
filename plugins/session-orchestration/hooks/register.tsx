@@ -1805,6 +1805,26 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // The model's SendMessage by a name the engine refused (its name lookup is per account) that one live session under
+  // another account carries (features.accounts on): sent again to that session's socket, `uds:` (session-status
+  // --address NAME --other). A send the engine delivers costs nothing extra; plugin sends (reply, the outbox) look
+  // their addresses up themselves, and an address passes as it came. Sent from here (origin this plugin, the sender's
+  // `uds:` from as ever, so a relay still verifies): a second next() in one dispatch isn't the engine's contract.
+  on('session.send', { origin: { kind: 'model' } }, async ($, e, next) => {
+    const sent = await next(e)
+    if (sent.isDelivered || /[:@/\s]/.test(e.to)) return sent
+    const cwd = (await $.session.cwd()).replace(/\/\.(claude\/)?worktrees\/.*$/, '')
+    const r = await runBash($, [`${$.plugin.root}/skills/orchestrating-sessions/session-status`, '--address', e.to, '--other'], { cwd, timeoutMs: 30_000 }).catch(() => undefined)
+    const to = r?.exitCode === 0 ? r.stdout.trim() : ''
+    // exit 4 (this account's) and 2 with no other session by the name: the engine's own answer; else why not, after it.
+    if (!to.startsWith('uds:') || to.includes('\n')) {
+      const why = r && r.exitCode !== 4 && !/^no live session .* in any listed account$/.test(oneLine(r.stderr)) ? oneLine(r.stderr) : ''
+      return why ? { isDelivered: false, reason: `${sent.reason}; under another account: ${why}` } : sent
+    }
+    const again = await $.session.send({ to, text: e.text })
+    return again.isDelivered ? again : { isDelivered: false, reason: `${e.to}, live under another account at ${to}: ${again.reason}` }
+  })
+
   on('tool.call', { tool: 'mcp__session-orchestration__ask_approval' }, async ($, e) => {
     const { key, question, options } = e
     const labels = Array.isArray(options) ? options.filter((o): o is string => typeof o === 'string' && o.trim() !== '') : []

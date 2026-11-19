@@ -119,8 +119,9 @@
 #        session-status --coordinator   names of this account's live coordinator sessions (ran --start,
 #                       --changes, --watch or --owner, or opened the pane), newest first, excluding the caller, then
 #                       (features.accounts on) another account's by their live socket's uds: address; no tracker calls
-#        session-status --address NAME|ID   the uds: address SendMessage reaches a live session at, any listed
-#                       account; exit 1 no live socket, 2 none or several match, 3 a listing failed
+#        session-status --address NAME|ID [--other]   the uds: address SendMessage reaches a live session at, any
+#                       listed account (--other: another one's only, by exact name, exit 4 when this one's matches,
+#                       3 whenever a listing failed); exit 1 no live socket, 2 none or several match, 3 a listing failed
 #        session-status --coordinator-of DIR [--start]   the coordinator of DIR's project when it's another than
 #                       this one (a subproject, the parent): its name; exit 1 not running (--start opens it), 3 listing
 #                       failed, 4 none of its own (--start opens a new one there), 5 nothing opened
@@ -313,11 +314,19 @@ fi
 # --address NAME|ID: the `uds:` address SendMessage reaches a live session at, under any account list_accounts names
 # (another one only with features.accounts on): lib.sh's sock_addr of its listed pid. Exit 1: listed, but no live
 # socket; 2: no live session by that name or id (8+ characters), or several; 3: not found, and a listing failed.
+# --other (register.tsx's session.send hook, a SendMessage by name the engine refused): another account's only, by
+# exact name (a hex name is no id prefix); exit 4 when a live session of this account carries it, which SendMessage
+# reaches itself, and 3 whenever a listing failed, a match or not (it may hide this account's).
 if [ "${1:-}" = --address ]; then
-  [ $# = 2 ] && [ -n "$2" ] || { echo "usage: session-status --address NAME|ID" >&2; exit 2; }
+  [ -n "${2:-}" ] && { [ $# = 2 ] || { [ $# = 3 ] && [ "$3" = --other ]; }; } || { echo "usage: session-status --address NAME|ID [--other]" >&2; exit 2; }
   TMP=$(mktemp -d) || exit 1; trap 'r=$?; rm -rf "$TMP"; exit_fault $r' EXIT
   # A running process (a pid), whatever its state: a worker done and waiting on its landing approval is still live.
-  rows=$(list_sessions | awk -F'\t' -v w="$2" '$9 ~ /^[0-9]+$/ && ($2 == w || (length(w) >= 8 && index($1, w) == 1))')
+  rows=$(list_sessions | awk -F'\t' -v w="$2" -v x="${3:-}" '$9 ~ /^[0-9]+$/ && ($2 == w || (x == "" && length(w) >= 8 && index($1, w) == 1))')
+  if [ "${3:-}" = --other ]; then
+    ! awk -F'\t' '$4 == "claude"' <<<"$rows" | grep -q . || { echo "$2 is live under this account: SendMessage reaches it by name" >&2; exit 4; }
+    [ ! -e "$TMP/ask.failed" ] || { echo "an account's session listing failed, so who carries $2 is unknown: try again" >&2; exit 3; }
+    rows=$(awk -F'\t' '$4 != "claude"' <<<"$rows")
+  fi
   [ -n "$rows" ] || [ ! -e "$TMP/ask.failed" ] || { echo "no live session $2 found, but an account's session listing failed: try again" >&2; exit 3; }
   [ -n "$rows" ] || { echo "no live session $2 in any listed account" >&2; exit 2; }
   [ "$(grep -c . <<<"$rows")" = 1 ] || { echo "several live sessions match $2: pass its id" >&2; exit 2; }

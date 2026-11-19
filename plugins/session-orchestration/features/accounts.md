@@ -2,7 +2,8 @@
 
 > **Start**: nothing to do. Workers you start or resume run under your account (don't set or unset
 > `CLAUDE_CONFIG_DIR`); keep them there unless the user names another. A live session under another account takes
-> a SendMessage only at its socket's `uds:` address (`session-status --address NAME|ID`). Before resuming a closed
+> a SendMessage by its name (the plugin sends it to its socket) or at its `uds:` address (`session-status --address
+> NAME|ID`). Before resuming a closed
 > session, ask the user to confirm it isn't running under another account.
 > **Read when**: a session under another account needs a message, resume, wake, stop or follow-up; a `Reports:` line
 > shows; a `Weekly limit:` line or "past 90% of its weekly limit" shows; a command was handed over under another
@@ -27,8 +28,9 @@ fails with "Workspace not trusted", ask the user to run `claude` there once unde
 `CLAUDE_CONFIG_DIR` (if it isn't the default) and accept the trust prompt; don't start the worker under another
 account to get around it.
 
-`claude agents`, `attach`, `logs`, `stop` and `ListAgents` only see sessions of your own account, and `SendMessage`
-by name or id reaches only those. A session running under another account is invisible to them, so the duplicate
+`claude agents`, `attach`, `logs`, `stop` and `ListAgents` only see sessions of your own account, and the engine's
+`SendMessage` by name or id reaches only those (the plugin readdresses a name, below). A session running under
+another account is invisible to them, so the duplicate
 check before a `--resume` can't catch it, and one stopped there isn't found here either (`claude logs` says `No job
 matching`). If `--resume` finds its transcript, it continues the same conversation under your account: before
 resuming a closed session, ask the user to confirm it isn't still running under another account.
@@ -39,6 +41,13 @@ on a prompt or interactive too, with no stop, resume or context reload. `session
 the address of a listed live session (only for its listed pid, whose process lives: a dead session's socket can
 linger); exit 1 when it has none, then fall back to the moves below. The gate is `features.accounts` itself: off,
 no other account is listed, so none is addressed.
+
+**By name, too.** Your own `SendMessage` to a name the engine refuses (no live session of your account carries it)
+that one live session under another account carries (another project's coordinator, say) goes to that session's
+socket: the plugin's `session.send` hook asks `session-status --address NAME --other` and sends it there. A send the
+engine delivers costs nothing extra, and an address passes as it is. Two live sessions by the name elsewhere, none,
+or one with no socket leave the engine's refusal, with the reason after it (`under another account: …`). `ListAgents`
+still lists only your account: `session-status --activity` lists every account's sessions, coordinators included.
 
 **Keep every task session under your own account** unless the user names the other one.
 - **Messages and approvals** to a live session under another account go to its `uds:` address. A relay goes straight
@@ -68,8 +77,8 @@ no other account is listed, so none is addressed.
 ## Messaging another project's coordinator
 
 Which account runs which project is the user's rule (the CLAUDE.md section that names the accounts), so another
-project's coordinator often runs under the other account. Live, it takes a SendMessage at its `uds:` address: the one
-`session-status --coordinator-of DIR` prints, or `session-status --address NAME` for one you know by name. Not live,
+project's coordinator often runs under the other account. Live, it takes a SendMessage by its name (or at the `uds:`
+address `session-status --coordinator-of DIR` prints). Not live,
 or with no socket, queue the message in that project's coordinator inbox: `session-status --inbox-add --root <its
 root>`, the text on stdin. Its `--watch`
 reports it under `Inbox` while it runs; its next `--start` prints it when it's closed. The heading names you, your

@@ -62,8 +62,8 @@ that coordinator's, not yours. Before you start or message a session for work in
 - **It prints a name**: delegate. `SendMessage` it one line: `From the coordinator "<your name>": <the request, as
   you'd brief a task session: what, why, done when>. Report back to me only its outcome, or a block I must resolve.`
   Write one handoff entry (`delegated to NAME: <request>`) and track only that; resolve it when NAME reports. Never
-  start, message or resume that project's sessions yourself. A name `under another account`: SendMessage the `uds:`
-  address that line names; one that says `reaches it only from there` (no live socket, or `features.accounts` off):
+  start, message or resume that project's sessions yourself. A name `under another account`: SendMessage it by
+  that name or the `uds:` address that line names; one that says `reaches it only from there` (no live socket, or `features.accounts` off):
   queue it in its inbox (`--inbox-add --root DIR`, [accounts](../../features/accounts.md)), or with the feature off
   ask the user to tell it there.
 - **Exit 1** (not running): `--start` opens it, after the user's yes (exit 5: nothing opened; hand the user the

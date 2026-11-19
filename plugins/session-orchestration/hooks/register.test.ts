@@ -1137,6 +1137,43 @@ test('reply answers the from it is given, else tries the live coordinators the p
     'proj-coordinator: PROJ-1 · b · blocked', 'old-coordinator: PROJ-1 · b · blocked', 'proj-coordinator: PROJ-1 · b · done', 'PROJ-2-x: PROJ-2 go'])
 })
 
+test('the model\'s SendMessage by a name the engine refused goes to the socket of the one session under another account carrying it', async ($, on) => {
+  on('session.cwd', async () => ({ value: '/work/proj/.worktrees/PROJ-1' }))
+  // --address NAME --other: other-coord lives under another account, here-coord under this one (exit 4), down a
+  // failed listing (exit 3), anyone else nobody's (exit 2).
+  const asked: unknown[] = []
+  const exits: Record<string, [number, string]> = { 'other-coord': [0, ''], 'here-coord': [4, 'here-coord is live under this account'],
+    down: [3, 'an account\'s session listing failed, so who carries down is unknown: try again'] }
+  on('process.run', async (_, e) => {
+    asked.push([e.argv.slice(2), e.init?.cwd])
+    const [rc, err] = exits[String(e.argv[3])] ?? [2, `no live session ${e.argv[3]} in any listed account`]
+    return { value: { exitCode: rc, stdout: rc ? '' : 'uds:/tmp/cc-socks/42.sock\n', stderr: `${err}\n`, isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  const sent: string[] = []
+  let up = true
+  on('session.send', async (_, e) => {
+    sent.push(e.to)
+    if (e.to === 'mine') return { isDelivered: true }
+    return e.to.startsWith('uds:') && up ? { isDelivered: true } : { isDelivered: false, reason: 'nobody by that name' }
+  })
+  const send = (to: string, kind: 'model' | 'plugin' = 'model') =>
+    $.session.send({ to, text: 'hi', origin: kind === 'model' ? { kind } : { kind, name: 'x' } })
+  expect(await send('mine')).toEqual({ isDelivered: true }) // delivered by name: nothing asked
+  expect(asked).toEqual([])
+  expect(await send('other-coord')).toEqual({ isDelivered: true })
+  expect(asked).toEqual([[['--address', 'other-coord', '--other'], '/work/proj']])
+  expect(await send('here-coord')).toEqual({ isDelivered: false, reason: 'nobody by that name' })
+  expect(await send('nobody')).toEqual({ isDelivered: false, reason: 'nobody by that name' })
+  expect(await send('down')).toEqual({ isDelivered: false, reason: 'nobody by that name; under another account: an account\'s session listing failed, so who carries down is unknown: try again' })
+  // an address and a plugin's send pass as they came, unasked
+  await send('uds:/tmp/cc-socks/7.sock'); await send('gone', 'plugin')
+  expect(asked.length).toBe(4)
+  up = false
+  expect(await send('other-coord')).toEqual({ isDelivered: false, reason: 'other-coord, live under another account at uds:/tmp/cc-socks/42.sock: nobody by that name' })
+  expect(sent).toEqual(['mine', 'other-coord', 'uds:/tmp/cc-socks/42.sock', 'here-coord', 'nobody', 'down',
+    'uds:/tmp/cc-socks/7.sock', 'gone', 'other-coord', 'uds:/tmp/cc-socks/42.sock'])
+})
+
 test('reply with report writes it to the replies file first; not written, nothing is sent', async ($, on) => {
   on('session.cwd', async () => ({ value: '/work/proj/.worktrees/PROJ-1' }))
   on('session.id', async () => ({ value: 'sess-3' }))
