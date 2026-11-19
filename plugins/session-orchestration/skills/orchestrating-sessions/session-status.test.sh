@@ -1631,7 +1631,7 @@ echo '{"features":{"accounts":true}}' > "$a/.claude/coordination.local.json"
 # Its doc's start step and when to read it, the wrapped lines of each joined.
 c=$(init "$a" --check); grep -x 'active: .* features=accounts' <<<"$c" >/dev/null &&
   grep -x "  accounts: nothing to do\. Workers .*\. Before resuming .* Read $(cd "$here/../.." && pwd)/features/accounts.md when a session under .* \"no live-channel credential\"\." <<<"$c" >/dev/null &&
-  grep -qF 'takes a SendMessage only at its socket'\''s `uds:` address (`session-status --address NAME|ID`)' <<<"$c" &&
+  grep -qF 'takes a SendMessage by its name (the plugin sends it to its socket) or at its `uds:` address (`session-status --address NAME|ID`)' <<<"$c" &&
   ! grep -q 'second account' <<<"$(init "$a" --check)" || { echo "check accounts on: $(init "$a" --check)"; exit 1; }
 b=$(mkdir -p "$tmp/init/bb" && cd "$tmp/init/bb" && pwd -P); git -C "$b" init -q && git -C "$b" remote add origin ssh://git@bitbucket.example.com/x/y.git
 echo 'Review inbox: https://claude.ai/artifact/abc' > "$b/CLAUDE.md"
