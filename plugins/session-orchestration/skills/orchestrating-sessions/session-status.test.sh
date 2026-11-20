@@ -761,7 +761,13 @@ setacct cfg "$(sess "$rid" rev idle 1)"
 out=$(run --send-when-idle "${rid:0:8}" "Fix CI") && rc=0 || rc=$?
 [ "$rc" = 5 ] && grep -q '^22222222 is superseded by 5e000002, which owns its task now' <<<"$out" && ! calls | grep -v ' agents ' | grep -q . ||
   { echo "send to a superseded session not refused: $rc $out"; exit 1; }
-rm "$proj/$s1.jsonl" "$proj/$s2.jsonl"; setacct cfg ""
+rm "$proj/$s1.jsonl" "$proj/$s2.jsonl"
+# A coordinator's handover only renames the old one NAME-prev-K: refused too, naming the live NAME.
+setacct cfg "$(sess "$rid" coord-prev-2 idle 1),$(sess "$s1" coord idle 1)"
+out=$(run --send-when-idle "${rid:0:8}" "Fix CI") && rc=0 || rc=$?
+[ "$rc" = 5 ] && grep -q '^"coord-prev-2" (22222222) handed over: "coord" (5e000001) owns its work now' <<<"$out" && ! calls | grep -v ' agents ' | grep -q . ||
+  { echo "send to a renamed predecessor not refused: $rc $out"; exit 1; }
+setacct cfg ""
 # accounts off with a second account sharing the transcripts: an unlisted session may be live there, so no resume
 rm "$root/.claude/coordination.local.json"
 [ "$(run --send-when-idle "${rid:0:8}" "Back" >/dev/null; echo $?)" = 2 ] && ! calls | grep -q -- '--bg' || { echo "send unlisted, accounts off, resumed"; exit 1; }

@@ -1546,6 +1546,7 @@ fi
 # Checks every 30s, for at most SESSION_STATUS_WAIT_S (86400); a failed listing is retried, never read as "not
 # listed". Exit 2: still busy then, or no such session. Exit 5: superseded (a later handover's `Supersedes: ID` owns
 # its task now; an event or a note naming the old id would wake a stopped predecessor): it names the newest successor.
+# So is a session renamed NAME-prev-K by a handoff (a coordinator's too) while a live session is named NAME.
 if [ -n "$SEND" ]; then
   too_big() {  # TRANSCRIPT NAME ID
     local c max=${SESSION_STATUS_MAX_RESUME:-200000}
@@ -1572,6 +1573,11 @@ if [ -n "$SEND" ]; then
     if row=$(find_session "$want"); then
       [ -n "$row" ] || break
       read_row id name st pre started cwd kind status pid
+      # Renamed NAME-prev-K by a handoff (a coordinator's has no Supersedes: line): the live NAME owns its work now.
+      if [[ $name =~ ^(.+)-prev-[0-9]+$ ]]; then
+        b=${BASH_REMATCH[1]} s=$(list_sessions | awk -F'\t' -v n="${BASH_REMATCH[1]}" '$2 == n { print $1; exit }')
+        [ -z "$s" ] || { echo "\"$name\" (${id:0:8}) handed over: \"$b\" (${s:0:8}) owns its work now: send to that one (--send-when-idle ${here:+--here }${s:0:8} TEXT); nothing sent"; exit 5; }
+      fi
       if [ -z "$pid" ]; then
         f=$(transcript_of "$id"); [ -z "$f" ] || ! too_big "$f" "$name" "$id" || exit 4
         resume_with "$(to)" "$cwd" "$id" "$text" "$(moved && echo "$name")" || exit 1
