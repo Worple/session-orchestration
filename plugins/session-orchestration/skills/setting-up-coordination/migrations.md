@@ -1,6 +1,6 @@
 # Migrations
 
-What a project set up by an older plugin version needs done when the layout changes. One row per migration; `session-status --init --migrate` runs them in this order: m1 m2 m3 m4 m5 m6 m8 m7 m9 h1 h2 (m8 before m7, so the move sees the `pending.file` m8 brings over; m9 last). Design: the retro case `claude-plugins-auto-migrate`.
+What a project set up by an older plugin version needs done when the layout changes. One row per migration; `session-status --init --migrate` runs them in this order: m1 m2 m3 m4 m5 m6 m8 m7 m9 m10 h1 h2 (m8 before m7, so the move sees the `pending.file` m8 brings over; m9 and m10 last). Design: the retro case `claude-plugins-auto-migrate`.
 
 Class: **auto** = applied without asking (personal, untracked, restorable); **ask** = one pane ask `migrate-<id>` (Apply / Decline, what it changes in its details); **hand** = a pane ask `migrate-<id>` (Start a session / Not now).
 "From" names the release after which a project needs it (docs say "from the release after <feature>", never a version that doesn't exist yet).
@@ -16,6 +16,7 @@ Class: **auto** = applied without asking (personal, untracked, restorable); **as
 | m7 | the release after the state folder (0.102; includes 0.56 `pending.file` and the replies move) | auto; ask while sessions are live (or listing them failed); hand while the committed `CLAUDE.md` holds the path lines | `coordinator files outside P` | `--move` |
 | m8 | the release after the repo file stopped setting `pending.file` and `history.dirs` (0.112) | auto (untracked repo file), ask (tracked) | `pending.file and history.dirs are ignored in the repo file` | move both keys to the person file |
 | m9 | the release after the state folder move (0.102), for a project moved by a move that left the local adapter naming old paths | auto | `.claude/session-status-adapter names files already moved to P` | `--migrate` points the adapter at P |
+| m10 | the release after template-drift migration, for a section or adapter an older template wrote | ask | `FILE has lines from an older setup template` (CLAUDE.md, CLAUDE.local.md, an untracked local adapter). Covered: the section's approvals paragraph (before 0.46), Reserved, Replies (before 0.64) and task start lines, and the github adapter's `+NAME`/`!NAME` review-word pair (rewritten only together) | rewrites those lines to the current template's, each file backed up (a tracked one is the user's commit); a line edited by hand stays and is named. The approvals paragraph is rewritten only when `approvals.delegate` agrees with it (delegated: true, so it waits for m1), and never in a tracked file |
 | h1 | the release after memory became index + topic files (0.32.2) | hand | flat `memory.md` | pane ask offering a session |
 | h2 | the release after messages modules (0.52) | hand | the adapter mentions msgraph while `messages` is unset | pane ask offering a session |
 
@@ -24,7 +25,7 @@ Answering: `--migrate` stamps nothing while an ask or hand id is open. `--apply=
 `--migrate` then skips (`--check` still names it; `--apply=ID` still applies it). m7 isn't declined but put off: it asks
 again while other sessions run and moves unasked once none does.
 
-Changes that needed no migration (cosmetic, a feature offer, no reliable detector, or old rows still read): `--init` itself (0.42), the github adapter (0.43), generic coordinator rules in the plugin (0.44), the Replies line wording (0.64), `features.retro` (0.103), adapter `brief` and `standup-template` (0.113), the CLAUDE.md task line's `--advisor` hint (the release after plan.advisor: the old line still works, the playbook has the rule), `coordinator.purpose` (from the release after coordinator discovery: a feature offer, asked at `--start` while unset).
+Changes that needed no migration (cosmetic, a feature offer, no reliable detector, or old rows still read): `--init` itself (0.42), the github adapter (0.43), generic coordinator rules in the plugin (0.44), `features.retro` (0.103), adapter `brief` and `standup-template` (0.113), `coordinator.purpose` (from the release after coordinator discovery: a feature offer, asked at `--start` while unset).
 
 ## Adding a migration
 

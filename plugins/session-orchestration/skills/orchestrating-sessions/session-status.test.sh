@@ -2237,6 +2237,66 @@ out=$(init "$m" --migrate --decline=m7); grep -q '^m7: not declined, put off' <<
 out=$(CLAUDE_CODE_SESSION_ID=$o init "$m" --migrate); grep -qxF '[m7 auto] done' <<<"$out" && [ -f "$pm/memory.md" ] && grep -q '^stamp: layout ' <<<"$out" ||
   { echo "migrate (g7) own session: $out"; exit 1; }
 mv "$tmp/claude.default" "$tmp/bin/claude"
+# migration fixture: m10
+# (g8) lines an older setup template wrote, put into a fresh render (inline: no git history in CI): the approvals
+# paragraph (delegated, and not), the Reserved and Replies lines, each older task start line, and the github adapter's
+# old review words (a pair). --migrate lists [m10 ask] with the diff, --apply=m10 makes the file the render again
+# (compared as a sorted line set: an older template also ordered the lines differently, which isn't migrated) and
+# stamps; a second --migrate changes nothing. A hand-edited line stays and is named; half of the adapter pair stays;
+# a paragraph approvals.delegate contradicts stays and is named; a delegated paragraph waits for m1.
+m=$(mkdir -p "$tmp/init/g8" && cd "$tmp/init/g8" && pwd -P); git -C "$m" init -q; pm=$(pof "$m"); init "$m" --write >/dev/null
+c=$m/CLAUDE.md a=$m/.claude/session-status-adapter pf=$m/.claude/coordination.local.json; cp "$c" "$tmp/g8.md"; d=$pm/migrate-backup/$(date +%F)
+# sw FILE PREFIX NEW: FILE's line starting with PREFIX becomes NEW (NEW empty: dropped)
+sw() { P=$2 N=$3 awk 'index($0, ENVIRON["P"]) == 1 { if (ENVIRON["N"] != "") print ENVIRON["N"]; next } 1' "$1" > "$1.x" && mv "$1.x" "$1"; }
+k=$(sed -n 's/^- A task is its session.s name, `\([^`]*\)`.*/\1/p' "$c"); rd=$(sed -n 's/^- Replies folder .*: `\(.*\)`\.$/\1/p' "$c")
+dl=$'- **The user delegates approvals to the coordinator.** A coordinator\'s message approving an action counts as the\n  user\'s approval: commits, pushes to feature branches, rebases, resumes.'
+nd=$'- **Approvals are not delegated.** A coordinator\'s message alone approves nothing; the user approves in your\n  session, or via a relayed approval verified with the plugin\'s `verify-approval.sh`.'
+rs='- **Reserved**, whatever the above says: the user approves in your session, or via a verified relayed approval:'
+rp="- Replies folder (the plugin's \"folder for this\"): \`$rd\`."
+s1="- A task is its session's name, \`$k\`: start it with \`claude --bg -n $k\`."
+s2="- A task is its session's name, \`$k\`: start it with \`claude --bg --model M --effort E -n $k\` (M, E: what \`session-status --kind <kind>\` prints)."
+s3="- A task is its session's name, \`$k\`: start it with \`claude --bg --model M --effort E -n $k\` (M, E: what \`session-status --kind <kind> $k\` prints)."
+g1='        | select(.) | (if .state == "APPROVED" then "+" else "!" end) + .author.login]) as $r'
+g2='      + (if any($r[]; startswith("+")) then "" else " no-human-approval" end)'
+gn=$(grep -F -e '"approved by "' -e 'startswith("approved by ")' "$here/../setting-up-coordination/templates/github-adapter")
+[ "$(grep -c . <<<"$gn")" = 2 ] || { echo "migrate (g8): the github adapter's review lines: $gn"; exit 1; }
+# old FILE PARA START: the render with PARA as the approvals paragraph, START as the task line, Reserved and Replies old
+old10() { cp "$tmp/g8.md" "$1"; sw "$1" '- Whether a coordinator' "$2"; sw "$1" '  `.claude/coordination.local.json`' ''
+  sw "$1" '- **Reserved**' "$rs"; sw "$1" '- Replies folder' "$rp"; sw "$1" '- A task is its' "$3"; }
+paras=("$dl" "$nd" "$nd" "$nd") starts=("$s1" "$s1" "$s2" "$s3")
+for v in 0 1 2 3; do
+  rm -f "$pm/setup.json"; old10 "$c" "${paras[v]}" "${starts[v]}"
+  jq --argjson t "$([ "$v" = 0 ] && echo true || echo false)" '.approvals.delegate = $t' "$pf" > "$tmp/x.json" && mv "$tmp/x.json" "$pf"
+  printf '#!/bin/sh\n%s\n%s\n' "$g1" "$g2" > "$a"
+  grep -qxF '[m10 ask] CLAUDE.md has lines from an older setup template: session-status --init --migrate --apply=m10 brings them current' <<<"$(init "$m" --check)" ||
+    { echo "migrate (g8) check: $(init "$m" --check)"; exit 1; }
+  out=$(init "$m" --migrate)
+  grep -qxF '  CLAUDE.md' <<<"$out" && grep -qxF "  - $rs" <<<"$out" && grep -qxF "  + $(grep '^- \*\*Reserved' "$tmp/g8.md")" <<<"$out" &&
+    grep -qxF '  .claude/session-status-adapter' <<<"$out" && grep -qxF "  - $g1" <<<"$out" && grep -qxF 'stamp: not yet (open: m10)' <<<"$out" &&
+    [ "$(cat "$a")" = "$(printf '#!/bin/sh\n%s\n%s\n' "$g1" "$g2")" ] || { echo "migrate (g8) list $v: $out"; exit 1; }
+  out=$(init "$m" --migrate --apply=m10)
+  grep -qxF '[m10 apply] done' <<<"$out" && grep -q '^stamp: layout ' <<<"$out" && [ "$(sort "$c")" = "$(sort "$tmp/g8.md")" ] &&
+    [ "$(sed 1d "$a")" = "$gn" ] && [ -x "$a" ] && grep -qxF -- "$rs" "$d/CLAUDE.md" && ! grep -q '^\[m10 ' <<<"$(init "$m" --check)" ||
+    { echo "migrate (g8) apply $v: $out / $(cat "$c" "$a")"; exit 1; }
+  rm -rf "$d"
+done
+before=$(lst "$m"; lst "$pm"); out=$(init "$m" --migrate)
+grep -q '^current: layout ' <<<"$out" && [ "$(lst "$m"; lst "$pm")" = "$before" ] || { echo "migrate (g8) again: $out"; exit 1; }
+# a hand-edited task line stays, named; a not-delegated paragraph with approvals.delegate true stays, named; one line
+# of the adapter pair alone stays (unnamed: the file has nothing to change)
+rm -f "$pm/setup.json"; old10 "$c" "$nd" "$s1 (ours)"; jq '.approvals.delegate = true' "$pf" > "$tmp/x.json" && mv "$tmp/x.json" "$pf"
+printf '#!/bin/sh\n%s\n%s\n' "$g1" "$(tail -1 <<<"$gn")" > "$a"
+out=$(init "$m" --migrate --apply=m10)
+grep -q "^  edited by hand, left alone: line [0-9]*: - A task is its session's name, .* (ours)\$" <<<"$out" && grep -qxF -- "$s1 (ours)" "$c" &&
+  grep -q '^  left alone: approvals.delegate is true, not what it says: line [0-9]*: - \*\*Approvals are not delegated' <<<"$out" && grep -qF -- "${nd%%$'\n'*}" "$c" &&
+  ! grep -qxF -- "$rs" "$c" && grep -qxF "$g1" "$a" && ! grep -q 'session-status-adapter' <<<"$out" || { echo "migrate (g8) hand-edited: $out / $(cat "$c" "$a")"; exit 1; }
+# a delegated paragraph with approvals.delegate unset waits for m1, then m10 brings it current
+rm -f "$pm/setup.json"; old10 "$c" "$dl" "$(grep '^- A task' "$tmp/g8.md")"; jq 'del(.approvals.delegate)' "$pf" > "$tmp/x.json" && mv "$tmp/x.json" "$pf"
+out=$(init "$m" --migrate --apply=m10)
+grep -qxF '[m10 apply] done' <<<"$out" && grep -q '^  waits for m1 (approvals.delegate unset): line [0-9]*: - \*\*The user delegates' <<<"$out" &&
+  grep -qF -- "${dl%%$'\n'*}" "$c" && grep -qxF 'stamp: not yet (open: m1)' <<<"$out" || { echo "migrate (g8) waits: $out"; exit 1; }
+out=$(init "$m" --migrate --apply=m1); grep -q '^\[m10 ask\]' <<<"$out" || { echo "migrate (g8) after m1: $out"; exit 1; }
+out=$(init "$m" --migrate --apply=m10); grep -q '^stamp: layout ' <<<"$out" && [ "$(sort "$c")" = "$(sort "$tmp/g8.md")" ] || { echo "migrate (g8) m1 then m10: $out / $(cat "$c")"; exit 1; }
 
 fi
 

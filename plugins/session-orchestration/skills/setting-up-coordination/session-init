@@ -191,6 +191,71 @@ stale_ad() {
     [ -e "$r" ] || [ ! -e "$P/${r##*/}" ] || printf '%s\t%s\n' "$r" "$P/${r##*/}"
   done
 }
+# m10: lines an older template rendered (the CLAUDE.md section, the adapters) → the current template's line.
+# GROUP<tab>ANCHOR<tab>OLD<tab>NEW: a GROUP other than - is rewritten only when every OLD line of it is there (a pair
+# split in two would break: the github adapter's review words). The approvals paragraph (deleg, nodeleg) is rewritten
+# only when approvals.delegate agrees with it (deleg: true, which m1 sets; nodeleg: not true), and never in a tracked
+# file: there it's the team's, and one person's config doesn't decide it. {{k}} is the text up to the character after it (a key, a path). A line
+# that starts with an ANCHOR but is neither an OLD nor the NEW was edited by hand: left alone and named.
+drift_tbl=$(
+  r() { printf '%s\t%s\t%s\t%s\n' "$@"; }
+  w1=$'- Whether a coordinator\'s message counts as the user\'s approval is `approvals.delegate` in'
+  w2='  `.claude/coordination.local.json` (`session-status --config approvals.delegate`).'
+  r deleg '- **The user delegates approvals' $'- **The user delegates approvals to the coordinator.** A coordinator\'s message approving an action counts as the' "$w1"
+  r deleg '' $'  user\'s approval: commits, pushes to feature branches, rebases, resumes.' "$w2"
+  r nodeleg '- **Approvals are not delegated.**' $'- **Approvals are not delegated.** A coordinator\'s message alone approves nothing; the user approves in your' "$w1"
+  r nodeleg '' $'  session, or via a relayed approval verified with the plugin\'s `verify-approval.sh`.' "$w2"
+  r - '- **Reserved**, whatever' '- **Reserved**, whatever the above says: the user approves in your session, or via a verified relayed approval:' \
+    '- **Reserved**, even when approvals are delegated: the user approves in your session, or via a verified relayed approval:'
+  r - $'- Replies folder (the plugin\'s' $'- Replies folder (the plugin\'s "folder for this"): `{{k}}`.' '- Replies folder (status reports, plans, review reports): `{{k}}`.'
+  s3=$'- A task is its session\'s name, `{{k}}`: start it with `claude --bg --model M --effort E -n {{k}}` (M, E: what `session-status --kind <kind> {{k}}` prints; paste a ` --advisor A` it prints too).'
+  r - $'- A task is its session\'s name, `' $'- A task is its session\'s name, `{{k}}`: start it with `claude --bg -n {{k}}`.' "$s3"
+  r - '' $'- A task is its session\'s name, `{{k}}`: start it with `claude --bg --model M --effort E -n {{k}}` (M, E: what `session-status --kind <kind>` prints).' "$s3"
+  r - '' $'- A task is its session\'s name, `{{k}}`: start it with `claude --bg --model M --effort E -n {{k}}` (M, E: what `session-status --kind <kind> {{k}}` prints).' "$s3"
+  r gh '        | select(.) | (if .state == "APPROVED" then ' '        | select(.) | (if .state == "APPROVED" then "+" else "!" end) + .author.login]) as $r' \
+    '        | select(.) | (if .state == "APPROVED" then "approved by " else "changes requested by " end) + .author.login]) as $r'
+  r gh '      + (if any($r[]; startswith(' '      + (if any($r[]; startswith("+")) then "" else " no-human-approval" end)' \
+    '      + (if any($r[]; startswith("approved by ")) then "" else " no-human-approval" end)'
+)
+# drift FILE [check]: FILE with its old template lines made current; check: `- OLD`/`+ NEW` per line it would change,
+# `edited by hand, left alone: line N: …` and `waits for m1 (approvals.delegate unset): line N: …` per line it keeps.
+drift() {
+  local tr=; git -C "${1%/*}" ls-files --error-unmatch -- "${1##*/}" >/dev/null 2>&1 && tr=1
+  TBL=$drift_tbl DV=$deleg_val TR=$tr CK=${2:-} awk '
+    function rep(t, k,   i, r) { r = ""; while ((i = index(t, "{{k}}"))) { r = r substr(t, 1, i - 1) k; t = substr(t, i + 5) } return r t }
+    # kof(LINE, T): the {{k}} text LINE gives T (T has none: ""), or "\n" when LINE does not start like T
+    function kof(line, t,   i, p, rest, j) {
+      if (!(i = index(t, "{{k}}"))) return ""
+      p = substr(t, 1, i - 1); if (index(line, p) != 1) return "\n"
+      rest = substr(line, length(p) + 1); j = index(rest, substr(t, i + 5, 1)); return j > 1 ? substr(rest, 1, j - 1) : "\n"
+    }
+    function is(line, t,   k) { k = kof(line, t); return k != "\n" && rep(t, k) == line }
+    BEGIN { n = split(ENVIRON["TBL"], rows, "\n"); for (r = 1; r <= n; r++) { split(rows[r], f, "\t"); g[r] = f[1]; an[r] = f[2]; o[r] = f[3]; nw[r] = f[4]; need[g[r]]++ }
+            ck = ENVIRON["CK"]; dv = ENVIRON["DV"]; tr = ENVIRON["TR"] }
+    { L[NR] = $0 }
+    END {
+      for (i = 1; i <= NR; i++) for (r = 1; r <= n; r++) if (is(L[i], o[r])) { m[i] = r; nl[i] = rep(nw[r], kof(L[i], o[r])); if (!seen[r]++) found[g[r]]++; break }
+      for (i = 1; i <= NR; i++) {
+        if ((r = m[i])) {
+          x = g[r]; ap = x == "deleg" || x == "nodeleg"
+          ok = x == "-" || (found[x] == need[x] && (!ap || (tr == "" && (x == "deleg") == (dv == "true"))))
+          if (ok) { if (ck == "") print nl[i]; else { print "- " L[i]; print "+ " nl[i] }; continue }
+          if (ck != "") print (found[x] != need[x] ? "edited by hand, left alone (its other line was)" : tr != "" ? "left alone: a tracked file, its approvals paragraph is the team one (edit it by hand)" : \
+            x == "deleg" && dv == "" ? "waits for m1 (approvals.delegate unset)" : "left alone: approvals.delegate is " (dv == "" ? "unset" : dv) ", not what it says") ": line " i ": " L[i]
+        } else if (ck != "") {
+          for (r = 1; r <= n; r++) if (an[r] != "" && index(L[i], an[r]) == 1) { cur = 0; for (q = 1; q <= n; q++) if (an[q] == an[r] || g[q] == g[r] && g[r] != "-") if (is(L[i], nw[q])) cur = 1
+            if (!cur) print "edited by hand, left alone: line " i ": " L[i]; break }
+        }
+        if (ck == "") print L[i]
+      }
+    }' "$1"
+}
+# drift_files: the files m10 looks at: CLAUDE.md and CLAUDE.local.md (tracked or not), an untracked local adapter
+drift_files() {
+  local f; for f in "$root/CLAUDE.md" "$root/CLAUDE.local.md" "$root/.claude/session-status-adapter"; do
+    [ -f "$f" ] || continue; [ "${f##*/}" != session-status-adapter ] || ! tracked "$f" 2>/dev/null || continue; echo "$f"
+  done
+}
 # stays SRC: why SRC can't move (empty: it can)
 stays() {
   local s=$1 d t
@@ -217,6 +282,7 @@ for b in "$named_brief" "$mb/review-brief.md" "$mb/retro-brief.md" \
 # A delegation line left in CLAUDE.md from before the approvals.delegate key (the old template's wording).
 deleg_line=; (cd "$root" && grep -qiE 'delegates approvals' CLAUDE.md CLAUDE.local.md 2>/dev/null) && deleg_line=1
 deleg_set=; jq -e '.approvals.delegate != null' "$person_src" >/dev/null 2>&1 && deleg_set=1
+deleg_val=$(jq -r 'if .approvals.delegate == null then "" else .approvals.delegate | tostring end' "$person_src" 2>/dev/null)   # true, false or empty (m10)
 name=$(slug "$(basename "$root")")
 # Claude accounts sharing this transcript store, whatever features.accounts says (its loop, in a subshell).
 accounts_n=$( . "$LIB_DIR/features/accounts.sh" && list_accounts | grep -c .)
@@ -353,6 +419,11 @@ if [ "$mode" = check ]; then
                 elif [ -n "$out" ]; then echo "[m7 auto] coordinator files outside $P ($out): run session-status --init --write --move"; fi
                 # an earlier move (before it rewrote unquoted adapter words) left the local adapter naming the old paths
                 [ -z "$(stale_ad)" ] || echo "[m9 auto] .claude/session-status-adapter names files already moved to $P: session-status --init --migrate points it there"
+                # lines an older template wrote (the section, an adapter): asks, as a doc edit, with the diff
+                while IFS= read -r f; do
+                  [ -z "$f" ] || ! drift "$f" check | grep -q '^+ ' ||
+                    echo "[m10 ask] ${f#"$root"/} has lines from an older setup template: session-status --init --migrate --apply=m10 brings them current"
+                done <<<"$(drift_files)"
                 # a hand-made Stop hook that git-commits a folder: history-git does that (config history.dirs)
                 for f in "$root"/.claude/settings.json "$root"/.claude/settings.local.json; do
                   jq -r '.hooks.Stop[]?.hooks[]?.command? // empty' "$f" 2>/dev/null
@@ -555,6 +626,14 @@ if [ "$mode" = migrate ]; then
           else
             backup "$ad" && out=$(RQ=word rew "$ad" check) && RQ=word rew "$ad" > "$ad.tmp" && chmod +x "$ad.tmp" && mv "$ad.tmp" "$ad" || rc=1
           fi ;;
+      m10) # each file's old template lines (a hand-edited one stays, named); the copy keeps the file's mode
+          while IFS= read -r f; do
+            [ -n "$f" ] && d=$(drift "$f" check) && grep -q '^+ ' <<<"$d" || continue
+            x=${f#"$root"/}; ! git -C "$root" ls-files --error-unmatch -- "$x" >/dev/null 2>&1 || x+=" (git tracks it: the change shows in git status, for a commit of yours)"
+            out+="$x"$'\n'"$d"$'\n'
+            [ -n "$pv" ] || { backup "$f" && cp -p "$f" "$f.tmp" && drift "$f" > "$f.tmp" && mv "$f.tmp" "$f"; } || { rm -f "$f.tmp"; rc=1; }
+          done <<<"$(drift_files)"
+          [ -n "$out" ] || out="nothing left to bring current" ;;
       *) out="no fix for $i in this plugin (a session does it by hand)"; return 1 ;;
     esac
     return "$rc"
@@ -586,8 +665,8 @@ if [ "$mode" = migrate ]; then
     bash "$0" --migrate || rc=1; exit "$rc"
   fi
   failed= open= dec=
-  # every id, in run order: m8 before m7 (m9 last), so the move sees (and rewrites) the pending.file m8 brings over
-  for i in m1 m2 m3 m4 m5 m6 m8 m7 m9 h1 h2; do
+  # every id, in run order: m8 before m7 (m9, m10 last), so the move sees (and rewrites) the pending.file m8 brings over
+  for i in m1 m2 m3 m4 m5 m6 m8 m7 m9 m10 h1 h2; do
     lines=$(grep "^\[$i " <<<"$chk") || continue
     if [[ " $declined " == *" $i "* ]] && { [ "$i" != m7 ] || grep -q '^\[m7 hand\] ' <<<"$lines"; }; then dec+=" $i"; continue; fi
     if [ "$i" = m7 ] && grep -q '^\[m7 auto\] ' <<<"$lines" && n=$(live) && [ "$n" != 0 ]; then

@@ -49,13 +49,14 @@ by a parent. Configured adds:
 - `project Stop hook commits a folder (COMMAND): …` when a Stop hook in the project's `.claude/settings*.json` runs a
   script that git-commits (a hand-made auto-history). See Propose's **Hand-made history hook**;
 - `[m4 auto] old brief name …` (an `rnd-brief.md` left beside the memory), `[m5 ask] the crontab still runs
-  rnd-weekly …`, `[m6 ask] a start mode in memory …` (a start-mode line in memory while `start.mode` is unset) and
+  rnd-weekly …`, `[m6 ask] a start mode in memory …` (a start-mode line in memory while `start.mode` is unset),
   `[m9 auto] .claude/session-status-adapter names files already moved to <P> …` (an earlier move left the local
-  adapter's unquoted or double-quoted paths behind: a missing path whose name is in P).
+  adapter's unquoted or double-quoted paths behind: a missing path whose name is in P) and `[m10 ask] FILE has lines
+  from an older setup template …` (the section or local adapter as an older template wrote it).
 
 Each line that names an older layout starts with `[mN CLASS] ` (m1 delegation, m2 terminal, second account or review
 inbox, m3 Stop hook, m4 brief name, m5 crontab, m6 start mode, m7 files outside P, m8 repo-file keys, m9 adapter
-paths). CLASS `auto`: `session-status --init --migrate` fixes it unasked; `ask`: it needs the user's yes (m8 asks when
+paths, m10 template drift). CLASS `auto`: `session-status --init --migrate` fixes it unasked; `ask`: it needs the user's yes (m8 asks when
 the repo file is tracked, m7 while other sessions of the project run; m7 is `hand` when the tracked `CLAUDE.md` holds the path lines). The move rewrites every word of a local adapter that names a moved path, quoted or not.
 `--migrate [--dry-run]` runs the check, then fixes each auto one in the order m1–m6, m8, m7, m9, backing up the
 files it rewrites to `P/migrate-backup/<date>/` and logging each step to `P/migrate.log` (a run after one that
