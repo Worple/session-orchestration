@@ -52,7 +52,7 @@ the same settings. Then:
   takes the old one's pin; a handover the coordinator starts on its own shows a New task card for you to start. The old
   coordinator is left running: stop it, don't archive it (archiving takes the successor with it). The successor is the
   only sidebar session the coordinator starts: a hook refuses `start_session` for a task, which then starts with
-  `claude --bg` (a sidebar session gets no status row, idle notice, resume after a restart or stop).
+  `claude --bg` like every task.
 
 ## Install
 
