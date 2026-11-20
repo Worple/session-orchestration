@@ -546,7 +546,7 @@ person_set() {
 # starts with, logged as advisor) or escalate (session-status
 # --handover --escalate: NAME task or chunk, then the successor's model and effort and the old session's name, as
 # sess). With telemetry=full only, the fault kinds too, as `usage NAME KIND [N [AT]]`, each with the plugin's version
-# as v: block (a hook's deny or ask: NAME approved-action-deny|-ask or coordinator-guard-cd|-edit, AT the hook file:line
+# as v: block (a hook's deny or ask: NAME approved-action-deny|-ask or coordinator-guard-cd|-edit|-sidebar, AT the hook file:line
 # that decided), refuse (Claude Code refused a tool call, the PermissionDenied hook: NAME the tool's name), relay (the
 # approval hook passed over a relayed approval: NAME why: used-once, no-key, not-landing, unverified), wake
 # (session-status --watch: NAME wake with N the lines it reports, poll-failed or gave-up with N the poll's exit code)

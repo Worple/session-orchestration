@@ -320,6 +320,10 @@ without asking the user: they signed in for it.
   one the pane has as an action button.
 - **Never `cd` in your shell; use absolute paths.** The Bash tool keeps a `cd` across calls, and `claude --bg`
   starts the new session in that folder, outside the project's settings.
+- **In Claude Code Desktop too, a task starts with `claude --bg`, never as a sidebar session** (`start_session`, the
+  app's New task card): the status, idle notices, `--resume-ended` and `--stop` work on `claude --bg` sessions, and a
+  sidebar session gets none of them, so you'd lose sight of it. The one sidebar session you start is your successor
+  ([handover.md](handover.md)); a hook refuses any other. No `claude` on PATH: hand the user its install (README).
 - **Read for coordination, never to do or pre-empt the task.** You may read a task's content (tracker comments, a
   PR, review comments, chat threads, code) when coordinating needs it: answering a worker's question, checking
   something before you relay or approve it, or resolving a dependency between two sessions. Read only what that

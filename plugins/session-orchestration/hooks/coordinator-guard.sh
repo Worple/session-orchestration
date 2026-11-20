@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# PreToolUse in a coordinator session (context-watch.sh's cached kind): two of SKILL.md's Rules as checks.
+# PreToolUse in a coordinator session (context-watch.sh's cached kind): three of SKILL.md's Rules as checks.
 # - Bash starting with `cd`: refused (the Bash tool keeps it, and `claude --bg` then starts outside the project).
 #   Only the prefix: a `cd` later in a chain isn't parsed out of the shell text.
+# - Claude Code Desktop's start_session (a sidebar session): refused unless its prompt runs `--successor --started`
+#   (the coordinator's own successor). A task goes to `claude --bg`: a sidebar session is in no listing the status reads.
 # - Edit/Write/MultiEdit/NotebookEdit of a file inside the project root: allowed only in .claude/ (not its settings*.json
 #   or hooks/), the replies folder, the handoff file (pending.file), the project memory CLAUDE.md names (the file and its memory/ folder)
 #   and the root's CLAUDE.local.md while git doesn't track it (a worktree session can't reach it); never in
@@ -25,6 +27,10 @@ if [ "$tool" = Bash ]; then
   cmd=$(jq -r '.tool_input.command // ""' <<<"$input")
   [[ $cmd =~ ^[[:space:]]*(cd|pushd)([[:space:]]|$) ]] || exit 0
   deny "Coordinator rule: never cd in your shell; use absolute paths. The Bash tool keeps a cd across calls, and claude --bg then starts the new session in that folder, outside the project's settings. Run it again without the cd." cd
+fi
+if [ "$tool" = mcp__ccd_session__start_session ]; then
+  jq -e '.tool_input.prompt // "" | strings | contains("--successor --started ")' <<<"$input" >/dev/null && exit 0
+  deny "Coordinator rule: start a task with claude --bg (SKILL.md, Starting a session), never as a Desktop sidebar session: a sidebar session gets no status row, no idle notice, no resume after a restart and no stop, so you would lose sight of it. start_session is only for your successor (the call --successor prints). If claude isn't on PATH, hand the user its install: curl -fsSL https://claude.ai/install.sh | bash." sidebar
 fi
 [ -n "$path" ] || exit 0
 here=$(cd "$(dirname "$0")" && pwd)

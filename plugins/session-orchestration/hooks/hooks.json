@@ -27,7 +27,7 @@
         ]
       },
       {
-        "matcher": "Bash|Edit|MultiEdit|Write|NotebookEdit",
+        "matcher": "Bash|Edit|MultiEdit|Write|NotebookEdit|mcp__ccd_session__start_session",
         "hooks": [
           {
             "type": "command",

@@ -19,6 +19,11 @@ check "$(g c1 Bash '{"command":"ls /x; cd /y"}')" allow 'cd later in a chain (pr
 check "$(g c1 Bash '{"command":"cdk deploy"}')" allow 'a word starting cd'
 check "$(g w1 Bash '{"command":"cd /x"}')" allow 'a task session'
 check "$(g nokind Bash '{"command":"cd /x"}')" allow 'no kind cached'
+ss=mcp__ccd_session__start_session
+check "$(g c1 $ss '{"title":"PROJ-1-fix","prompt":"Work on PROJ-1: fix it."}')" deny 'a task as a Desktop sidebar session'
+check "$(g c1 $ss '{"title":"PROJ-1-fix"}')" deny 'start_session without a prompt'
+check "$(g c1 $ss '{"title":"p-next","prompt":"Act as a coordinator. First run `/p/session-status --successor --started p`, then …"}')" allow 'the successor'
+check "$(g w1 $ss '{"prompt":"x"}')" allow 'start_session from a task session'
 check "$(w "$root/src/a.ts")" deny 'a project file'
 check "$(w "$root/CLAUDE.md")" deny 'CLAUDE.md'
 check "$(g c1 Edit "{\"file_path\":\"$root/src/a.ts\"}")" deny 'Edit'
