@@ -102,7 +102,7 @@
 #                       tokens, context window, status (idle/busy/waiting), kind, cwd, command prefix (tabs); see
 #                       session-activity.jq. --activity --all-projects: every project's sessions, not only this one's
 #        session-status --peek ID [N]   a session's last N (12) prompts, texts and tool calls as Markdown, then
-#                       what it's doing now (session-peek.jq); any project, any account
+#                       what it's doing now (session-peek.jq); any project, any account; ID may be Desktop's local_ id
 #        session-status --search TEXT [days]   one line per hit of TEXT (default the last 7 days) in sessions' prompts,
 #                       messages and own text, any project and account: NAME (ID8) · date · who: snippet, masked
 #                       and capped (retro.py search); --peek ID for more
@@ -1200,6 +1200,14 @@ CUR=${CLAUDE_CONFIG_DIR:-$HOME/.claude}; CUR=${CUR%/}
 TRANSCRIPTS=$CUR/projects/$ENC
 # A session's transcript, wherever it ran (accounts asked above share this store), and what it's doing.
 transcript_of() { ls "$CUR"/projects/*/"$1".jsonl 2>/dev/null | head -1; }
+# desk_id ID: the CLI session id behind a Claude Code Desktop sidebar id (local_<uuid>), from the app's record of it.
+# shortcut: macOS's app folder only (the app's Windows folder isn't reachable from WSL); add another when one is.
+desk_id() {
+  [[ $1 =~ ^local_[0-9a-f-]{8,}$ ]] || return 1
+  local f; f=$(ls "$HOME/Library/Application Support/Claude/claude-code-sessions"/*/*/"$1"*.json 2>/dev/null | head -1)
+  # the session that wrote its last reply first: a resume or /clear may move it off the first one
+  [ -n "$f" ] && jq -er '.lastAssistantCliSessionId // .cliSessionId | select(type == "string" and test("^[0-9a-f-]{8,}$"))' "$f" 2>/dev/null
+}
 # Doing, since, last, ctx and window for a transcript, tab-separated, placeholders when it can't be read. The
 # window is 1M when the model id has [1m] or the context already holds more than 200k tokens, else 200k. The
 # model id is the latest in the tail (session-activity.jq), else the first in the file (named at the start).
@@ -1296,7 +1304,8 @@ worktrees_for() {
 # --peek ID [N]: what a session said and did lately, for the pane's Peek (one parser: session-peek.jq).
 if [ -n "$PEEK" ]; then
   want=${1:-} n=${2:-12}
-  [ "${#want}" -ge 8 ] && [[ $want =~ ^[0-9a-f-]+$ && $n =~ ^[0-9]+$ ]] || { echo "usage: session-status --peek ID [N] (ID: 8+ characters)"; exit 2; }
+  [[ $want != local_* ]] || want=$(desk_id "$want") || { echo "no Desktop session record for $1 (local_ and 8+ hex characters)"; exit 2; }
+  [ "${#want}" -ge 8 ] && [[ $want =~ ^[0-9a-f-]+$ && $n =~ ^[0-9]+$ ]] || { echo "usage: session-status --peek ID [N] (ID: 8+ characters, or Desktop's local_ id)"; exit 2; }
   f=$(ls "$CUR"/projects/*/"$want"*.jsonl 2>/dev/null | head -1)
   [ -n "$f" ] || { echo "no transcript for session $want"; exit 2; }
   tail -n 2000 "$f" | jq -rRn --argjson n "$n" -f "$(dirname "$SELF")/session-peek.jq" || exit 1
@@ -1310,6 +1319,7 @@ if [ -n "$WHERE" ]; then
   dir=
   [ $# -gt 0 ] || { echo "usage: session-status $WHERE KEY|ID [ID…] (the first that resolves)"; exit 2; }
   for want in "$@"; do
+    [[ $want != local_* ]] || want=$(desk_id "$want") || continue
     if grep -qxE "$KEYRE" <<<"$want"; then dir=$(worktrees_for "$want" | head -1 | cut -f2)
     elif [ "${#want}" -ge 8 ] && [[ $want =~ ^[0-9a-f-]+$ ]]; then
       f=$(ls "$CUR"/projects/*/"$want"*.jsonl 2>/dev/null | head -1)

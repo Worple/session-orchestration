@@ -60,7 +60,9 @@ threads again. When you write
 a new handoff, move the older one and anything past (drafts, settled decisions, logs) to `<TASK>-archive.md` beside
 it, newest first, and name that file in the handoff.
 
-**A report you send unasked:** `reply` without `to`. It tries this project's live coordinators, newest first, until
+**A report you send unasked:** only when you're done, blocked, a decision waits on the user, or a `handoff ready`
+(Handing off). Never a progress update ("batch 3 of 8 ready", "2 agents running"): the coordinator would pass it on
+as noise. `reply` without `to`. It tries this project's live coordinators, newest first, until
 one takes it. The coordinator's name in your brief (e.g. `myproj-coordinator`) is a hint, not an address, since
 coordinators get restarted: pass it as `to` only when `reply` says `Pass to` (it found none and couldn't queue). No coordinator takes it (none runs, one is
 mid-handover, or it is under another Claude account with no live socket; with one, `--coordinator` prints its `uds:`

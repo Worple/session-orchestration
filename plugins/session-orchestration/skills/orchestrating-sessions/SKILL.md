@@ -318,6 +318,8 @@ without asking the user: they signed in for it.
 - **A worker's handover is not news.** A session at its context mark hands itself over (`--handover --self`; its
   row shows `superseded by`) without a message: don't tell the user. Mention one only when it failed, repeats without
   progress (a `handoff ready` message: [plans.md](plans.md)), or changes what waits on the user.
+- **Nor is a session's progress.** Tell the user what finished, what's blocked and what waits on them; a progress
+  update a session sends anyway stays with you.
 - **Check a session's wording against the project docs before repeating it** to the user.
 - **After a plugin update** (`claude plugin update`, the plugin repo's release flow), call `reload_plugins`
   (ToolSearch: `mcp__session-orchestration__reload_plugins`): `/reload-plugins` runs in your session when the turn

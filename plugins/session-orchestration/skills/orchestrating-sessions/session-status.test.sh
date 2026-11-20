@@ -1322,6 +1322,12 @@ grep -q '^Work on ABC-50$' <<<"$out" && grep -q '^Running them\.$' <<<"$out" && 
 # --dir: a session's latest cwd, as its git top; a task key, its worktree. --diff: against its merge-base with origin/HEAD,
 # with the untracked files, then the patch.
 [ "$(run --dir "${pid:0:8}")" = "$root/wt" ] && [ "$(run --dir ABC-12)" = "$root/wt" ] || { echo "dir failed"; run --dir "$pid"; exit 1; }
+# A Desktop sidebar id (local_<uuid>): the app's record of it names the CLI session; an unknown one is refused.
+desk="$tmp/Library/Application Support/Claude/claude-code-sessions/acct/org"; mkdir -p "$desk"
+echo '{"sessionId":"local_dddddddd-1111","cliSessionId":"aaaaaaaa-0000","lastAssistantCliSessionId":"'"$pid"'"}' > "$desk/local_dddddddd-1111.json"
+[ "$(run --peek local_dddddddd-1111)" = "$(run --peek "$pid")" ] && [ "$(run --dir local_dddddddd)" = "$root/wt" ] &&
+  [[ $(run --peek local_eeeeeeee) == "no Desktop session record for local_eeeeeeee"* ]] && ! run --peek 'local_*' >/dev/null ||
+  { echo "Desktop id: $(run --peek local_dddddddd-1111 | head -3)"; exit 1; }
 git -C "$root" update-ref refs/remotes/origin/main HEAD; git -C "$root" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main; echo a > "$root/wt/f"; git -C "$root/wt" add f; git -C "$root/wt" -c user.name=t -c user.email=t@t commit -qm f; echo b > "$root/wt/f"
 out=$(run --diff ABC-12 "$pid")
 [ "$(head -1 <<<"$out")" = "$root/wt · vs origin/main" ] && grep -q "^ f | 1 +$" <<<"$out" && grep -q '^?? dirty$' <<<"$out" && grep -q '^+b$' <<<"$out" ||

@@ -49,4 +49,4 @@ if ! under "$path" "$root/.claude/worktrees" && ! under "$path" "$root/.worktree
   # an untracked CLAUDE.local.md: no worktree has it, so no session can make the edit
   [ "$path" = "$root/CLAUDE.local.md" ] && ! git ls-files --error-unmatch CLAUDE.local.md >/dev/null 2>&1 && exit 0
 fi
-deny "Coordinator rule: the only files you change are the memory files, the handoff file and your handover (SKILL.md, Rules). ${path#"$root"/} is a session's to change, however small: give it to the session that owns it, or start one." edit
+deny "Coordinator rule: the only files you change are the memory files, the handoff file and your handover (SKILL.md, Rules). ${path#"$root"/} is a session's to change, however small: give it to the session that owns it, or start one. A CLAUDE.md or settings change goes to a new session (one already running refuses it from a message); a rule for how the sessions work can go in the project memory instead, which you change yourself." edit

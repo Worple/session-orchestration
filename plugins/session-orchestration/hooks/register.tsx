@@ -1666,7 +1666,7 @@ export const register: Register = on => {
     })
     await $.tool.register({
       name: 'reply',
-      description: 'Task sessions: send a message to another Claude session, in place of SendMessage. Answering a message: to is its `from`. A report you send unasked: leave to out, and it goes to this project\'s live coordinator (newest first, then the next). No coordinator takes it: it is queued in the coordinator inbox, which the next coordinator reads, so don\'t send it again. Returns who got it or where it was queued; when neither worked, why, and then the replies file is your report.',
+      description: 'Task sessions: send a message to another Claude session, in place of SendMessage. Answering a message: to is its `from`. A report you send unasked (only when done, blocked, a decision waits on the user or a handoff is ready; never a progress update): leave to out, and it goes to this project\'s live coordinator (newest first, then the next). No coordinator takes it: it is queued in the coordinator inbox, which the next coordinator reads, so don\'t send it again. Returns who got it or where it was queued; when neither worked, why, and then the replies file is your report.',
       inputSchema: REPLY_SCHEMA,
     })
     // immediate: it only opens or closes the pane, so it runs mid-turn, when a queued approval may be waiting.

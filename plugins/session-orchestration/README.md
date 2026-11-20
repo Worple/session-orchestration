@@ -43,7 +43,13 @@ the same settings. Then:
 - The pane opens beside the chat as in a terminal (Desktop 2.1.286 or later, not over WSL). Where it doesn't, the
   coordinator asks in plain text, as for a terminal without the hooks module.
 - Task sessions are background sessions, so they show in the pane and in `claude agents`, not in Desktop's sidebar.
-  To watch one, run the `claude attach <id>` the pane's Attach copies in the session's Terminal (Ctrl+`).
+  To watch one, run the `claude attach <id>` the pane's Attach copies in the session's Terminal (Ctrl+`). Start tasks
+  that way, not as sidebar sessions: a sidebar session gets no status row, idle notice or resume after a restart,
+  and the watcher doesn't stop it when its task is done. `session-status --peek`, `--dir` and `--diff` take a sidebar session's
+  `local_…` id too.
+- The coordinator hands over to a successor at 145K tokens of context (config `handoff.at.coordinator`), on a 1M
+  window too. Ask it to raise that to hand over less often; each wake then re-reads a larger context.
+  `/retro project` shows what the coordinator costs, by what woke it.
 - Messages, `reply`, the hooks and the approval gate work as in a terminal; a Desktop coordinator shows in
   `claude agents` as an interactive session.
 - Desktop opens no tabs: with the terminal setting `plain` (the default; it's per person, so a terminal recorded by an
