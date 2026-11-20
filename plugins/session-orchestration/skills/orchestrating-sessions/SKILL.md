@@ -234,8 +234,9 @@ to it; you prune it.
 - When the user tells you to remember something for the project, or a preference about how you coordinate, append
   it to the coordinator topic file (a flat file: append there). A preference a config key holds (the start mode
   above) goes in that key instead.
-- Prune in passing: delete an entry that is wrong, superseded, about a task state that has since resolved, or
-  already in a `CLAUDE.md`, a doc or a skill, and merge two about the same trap. Splitting a flat file, `[team]`
+- Prune in passing: delete an entry that is wrong, superseded, about a task state that has since resolved, already
+  in a `CLAUDE.md`, a doc or a skill, or a caution whose reason no longer holds; merge two about the same trap; and
+  rewrite an absolute rule ("never X") with its scope and reason. Splitting a flat file, `[team]`
   lines, graduation and retro follow-ups: [memory-rules.md](memory-rules.md).
 
 ## Watching
@@ -274,7 +275,8 @@ worktree it keeps (its Leftovers line says why) stay the user's call: ask before
 **A restored login wakes you.** When a pane action's `when` check (`.claude/coordinator-actions.json`) stops
 holding, its sign-in is back: the change lists it under `Logins restored (…)` as `* LABEL — blocked on it: KEY, …`,
 the keys whose report is `blocked` with a Blocker line naming that label, its command or a sign-in. Tell each of
-those sessions the login is back and to go on (`session-status --send-when-idle ID TEXT`; a retired one: resume it),
+those sessions the login is back and to retry the step its Blocker line names (`session-status --send-when-idle ID
+TEXT`; a retired one: resume it),
 without asking the user: they signed in for it.
 
 ## Rules

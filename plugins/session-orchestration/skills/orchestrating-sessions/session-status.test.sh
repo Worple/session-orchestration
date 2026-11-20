@@ -2446,6 +2446,11 @@ echo '{"features": {"docs_watch": false}, "docs_watch": {"files": ["doc.md"]}}' 
 printf 'Last reviewed 2026-11-19 against: prompt-engineering/overview.\nSee prompt-engineering/prompting-claude-x.\n' > "$root/doc.md"
 echo '{"docs_watch": {"files": ["doc.md"]}}' > "$root/.claude/coordination.local.json"
 [ "$(run | grep -c 'prompting-claude-x' || true)" = 1 ] || { echo "docs watch: a one-line list ran on"; exit 1; }
+# A "Skipped …:" list clears its pages too, over lines and before the reviewed one; each list is read once, so
+# prose naming one later isn't on it.
+printf "Skipped, older models' pages:\nprompt-engineering/prompting-claude-x.\nLast reviewed 2026-11-19 against: prompt-engineering/overview.\nUpdate the Last reviewed date against: cc/hooks-guide.\n" > "$root/doc.md"
+out=$(run | grep 'docs watch' || true)
+[ "$out" = '  * docs watch: new page cc/hooks-guide, re-review doc.md' ] || { echo "docs watch: the Skipped list: $out"; exit 1; }
 # A day on, one site failing keeps the last index (and is tried once that day, not every sweep).
 cp "$tmp/.cache/session-status/docs-index.txt" "$tmp/idx.before"; touch -t 202001010000 "$tmp/.cache/session-status/docs-index.tried"
 sed -i.bak 's/^  \*) printf/  *) exit 22; printf/' "$tmp/bin/curl"; : > "$tmp/curls"; run >/dev/null; run >/dev/null

@@ -10,8 +10,8 @@ Once a day the sweep fetches the public docs indexes (`platform.claude.com/llms.
 `code.claude.com/docs/llms.txt`) into `~/.cache/session-status/docs-index.txt`, shared by every project. Each page
 is a slug: a platform page's path after `docs/en/` less its first folder (`prompt-engineering/overview`,
 `agent-skills/best-practices`), a Claude Code page's as `cc/<path>` (`cc/hooks-guide`). For every doc in
-`docs_watch.files`, each watched slug (`docs_watch.pattern` matches it) missing from that doc's reviewed list prints
-one Notices line:
+`docs_watch.files`, each watched slug (`docs_watch.pattern` matches it) on neither of that doc's lists (below)
+prints one Notices line:
 
 ```
 docs watch: new page prompt-engineering/prompting-claude-opus-6, re-review docs/prompting.md
@@ -27,12 +27,17 @@ A line in the doc starting `Last reviewed YYYY-MM-DD against:`, then the slugs, 
 as needed; the list ends at the first line ending in a period (that line included), so put a period only at its
 end. Adding a page to the list clears its line.
 
+Pages deliberately not reviewed go on a second list, a line starting `Skipped` up to its first colon (`Skipped,
+older models' pages:`), in the same form. A slug there clears its line too: the plugin's doc skips older models'
+prompting pages, since only the current models' pages are reviewed.
+
 ## Acting on a notice (the coordinator)
 
 Pass the line to the user and offer a review-kind session (`session-status --kind review`) for it, one per doc.
 That session reads the new page (a platform page's URL plus `.md` gives its Markdown), updates the doc's rules
-where the page changes them, then adds the page to the list and updates the date. After a major model release it
-also re-reads the rules that work around an older model's habits: some may no longer be needed.
+where the page changes them, then adds the page to the list and updates the date; a page the doc deliberately
+leaves unreviewed (an older model's) goes on the `Skipped` list instead. After a major model release it also
+re-reads the rules that work around an older model's habits: some may no longer be needed.
 
 ## Config
 

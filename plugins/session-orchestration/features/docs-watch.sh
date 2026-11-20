@@ -1,6 +1,7 @@
 # Feature docs_watch (features/docs-watch.md): the sweep's `docs` notices source. Run from the project root as
-# `bash docs-watch.sh PATTERN FILE…`: one line per watched docs page (a slug PATTERN matches) that a FILE's
-# "Last reviewed … against:" list lacks. The index (platform.claude.com's and code.claude.com's llms.txt, as slugs:
+# `bash docs-watch.sh PATTERN FILE…`: one line per watched docs page (a slug PATTERN matches) that neither of a
+# FILE's lists, "Last reviewed … against:" and "Skipped …:", has. The index (platform.claude.com's and
+# code.claude.com's llms.txt, as slugs:
 # a platform page's path after docs/en/ less its first folder, a Claude Code page's as cc/<path>) is fetched at most
 # once a day, tried or not, into one cache every project shares; a failed fetch keeps the last one, no index prints nothing.
 # shortcut: dropping a platform page's first folder could give two pages one slug; kept so lists in that form still
@@ -23,9 +24,12 @@ fi
 for doc in "$@"; do
   f=$doc; [[ $f == '~'/* ]] && f=$HOME/${f#'~/'}
   [ -f "$f" ] || { echo "docs watch: $doc is missing, so nothing is checked against it"; continue; }
-  # The list runs from its "Last reviewed … against:" line to the first line ending in a period, that line too.
+  # Each list runs from its "Last reviewed … against:" or "Skipped …:" line to the first line ending in a period,
+  # that line too; each is read once, so prose naming either later adds nothing.
   grep -E -- "$pattern" "$idx" | comm -23 - <(tr -d '\r' < "$f" |
-      awk '/Last reviewed .* against:/ { on = 1; sub(/.*against:/, "") } on { print; if (/\.$/) exit }' |
+      awk '!r && /Last reviewed .* against:/ { r = on = 1; sub(/.*against:/, "") }
+           !s && /^Skipped[^:]*:/ { s = on = 1; sub(/^[^:]*:/, "") }
+           on { print; if (/\.$/) on = 0 }' |
       tr ', `' '\n\n\n' | sed 's/\.$//' | grep -E '^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$' | sort -u) |
     D=$doc awk '{ print "docs watch: new page " $0 ", re-review " ENVIRON["D"] }'
 done

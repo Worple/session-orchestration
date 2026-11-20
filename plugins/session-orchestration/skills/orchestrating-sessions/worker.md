@@ -34,7 +34,8 @@ Next: <next step, one line>
 
 `<TASK>` is the ticket or task key (e.g. `PROJ-123`), or a 3–5 word name if there's none. `<state>` is one of:
 `coding`, `PR #N open`, `in review`, `ready to merge`, `merged, deploying`, `blocked`, `idle`. A status report is
-about this session's own work: name another session only as a blocker or source.
+about this session's own work: name another session only as a blocker or source. Write it for a reader who saw none
+of the work: plain words, no name you made up along the way.
 
 **Done.** The report that says the task is finished passes `done` to `reply`, and the tool sends it only once
 what that kind needs holds; otherwise it comes back unsent with what's missing. Fix that and reply again, the
