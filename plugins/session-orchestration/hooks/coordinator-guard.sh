@@ -31,9 +31,11 @@ if [ "$tool" = Bash ]; then
   deny "Coordinator rule: never cd in your shell; use absolute paths. The Bash tool keeps a cd across calls, and claude --bg then starts the new session in that folder, outside the project's settings. Run it again without the cd." cd
 fi
 if [ "$tool" = mcp__ccd_session__start_session ]; then
-  jq -e '.tool_input | (.title // "" | strings) as $t | ($t | endswith("-next")) and
-    (.prompt // "" | strings | contains("--successor --started " + ($t | rtrimstr("-next"))))' <<<"$input" >/dev/null && exit 0
-  deny "Coordinator rule: start a task with claude --bg (SKILL.md, Rules), never as a Desktop sidebar session: a sidebar session gets no status row, no idle notice, no resume after a restart and no stop, so you would lose sight of it. start_session is only for your successor (the call --successor prints). If claude isn't on PATH, hand the user its install: curl -fsSL https://claude.ai/install.sh | bash." sidebar
+  # NAME whole: `--started p` inside `--started p-v2` isn't p's successor
+  # shortcut: NAME is checked against the title, not this coordinator's own name; upgrade if a task ever carries that exact text
+  jq -e '.tool_input | (.title // "" | strings) as $t | ($t | endswith("-next") and length > 5) and
+    (.prompt // "" | strings | split("--successor --started " + ($t | rtrimstr("-next")))[1:] | any(test("^([^A-Za-z0-9._-]|$)")))' <<<"$input" >/dev/null && exit 0
+  deny "Coordinator rule: start a task with claude --bg (SKILL.md, Rules), never as a Desktop sidebar session: a sidebar session gets no status row, no idle notice, no resume after a restart and no stop, so you would lose sight of it. start_session is only for your successor: if this was your handover, run session-status --successor again and pass the call it prints unchanged. If claude isn't on PATH, hand the user its install: curl -fsSL https://claude.ai/install.sh | bash." sidebar
 fi
 [ -n "$path" ] || exit 0
 here=$(cd "$(dirname "$0")" && pwd)

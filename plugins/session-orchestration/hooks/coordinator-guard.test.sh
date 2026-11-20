@@ -25,9 +25,11 @@ check "$(g c1 $ss '{"title":"PROJ-1-fix"}')" deny 'start_session without a promp
 check "$(g c1 $ss '{"title":"p-next","prompt":"Act as a coordinator. First run `/p/session-status --successor --started p`, then …"}')" allow 'the successor'
 check "$(g c1 $ss '{"title":"PROJ-9-fix","prompt":"Work on PROJ-9: `session-status --successor --started p` exits 3."}')" deny 'a task whose prompt quotes the successor flag'
 check "$(g c1 $ss '{"title":"q-next","prompt":"First run `/p/session-status --successor --started p`"}')" deny 'a title that is not NAME-next'
+check "$(g c1 $ss '{"title":"api-next","prompt":"Work on it: `session-status --successor --started api-v2` exits 3."}')" deny 'NAME only as the start of a longer name'
+check "$(g c1 $ss '{"title":"-next","prompt":"`--successor --started `"}')" deny 'an empty NAME'
 check "$(g w1 $ss '{"prompt":"x"}')" allow 'start_session from a task session'
 check "$(jq -nc --arg c "$root/src" '{session_id: "c1", agent_id: "a1", tool_name: "mcp__ccd_session__start_session", tool_input: {title: "PROJ-1-fix", prompt: "x"}, cwd: $c}' |
-  HOME=$tmp XDG_CACHE_HOME=$tmp/.cache bash "$here/coordinator-guard.sh" | jq -r .hookSpecificOutput.permissionDecision)" deny 'start_session from a subagent of the coordinator'
+  HOME=$tmp XDG_CACHE_HOME=$tmp/.cache XDG_CONFIG_HOME=$tmp/.config bash "$here/coordinator-guard.sh" | jq -r .hookSpecificOutput.permissionDecision)" deny 'start_session from a subagent of the coordinator'
 check "$(w "$root/src/a.ts")" deny 'a project file'
 check "$(w "$root/CLAUDE.md")" deny 'CLAUDE.md'
 check "$(g c1 Edit "{\"file_path\":\"$root/src/a.ts\"}")" deny 'Edit'

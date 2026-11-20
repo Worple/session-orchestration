@@ -113,8 +113,9 @@ Installing the plugin adds these to every Claude Code session, in every project:
   a session that isn't coordinated gets nothing.
 - **Coordinator guard** (`hooks/coordinator-guard.sh`): in a coordinator session only, refuses a Bash command that
   starts with `cd`, and an edit of a project file outside `.claude/`, the replies folder, the handoff file and the
-  project memory: those belong to a task session. In Claude Code Desktop it also refuses `start_session` (a sidebar
-  session) for anything but the coordinator's successor: tasks start with `claude --bg`.
+  project memory: those belong to a task session. It also refuses Claude Code Desktop's `start_session` (a sidebar
+  session), from the coordinator or any of its subagents, for anything but the coordinator's successor: tasks start
+  with `claude --bg`.
 - **Local history** (`skills/orchestrating-sessions/history-git`, Stop): when a turn ends, commits what changed in the
   project's state folder, replies folder, handoff files and the folders in config `history.dirs`, one commit per repo named after
   the session. A folder's git dir sits outside it, unless the folder (or its parent) is the top of a repo with no
