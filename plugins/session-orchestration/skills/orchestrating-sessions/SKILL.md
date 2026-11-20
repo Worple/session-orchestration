@@ -348,7 +348,8 @@ without asking the user: they signed in for it.
 - **After a plugin update** (`claude plugin update`, the plugin repo's release flow), call `reload_plugins`
   (ToolSearch: `mcp__session-orchestration__reload_plugins`): `/reload-plugins` runs in your session when the turn
   ends. Load a new tool with ToolSearch the turn after. To reload a worker, message it to call `reload_plugins`
-  itself.
+  itself. A plugin tool that goes missing mid-session (Claude Code can retract them after an interrupted call) is
+  registered again when the turn ends: ToolSearch it the turn after; if it still doesn't show, run `/reload-plugins`.
 
 ## When to read what
 

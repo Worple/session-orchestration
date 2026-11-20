@@ -15,7 +15,7 @@
 // user, whom they wait on, what is new, what was worked on, a task's own list one press away; on top the standup,
 // written after the project's template by a small model (standup-summary).
 import { atom, read, update } from 'claude-code'
-import type { Color, EngineInterface, Register, RenderElement, RenderNode, SessionRateLimit, ToolCallResult, UiPressArgument } from 'claude-code'
+import type { Color, EngineInterface, Register, RenderElement, RenderNode, SessionRateLimit, ToolCallResult, ToolSpec, UiPressArgument } from 'claude-code'
 
 import type { ActionResult, Actions, Ask, AskBody, AskKind, Board, Handed, PaneAction, Peek, SectionState } from '../types'
 
@@ -1633,42 +1633,54 @@ async function open($: EngineInterface) {
   return opened
 }
 
+// The plugin's tools. The engine can retract them mid-session (`not_configured`, seen after an interrupted tool call
+// under timing-out hooks, until the next /reload-plugins): turn.complete puts them back when one is missing.
+const TOOLS: ToolSpec[] = [
+  {
+    name: 'open_pane',
+    description: 'Coordinator only: opens the coordinator pane beside the conversation. The pane shows the queued approval asks as buttons, the output of the project\'s status command and the adapter\'s pending text, refreshed every 10 minutes and on its Refresh button. Its result lists the asks still queued (they carry over from the last coordinator). Call it at the start of a coordinator session, and again once setup has finished in a folder that wasn\'t set up (it names the session only then); a worker session never calls it. It shows only in an interactive session with the plugin loaded (a terminal, or Claude Code Desktop as a docked pane), and in a terminal waits until it is about 144 columns wide (110 once the user has opened it themselves; the user\'s /coordinator command opens it at any width); it never shows in the agent view or a background session, so there, ask in plain text.',
+  },
+  {
+    name: 'ask_approval',
+    description: 'Coordinator only: put a decision waiting on the user (a reserved approval or any other choice) as buttons in the coordinator pane, one decision per ask, your recommended option first. Returns at once; the user\'s click arrives later as a prompt "Approval pane answer for <KEY>: <option>. Asked: <question>" (<option> may be the user\'s own words, typed in the pane\'s question dialog), which is the Quote for a relayed approval (it verifies for 24h from the click). An ask stays until answered or cancelled, across coordinator restarts and plugin releases; past 24h the pane marks it OLD, so check it still applies before acting on its answer. Queueing the same key and question again replaces the waiting ask (same id). Keep the question one line; put what the user should read in details (markdown), target, and for a comment post body_file (the body file, written first: the pane shows its text and sha256). Ask in plain text only when this says the pane isn\'t on screen, or in the question box when the answer needs the user\'s own words (approvals.md, next to the coordinator skill).',
+    inputSchema: ASK_SCHEMA,
+  },
+  {
+    name: 'cancel_approval',
+    description: 'Coordinator only: remove asks queued with ask_approval from the coordinator pane, submitting no answer. Pass key alone to remove every ask for that key, or with id (as ask_approval returned it; it wins over question) or question (exact text) to remove one. To replace an ask, queue the new one, then cancel the old by id. Returns what it removed, or that nothing matched.',
+    inputSchema: CANCEL_SCHEMA,
+  },
+  {
+    name: 'reload_plugins',
+    description: 'Runs /reload-plugins in this session when the current turn ends, so a plugin just updated (`claude plugin update`) takes effect without the user typing it. It reloads only the session that calls it: to reload a worker, message it to call this tool. New tools register on the reload: load them with ToolSearch in the next turn.',
+  },
+  {
+    name: 'name_session',
+    description: 'Renames this session when the current turn ends (/rename), so it shows under that name in `claude agents`, ListAgents and the coordinator pane. Never a subagent. A task session calls it when it learns its task key and its first prompt didn\'t name it: `<KEY>-<short-desc>`, e.g. PROJ-1234-fix-settler (a review session: `<KEY>-review-<short-desc>`); and when a handoff tells it to, with the `-prev-K` name `session-status --prev-name` prints. A coordinator calls it only in its handover, with the name the handover step gives: any other `-coordinator` name is refused (open_pane gives that one). Letters, digits, . _ -, starting with a letter or digit, at most 64 characters.',
+    inputSchema: NAME_SCHEMA,
+  },
+  {
+    name: 'hand_command',
+    description: 'Any session: hand the user a command to run themselves (one you would otherwise give as `! <command>`: a classifier-refused CLI call, a release or deploy command, a settings or hook change). It shows in the coordinator pane under the task key with your session id and `what`, where the user runs it with one press (or copies it). Still put the `! <command>` line in your report: without a pane the user runs it by hand. The command is one line, run exactly as written in the coordinator\'s folder and account, so make it independent of your cwd (absolute paths). Don\'t wait on it: the coordinator tells you the outcome. Handing the same command again replaces it. Not for a step you could take yourself once approved (a post or merge a relayed approval covers): ask for that approval instead, unless no relay can verify for you (your cwd is outside the coordinator\'s own folder). A command the pane already offers as an action button is refused: report that you wait on that button. So is an interactive one (claude attach, a bare or resumed claude, an editor or pager): it has no terminal in a tool call.',
+    inputSchema: HAND_SCHEMA,
+  },
+  {
+    name: 'reply',
+    description: 'Task sessions: send a message to another Claude session, in place of SendMessage. Answering a message: to is its `from`. A report you send unasked (only when done, blocked, a decision waits on the user or a handoff is ready; never a progress update): leave to out, and it goes to this project\'s live coordinator (newest first, then the next). No coordinator takes it: it is queued in the coordinator inbox, which the next coordinator reads, so don\'t send it again. Returns who got it or where it was queued; when neither worked, why, and then the replies file is your report.',
+    inputSchema: REPLY_SCHEMA,
+  },
+]
+
+async function registerTools($: EngineInterface) {
+  for (const t of TOOLS) await $.tool.register(t)
+}
+// The tools turn.complete registered again that haven't shown in the tool list since.
+const reRegistered = new Set<string>()
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
-    await $.tool.register({
-      name: 'open_pane',
-      description: 'Coordinator only: opens the coordinator pane beside the conversation. The pane shows the queued approval asks as buttons, the output of the project\'s status command and the adapter\'s pending text, refreshed every 10 minutes and on its Refresh button. Its result lists the asks still queued (they carry over from the last coordinator). Call it at the start of a coordinator session, and again once setup has finished in a folder that wasn\'t set up (it names the session only then); a worker session never calls it. It shows only in an interactive session with the plugin loaded (a terminal, or Claude Code Desktop as a docked pane), and in a terminal waits until it is about 144 columns wide (110 once the user has opened it themselves; the user\'s /coordinator command opens it at any width); it never shows in the agent view or a background session, so there, ask in plain text.',
-    })
-    await $.tool.register({
-      name: 'ask_approval',
-      description: 'Coordinator only: put a decision waiting on the user (a reserved approval or any other choice) as buttons in the coordinator pane, one decision per ask, your recommended option first. Returns at once; the user\'s click arrives later as a prompt "Approval pane answer for <KEY>: <option>. Asked: <question>" (<option> may be the user\'s own words, typed in the pane\'s question dialog), which is the Quote for a relayed approval (it verifies for 24h from the click). An ask stays until answered or cancelled, across coordinator restarts and plugin releases; past 24h the pane marks it OLD, so check it still applies before acting on its answer. Queueing the same key and question again replaces the waiting ask (same id). Keep the question one line; put what the user should read in details (markdown), target, and for a comment post body_file (the body file, written first: the pane shows its text and sha256). Ask in plain text only when this says the pane isn\'t on screen, or in the question box when the answer needs the user\'s own words (approvals.md, next to the coordinator skill).',
-      inputSchema: ASK_SCHEMA,
-    })
-    await $.tool.register({
-      name: 'cancel_approval',
-      description: 'Coordinator only: remove asks queued with ask_approval from the coordinator pane, submitting no answer. Pass key alone to remove every ask for that key, or with id (as ask_approval returned it; it wins over question) or question (exact text) to remove one. To replace an ask, queue the new one, then cancel the old by id. Returns what it removed, or that nothing matched.',
-      inputSchema: CANCEL_SCHEMA,
-    })
-    await $.tool.register({
-      name: 'reload_plugins',
-      description: 'Runs /reload-plugins in this session when the current turn ends, so a plugin just updated (`claude plugin update`) takes effect without the user typing it. It reloads only the session that calls it: to reload a worker, message it to call this tool. New tools register on the reload: load them with ToolSearch in the next turn.',
-    })
-    await $.tool.register({
-      name: 'name_session',
-      description: 'Renames this session when the current turn ends (/rename), so it shows under that name in `claude agents`, ListAgents and the coordinator pane. Never a subagent. A task session calls it when it learns its task key and its first prompt didn\'t name it: `<KEY>-<short-desc>`, e.g. PROJ-1234-fix-settler (a review session: `<KEY>-review-<short-desc>`); and when a handoff tells it to, with the `-prev-K` name `session-status --prev-name` prints. A coordinator calls it only in its handover, with the name the handover step gives: any other `-coordinator` name is refused (open_pane gives that one). Letters, digits, . _ -, starting with a letter or digit, at most 64 characters.',
-      inputSchema: NAME_SCHEMA,
-    })
-    await $.tool.register({
-      name: 'hand_command',
-      description: 'Any session: hand the user a command to run themselves (one you would otherwise give as `! <command>`: a classifier-refused CLI call, a release or deploy command, a settings or hook change). It shows in the coordinator pane under the task key with your session id and `what`, where the user runs it with one press (or copies it). Still put the `! <command>` line in your report: without a pane the user runs it by hand. The command is one line, run exactly as written in the coordinator\'s folder and account, so make it independent of your cwd (absolute paths). Don\'t wait on it: the coordinator tells you the outcome. Handing the same command again replaces it. Not for a step you could take yourself once approved (a post or merge a relayed approval covers): ask for that approval instead, unless no relay can verify for you (your cwd is outside the coordinator\'s own folder). A command the pane already offers as an action button is refused: report that you wait on that button. So is an interactive one (claude attach, a bare or resumed claude, an editor or pager): it has no terminal in a tool call.',
-      inputSchema: HAND_SCHEMA,
-    })
-    await $.tool.register({
-      name: 'reply',
-      description: 'Task sessions: send a message to another Claude session, in place of SendMessage. Answering a message: to is its `from`. A report you send unasked (only when done, blocked, a decision waits on the user or a handoff is ready; never a progress update): leave to out, and it goes to this project\'s live coordinator (newest first, then the next). No coordinator takes it: it is queued in the coordinator inbox, which the next coordinator reads, so don\'t send it again. Returns who got it or where it was queued; when neither worked, why, and then the replies file is your report.',
-      inputSchema: REPLY_SCHEMA,
-    })
+    await registerTools($)
     // immediate: it only opens or closes the pane, so it runs mid-turn, when a queued approval may be waiting.
     await $.command.register({ name: 'coordinator', description: 'Open the coordinator pane at any width (close: close it)', argumentHint: '[close]', immediate: true })
     // A reload (reload_plugins) keeps the pane up but starts this module over, its timers gone: start them again.
@@ -1836,9 +1848,15 @@ export const register: Register = on => {
   })
 
   // The commands a tool call queued for the turn's end: /rename (open_pane, name_session), then /reload-plugins (reload_plugins).
+  // First, a tool of this plugin the engine retracted since the last turn (TOOLS): registered again, for the next prompt.
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
     if (e.agentId) return done
+    const names = await $.tool.list().then(ts => new Set(ts.map(t => t.name))).catch(() => undefined)
+    // Once per retraction: one still missing after that (a deny rule's) isn't registered every turn.
+    const gone = names ? TOOLS.filter(t => !names.has(`mcp__session-orchestration__${t.name}`)) : []
+    for (const t of TOOLS) if (names?.has(`mcp__session-orchestration__${t.name}`)) reRegistered.delete(t.name)
+    await Promise.allSettled(gone.filter(t => !reRegistered.has(t.name)).map(t => (reRegistered.add(t.name), $.tool.register(t))))
     const failed: string[] = []
     const run = async (command: string, args: string, what: string) => {
       try {

@@ -1112,6 +1112,28 @@ test('a failed /reload-plugins says so and names the command to run', async ($, 
   expect(r.text).toMatch(/^done\n\nReloading plugins failed \(.*\)\. Run \/reload-plugins\.$/)
 })
 
+test('a tool the engine retracted mid-session is registered again at the turn\'s end, once per retraction; none missing, nothing',async ($, on) => {
+  const all = ['open_pane', 'ask_approval', 'cancel_approval', 'reload_plugins', 'name_session', 'hand_command', 'reply']
+  let listed = all
+  const registered: string[] = []
+  on('tool.list', async () => ({ value: listed.map(n => ({ name: `mcp__session-orchestration__${n}`, description: '', mcp: true })) }))
+  on('tool.register', async (_, e) => (registered.push(e.name), { value: { tool: e.name } }))
+  on('turn.complete', async () => ({ text: '' }))
+  const end = { answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as const
+  await $.turn.complete(end)
+  expect(registered).toEqual([])
+  listed = all.filter(n => n !== 'reply')
+  await $.turn.complete({ ...end, turnId: 't2' })
+  expect(registered).toEqual(['reply'])
+  await $.turn.complete({ ...end, turnId: 't3' }) // still missing (a deny rule): not every turn
+  expect(registered).toEqual(['reply'])
+  listed = all
+  await $.turn.complete({ ...end, turnId: 't4' })
+  listed = all.filter(n => n !== 'reply')
+  await $.turn.complete({ ...end, turnId: 't5' })
+  expect(registered).toEqual(['reply', 'reply'])
+})
+
 test('usage names: fixed words lib.sh usage accepts', () => {
   const names = [...Object.values(BUILTIN_KEYS), ...USAGE_EXTRA, ...USAGE_SECTIONS.flatMap(s => [`fold ${s}`, `unfold ${s}`, `card ${s}`])].map(usageName)
   expect([...GROUPS, RESOLVED, STALE, STALE_ITEMS, OTHER_PROJECTS, OTHER, LEFTOVERS, SENT].filter(s => !USAGE_SECTIONS.includes(s))).toEqual([])
