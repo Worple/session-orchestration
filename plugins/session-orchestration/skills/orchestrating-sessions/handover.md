@@ -17,12 +17,12 @@ coordinator's Start reads those, and each restated rule is re-sent on its every 
    `claude --model M --effort E -n NAME-next 'Act as a coordinator. You succeed …'`, on the model and effort you run on
    (else config `plan.models.coordinator` for the account it starts under: `fable/medium` where `fable.accounts` lists it). Nothing opened: hand the user the command it prints
    (`hand_command`, key `coordinator`). In Claude Code Desktop it prints a `start_session` call instead, so the
-   successor is an app session in the sidebar: make it, carry your pin over as it says, and never archive yourself
-   (archiving takes the successor with it). Then arm `--await ready` (Bash, background) and end your turn. From here act
+   successor is an app session in the sidebar: make it, and leave your pin and your archiving to it (archiving
+   yourself takes it with you). Then arm `--await ready` (Bash, background) and end your turn. From here act
    on no message: forward each, text on stdin, with `session-status --inbox-add --from '<name> (<id8>)'`, run by its
    full path with a quoted heredoc (`<<'EOF'`), so the approval hook reads the text as text even when it quotes a merge.
 2. When `--await ready` wakes you, call `name_session` with what `session-status --prev-name --title` prints
-   (`NAME-prev-K`; it titles your tab too), arm `--await renamed` (background) and end your turn: the rename lands
+   (`NAME-prev-K`; it titles your tab too, and in Desktop its result names the sidebar title's call), arm `--await renamed` (background) and end your turn: the rename lands
    then.
 3. When `--await renamed` wakes you, stop your watcher (TaskStop), forward what came meanwhile, run
    `session-status --successor --done` and end. Your terminal closes once you are idle.
@@ -35,7 +35,8 @@ it records your id, so you count as `NAME-next` even when the app named you othe
 1. Arm `--await name`. It wakes you when `NAME` is free: call `name_session` with `NAME`.
 2. Arm `--await done`. It closes the old coordinator's tab (only its split, when the tab has others) once that one is
    idle and done forwarding; when it runs in the background, the tab it was moved out of (or a `claude attach` to it).
-   Tell the user what was left open, if anything. In Desktop it leaves the old one running: stop it, don't archive it.
+   Tell the user what was left open, if anything. In Desktop it closes nothing and says how to finish the old one:
+   detach from it, take its pin, archive it.
 
 - Any `--await` also wakes you on an unread coordinator inbox entry (exit 3, first line `NOT DONE`): the step isn't
   done. Act on each entry, mark it read (`session-status --inbox --read N`), and arm the same `--await` again.

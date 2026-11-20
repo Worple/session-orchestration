@@ -514,7 +514,8 @@ fi
 #   --successor --started NAME    a Desktop successor, first thing: writes its own id to NAME.next, so it counts as
 #                                 NAME-next whatever name start_session's title gave it
 #   --await done                  the successor, named NAME: once NAME.done is there and the old session idle, closes
-#                                 the old one's terminal (close_tty: its tab, or only its split beside others)
+#                                 the old one's terminal (close_tty: its tab, or only its split beside others); in
+#                                 Desktop it says how to detach from the old one, take its pin and archive it
 #   --name-check NAME             `free|held next|other [HOLDER_ID]`: whether a live session other than the caller holds
 #                                 NAME, and whether the caller is NAME-next (by name, or the id in NAME.next; open_pane
 #                                 and name_session ask it)
@@ -615,7 +616,7 @@ if [ "${1:-}" = --successor ]; then
     echo "  initiation \"user_asked\" if the user asked for this handover in this turn, else \"own_initiative\" (a card the user starts),"
     echo "  background: goal, decisions and constraints from <replies>/coordinator-handover.md,"
     echo "  prompt: Act as a coordinator. You succeed \"$n\" (${id:0:8}). First run \`$SELF --successor --started $n\`, then end your Start with the successor step (${SELF%/*}/handover.md)."
-    echo "Once it runs: if mcp__ccd_session_mgmt__get_session \"self\" says pinned, pin the new session (mcp__ccd_sidebar__set_pinned, its local_ id) and unpin yourself. Never archive this session: archiving takes its side sessions, the successor too, with it. An approval you relay in the handover note may not verify for the successor (its prompt isn't typed by the user): if its approval check rejects one, it asks the user again."
+    echo "Leave your pin and never archive this session yourself: the successor moves the pin and archives this one once it holds \"$n\" (archiving it before then takes the successor with it). An approval you relay in the handover note may not verify for the successor (its prompt isn't typed by the user): if its approval check rejects one, it asks the user again."
     echo "$next"; exit 2
   fi
   case $acct in "$HOME/.claude") pre='env -u CLAUDE_CONFIG_DIR ' ;; *) pre="CLAUDE_CONFIG_DIR=$(tilde "$acct") " ;; esac
@@ -673,8 +674,11 @@ if [ "${1:-}" = --await ]; then
         if [ "$o" = "$id" ]; then echo "the done stamp names you (${id:0:8}), not the old coordinator: nothing closed"; exit 2
         elif [ -n "$o" ] && [ "$st" != busy ] && [ "$st" != waiting ]; then
           # a background one (or one no longer listed) shows in the tab it was moved out of, not its own pid's
-          t=; if [[ ${CLAUDE_CODE_ENTRYPOINT:-} == claude-desktop* ]] && [ -n "$(ho_field 1 "$o" 1)" ]; then
-            msg="the old coordinator (${o:0:8}) is left running: stop it (mcp__ccd_session_mgmt__stop_session, or tell the user to), never archive it: archiving takes its side sessions, you too, with it"
+          t=; if [[ ${CLAUDE_CODE_ENTRYPOINT:-} == claude-desktop* ]]; then
+            # exited or not (no longer listed), its sidebar row stays, pinned, until archived; stop_session only
+            # interrupts a turn, and archiving it takes its side sessions (this one, until detached) with it
+            on=$(awk -F'\t' -v o="$o" '$1 == o { print $2; exit }' <<<"$all")
+            msg="the old coordinator (${o:0:8}${on:+, \"$on\"}) keeps its row in the app's sidebar; finish it with the ccd tools (ToolSearch them). mcp__ccd_session_mgmt__get_session \"self\" gives its id (parentSessionId) and whether you are detached from it; not detached: mcp__ccd_session_mgmt__detach_session \"self\" first, since archiving it takes its side sessions with it. Pinned (get_session on its id): pin yourself (mcp__ccd_sidebar__set_pinned \"self\") and unpin it. Then archive it (mcp__ccd_session_mgmt__archive_session, reason \"handed over to $n\"). Tell the user once when it stays: the archive declined or refused, it is theirs to archive; the detach refused (you share its worktree), never archive it, since that archives you too"
           elif { [ "$(awk -F'\t' -v o="$o" '$1 == o { print $7; exit }' <<<"$all")" != background ] && t=$(ho_tty "$o"); } ||
             t=$(ho_shown_tty "$o"); then
             load_terminal; c=$(close_tty "$t" 2>&1); rc=$?

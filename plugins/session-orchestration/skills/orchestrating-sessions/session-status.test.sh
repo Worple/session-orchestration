@@ -1182,6 +1182,7 @@ out=$(CLAUDE_CODE_ENTRYPOINT=claude-desktop-3p as "$o" --successor) && rc=0 || r
 [ "$rc" = 2 ] && grep -q '^This is Claude Code Desktop: start the successor as an app session. Call mcp__ccd_session__start_session' <<<"$out" &&
   grep -qF 'title "p-coordinator-next", context "fresh", use_worktree false, model "opus", effort "medium",' <<<"$out" &&
   grep -qF "First run \`$here/session-status --successor --started p-coordinator\`" <<<"$out" && grep -qF -- '--await ready` (Bash' <<<"$out" &&
+  grep -qF 'the successor moves the pin and archives this one once it holds "p-coordinator"' <<<"$out" &&
   ! grep -q 'claude --model' <<<"$out" || { echo "--successor from Desktop: $rc $out"; exit 1; }
 out=$(CLAUDE_CODE_ENTRYPOINT=claude-desktop-3p as "$o" --successor --account "$tmp/cfg") && rc=0 || rc=$?
 [ "$rc" = 2 ] && grep -q "^This is Claude Code Desktop: tell the user to run it in the session's Terminal" <<<"$out" || { echo "--successor --account from Desktop: $rc $out"; exit 1; }
@@ -1194,8 +1195,14 @@ setacct cfg "$(sess "$o" p-coordinator idle 1 interactive),$(sess "$x" 'New sess
   ! as "$x" --await name --timeout 1 >/dev/null && as "$o" --await ready --timeout 2 | grep -q '^ready: "p-coordinator-next" (0b0b0b0b)' &&
   setacct cfg "$(sess "$o" p-coordinator-prev-1 idle 1 interactive),$(sess "$x" 'New session' idle 1 interactive)" &&
   as "$x" --await name --timeout 2 | grep -q '^"p-coordinator" is free' && as "$o" --successor --done >/dev/null &&
-  CLAUDE_CODE_ENTRYPOINT=claude-desktop as "$x" --await done --timeout 2 | grep -q 'never archive it' &&
+  out=$(CLAUDE_CODE_ENTRYPOINT=claude-desktop as "$x" --await done --timeout 2) &&
+  grep -qF 'handover done: the old coordinator (0a0a0a0a, "p-coordinator-prev-1") keeps its row in the app'"'"'s sidebar' <<<"$out" &&
+  grep -qF 'detach_session "self" first' <<<"$out" && grep -qF 'archive_session, reason "handed over to p-coordinator")' <<<"$out" &&
   [ ! -e "$tmp/.cache/session-status/handover/p-coordinator.next" ] || { echo "--successor --started, a Desktop successor by id"; exit 1; }
+# The old one no longer listed (exited): its sidebar row stays, pinned and unarchived, so the same Desktop steps.
+setacct cfg "$(sess "$x" p-coordinator idle 1 interactive)"; echo "$o" > "$tmp/.cache/session-status/handover/p-coordinator.done"
+out=$(CLAUDE_CODE_ENTRYPOINT=claude-desktop as "$x" --await done --timeout 2) &&
+  grep -qF "handover done: the old coordinator (0a0a0a0a) keeps its row in the app's sidebar" <<<"$out" || { echo "--await done in Desktop, the old one exited: $out"; exit 1; }
 as "$x" --successor --started 'a b' >/dev/null && { echo "--successor --started took a bad name"; exit 1; }
 # A coordinator that was a successor itself, its tab still titled NAME-next: its own tab is retitled NAME first, so
 # open_view opens the successor's tab instead of selecting the caller's (a terminal that reuses a tab by its title).

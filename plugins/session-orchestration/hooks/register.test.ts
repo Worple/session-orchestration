@@ -143,6 +143,8 @@ test('name_session renames any session at turn end and refuses a bad name', asyn
   })
   on('turn.complete', async () => ({ text: '' }))
   on('session.id', async () => ({ value: 'sess-c' }))
+  let entry: string | undefined // CLAUDE_CODE_ENTRYPOINT
+  on('env.get', async (_, e) => ({ value: e.name === 'CLAUDE_CODE_ENTRYPOINT' ? entry : undefined }))
   let check = 'free other\n' // a "-coordinator" name only for a successor (named NAME-next) once it is free
   on('process.run', async () => ({ value: { exitCode: 0, stdout: check, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   const call = (name: unknown) => $.tool.call({ tool: 'mcp__session-orchestration__name_session', name })
@@ -160,6 +162,11 @@ test('name_session renames any session at turn end and refuses a bad name', asyn
   expect((await call('myproj-coordinator')).deny).toContain('"myproj-coordinator-next" once no other live session holds it')
   check = 'free next\n'
   expect((await call('myproj-coordinator')).result).toBe('This session becomes "myproj-coordinator" when this turn ends.')
+  // Desktop: /rename leaves the sidebar title, so the result names the app's own retitle
+  entry = 'claude-desktop'
+  expect((await call('myproj-coordinator')).result).toContain('set_session_title (ToolSearch it) with session_id "self" and title "myproj-coordinator"')
+  expect((await call('myproj-coordinator-prev-2')).result).toContain('and title "myproj-coordinator-prev-2"')
+  expect((await call('PROJ-1234-fix-settler')).result).toBe('This session becomes "PROJ-1234-fix-settler" when this turn ends.') // no sidebar row
 })
 
 test('a queued approval becomes buttons; a click submits the answer once and clears it', async ($, on) => {

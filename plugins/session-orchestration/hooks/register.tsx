@@ -1720,7 +1720,11 @@ export const register: Register = on => {
       return { deny: `name_session: a "-coordinator" name is the coordinator's (open_pane gives it); a successor takes it only as "${name}-next" once no other live session holds it.` }
     }
     await update($, naming, () => name)
-    return { result: `This session becomes "${name}" when this turn ends.` }
+    // Desktop's sidebar row keeps its own title through /rename: a handover left rows with the same coordinator title.
+    // Only a coordinator's names (NAME, NAME-prev-K): a task session has no sidebar row.
+    const desktop = /-coordinator(-prev-\d+)?$/.test(name) &&
+      (await $.env.get('CLAUDE_CODE_ENTRYPOINT').catch(() => undefined))?.startsWith('claude-desktop')
+    return { result: `This session becomes "${name}" when this turn ends.${desktop ? ` That leaves its Claude Code Desktop sidebar title as it is: also call mcp__ccd_session_mgmt__set_session_title (ToolSearch it) with session_id "self" and title "${name}".` : ''}` }
   })
 
   // A worker's message without SendMessage's 2K schema: to a received `from`, else to this project's live
