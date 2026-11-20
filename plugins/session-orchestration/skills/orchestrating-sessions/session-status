@@ -709,6 +709,10 @@ ended_transcript() { ls "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/projects/*/"$1".js
 ended_free() {
   local f g re="Supersedes: ${2:0:8}|[Yy]ou replace (session )?${2:0:8}"
   ! awk -F'\t' -v id="$2" -v n="$3" '$1 != id && $2 == n && $3 != "failed" { f = 1 } END { exit !f }' <<<"$1" || return 1
+  # Renamed NAME-prev-K by a handoff while a session named NAME runs: that one owns the work.
+  if [[ $3 =~ ^(.+)-prev-[0-9]+$ ]]; then
+    ! awk -F'\t' -v n="${BASH_REMATCH[1]}" '$2 == n && $3 !~ /^(failed|stopped|done)$/ { f = 1 } END { exit !f }' <<<"$1" || return 1
+  fi
   f=$(ended_transcript "$2"); [ -n "$f" ] || return 0
   find "$(dirname "$f")" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$ENC" -maxdepth 1 -name '*.jsonl' -newer "$f" -exec grep -lE "$re" {} + 2>/dev/null |
     sort -u | while read -r g; do first_prompt "$g" 50 | grep -qE "$re" && echo x; done | grep -q . && return 1
@@ -1575,7 +1579,12 @@ if [ -n "$SEND" ]; then
       read_row id name st pre started cwd kind status pid
       # Renamed NAME-prev-K by a handoff (a coordinator's has no Supersedes: line): the live NAME owns its work now.
       if [[ $name =~ ^(.+)-prev-[0-9]+$ ]]; then
-        b=${BASH_REMATCH[1]} s=$(list_sessions | awk -F'\t' -v n="${BASH_REMATCH[1]}" '$2 == n { print $1; exit }')
+        rm -f "$TMP/ask.failed"
+        b=${BASH_REMATCH[1]} s=$(list_sessions | awk -F'\t' -v n="${BASH_REMATCH[1]}" '$2 == n && $3 !~ /^(failed|stopped|done)$/ { print $1; exit }')
+        if [ -z "$s" ] && [ -e "$TMP/ask.failed" ]; then   # whether NAME lives is unknown: ask again, never send
+          [ "$SECONDS" -lt "$deadline" ] || { echo "whether \"$b\" took over from \"$name\" is unknown (an account's session listing failed); nothing sent"; exit 2; }
+          sleep "${SESSION_STATUS_POLL_S:-30}"; continue
+        fi
         [ -z "$s" ] || { echo "\"$name\" (${id:0:8}) handed over: \"$b\" (${s:0:8}) owns its work now: send to that one (--send-when-idle ${here:+--here }${s:0:8} TEXT); nothing sent"; exit 5; }
       fi
       if [ -z "$pid" ]; then

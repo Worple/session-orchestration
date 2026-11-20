@@ -767,6 +767,11 @@ setacct cfg "$(sess "$rid" coord-prev-2 idle 1),$(sess "$s1" coord idle 1)"
 out=$(run --send-when-idle "${rid:0:8}" "Fix CI") && rc=0 || rc=$?
 [ "$rc" = 5 ] && grep -q '^"coord-prev-2" (22222222) handed over: "coord" (5e000001) owns its work now' <<<"$out" && ! calls | grep -v ' agents ' | grep -q . ||
   { echo "send to a renamed predecessor not refused: $rc $out"; exit 1; }
+# NAME listed but failed owns nothing: the send goes ahead.
+setacct cfg "$(sess "$rid" coord-prev-2 idle null),$(sess "$s1" coord failed null)"
+out=$(SESSION_STATUS_WAIT_S=0 run --send-when-idle "${rid:0:8}" "Fix CI") && rc=0 || rc=$?
+[ "$rc" != 5 ] || { echo "send refused for a failed NAME: $out"; exit 1; }
+calls >/dev/null
 setacct cfg ""
 # accounts off with a second account sharing the transcripts: an unlisted session may be live there, so no resume
 rm "$root/.claude/coordination.local.json"
