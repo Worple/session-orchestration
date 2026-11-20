@@ -1856,7 +1856,7 @@ export const register: Register = on => {
     // Once per retraction: one still missing after that (a deny rule's) isn't registered every turn.
     const gone = names ? TOOLS.filter(t => !names.has(`mcp__session-orchestration__${t.name}`)) : []
     for (const t of TOOLS) if (names?.has(`mcp__session-orchestration__${t.name}`)) reRegistered.delete(t.name)
-    await Promise.allSettled(gone.filter(t => !reRegistered.has(t.name)).map(t => (reRegistered.add(t.name), $.tool.register(t))))
+    await Promise.allSettled(gone.filter(t => !reRegistered.has(t.name)).map(t => $.tool.register(t).then(() => reRegistered.add(t.name))))
     const failed: string[] = []
     const run = async (command: string, args: string, what: string) => {
       try {

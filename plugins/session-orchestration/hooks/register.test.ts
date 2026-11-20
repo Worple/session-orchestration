@@ -1117,7 +1117,8 @@ test('a tool the engine retracted mid-session is registered again at the turn\'s
   let listed = all
   const registered: string[] = []
   on('tool.list', async () => ({ value: listed.map(n => ({ name: `mcp__session-orchestration__${n}`, description: '', mcp: true })) }))
-  on('tool.register', async (_, e) => (registered.push(e.name), { value: { tool: e.name } }))
+  let fail = false
+  on('tool.register', async (_, e) => { if (fail) throw new Error('rebinding'); registered.push(e.name); return { value: { tool: e.name } } })
   on('turn.complete', async () => ({ text: '' }))
   const end = { answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as const
   await $.turn.complete(end)
@@ -1132,6 +1133,12 @@ test('a tool the engine retracted mid-session is registered again at the turn\'s
   listed = all.filter(n => n !== 'reply')
   await $.turn.complete({ ...end, turnId: 't5' })
   expect(registered).toEqual(['reply', 'reply'])
+  listed = all.filter(n => n !== 'hand_command')
+  fail = true
+  await $.turn.complete({ ...end, turnId: 't6' }) // the register failed: tried again the next turn
+  fail = false
+  await $.turn.complete({ ...end, turnId: 't7' })
+  expect(registered).toEqual(['reply', 'reply', 'hand_command'])
 })
 
 test('usage names: fixed words lib.sh usage accepts', () => {

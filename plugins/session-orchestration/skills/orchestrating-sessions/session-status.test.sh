@@ -767,11 +767,18 @@ setacct cfg "$(sess "$rid" coord-prev-2 idle 1),$(sess "$s1" coord idle 1)"
 out=$(run --send-when-idle "${rid:0:8}" "Fix CI") && rc=0 || rc=$?
 [ "$rc" = 5 ] && grep -q '^"coord-prev-2" (22222222) handed over: "coord" (5e000001) owns its work now' <<<"$out" && ! calls | grep -v ' agents ' | grep -q . ||
   { echo "send to a renamed predecessor not refused: $rc $out"; exit 1; }
-# NAME listed but failed owns nothing: the send goes ahead.
-setacct cfg "$(sess "$rid" coord-prev-2 idle null),$(sess "$s1" coord failed null)"
-out=$(SESSION_STATUS_WAIT_S=0 run --send-when-idle "${rid:0:8}" "Fix CI") && rc=0 || rc=$?
-[ "$rc" != 5 ] || { echo "send refused for a failed NAME: $out"; exit 1; }
-calls >/dev/null
+# A retired NAME (stopped, no process) still owns it: refused, never the predecessor woken.
+setacct cfg "$(sess "$rid" coord-prev-2 idle null),$(sess "$s1" coord idle null | sed 's/"state":"blocked"/"state":"stopped"/')"
+out=$(run --send-when-idle "${rid:0:8}" "Fix CI") && rc=0 || rc=$?
+[ "$rc" = 5 ] && grep -q '"coord" (5e000001) owns its work now' <<<"$out" && ! calls | grep -v ' agents ' | grep -q . ||
+  { echo "send to a predecessor of a retired NAME not refused: $rc $out"; exit 1; }
+# NAME failed, or another project's (a sibling folder): owns nothing, so the send goes ahead.
+for other in "$(sess "$s1" coord idle null | sed 's/"state":"blocked"/"state":"failed"/')""$(sess "$s1" coord idle 1 | sed "s|\"cwd\":\"$root\"|\"cwd\":\"$root-two\"|")"; do
+  setacct cfg "$(sess "$rid" coord-prev-2 idle null),$other"
+  out=$(SESSION_STATUS_WAIT_S=0 run --send-when-idle "${rid:0:8}" "Fix CI") && rc=0 || rc=$?
+  [ "$rc" != 5 ] || { echo "send refused for a NAME that owns nothing ($other): $out"; exit 1; }
+  calls >/dev/null
+done
 setacct cfg ""
 # accounts off with a second account sharing the transcripts: an unlisted session may be live there, so no resume
 rm "$root/.claude/coordination.local.json"
@@ -906,6 +913,13 @@ out=$(run --resume-ended --pause 0 "${e1:0:8}" "${e2:0:8}" "${e3:0:8}" ffffffff)
   grep -q '^woke "one" (e1e1e1e1, failed)' <<<"$out" && grep -qx '"ABC-62-x" (e2e2e2e2): another session has that name or supersedes it: not resumed' <<<"$out" &&
   grep -qx '"three" (e3e3e3e3) is blocked now, not ended: not resumed' <<<"$out" && grep -qx 'ffffffff: not listed in any account: not resumed' <<<"$out" ||
   { echo "--resume-ended: $rc $out"; exit 1; }
+# A coordinator's predecessor (NAME-prev-K) whose NAME this project has: not resumed; another folder's NAME: resumed.
+setacct cfg "$(failed "$e1" c-prev-1),$(sess "$e3" c idle 1)"; calls >/dev/null
+out=$(run --resume-ended --pause 0 "${e1:0:8}") || :
+grep -qx '"c-prev-1" (e1e1e1e1): another session has that name or supersedes it: not resumed' <<<"$out" &&
+  ! calls | grep -q -- '--bg' || { echo "--resume-ended resumed a predecessor whose NAME lives: $out"; exit 1; }
+setacct cfg "$(failed "$e1" c-prev-1),$(sess "$e3" c idle 1 | sed "s|\"cwd\":\"$root\"|\"cwd\":\"$root-two\"|")"
+run --resume-ended --pause 0 "${e1:0:8}" | grep -q '^woke "c-prev-1"' && calls >/dev/null || { echo "--resume-ended skipped for another project's NAME"; exit 1; }
 [ "$(run --resume-ended --pause x "${e1:0:8}"; echo $?)" = "$(printf 'usage: session-status --resume-ended [--pause SECS] ID… (ID: 8+ characters)\n2')" ] || { echo "--resume-ended usage"; exit 1; }
 rm "$proj/$e1.jsonl" "$proj/$e2.jsonl" "$proj/$e3.jsonl" "$proj/$e4.jsonl" "$proj/$e5.jsonl" "$proj/$e6.jsonl"
 setacct cfg "$(sess "$hid" "fix it" idle 1)"; calls >/dev/null
