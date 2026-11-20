@@ -12,7 +12,7 @@
 #                                            terminal, messages
 #                                            (and its module's block, e.g. msgraph), trusted, team, feedback.mode,
 #                                            feedback.repo_dir, feedback.project_dir, telemetry, handoff.*, compact.window,
-#                                            pending.file, history.dirs (always excluded;
+#                                            pending.file, history.dirs, coordinator.purpose (always excluded;
 #                                            the repo file can't set them)
 # No file means every default. `config KEY` prints the key's value; an unknown value prints the default and one
 # warning line on stderr.
@@ -69,7 +69,7 @@ user_config() { echo "${XDG_CONFIG_HOME:-$HOME/.config}/session-orchestration/co
 # person_keys_drop [MODULE]: the jq filter that drops the person keys (and MODULE's messages block) from a repo file;
 # coord_json reads the repo file through it, and --shared refuses a team file it would change.
 person_keys_drop() {
-  echo "del(.approvals, .terminal, .messages, .msgraph, .trusted, .team, .feedback, .telemetry, .handoff, .compact, .pending, .history, .fable, .start, .retro, .docs_watch, .pane$( [[ ${1:-} =~ ^[A-Za-z0-9_-]+$ ]] && echo ", .[\"$1\"]")) | if .features | type == \"object\" then del(.features.accounts, .features.accounts_weekly_switch, .features.notify, .features.retro, .features.docs_watch) else . end"
+  echo "del(.approvals, .terminal, .messages, .msgraph, .trusted, .team, .feedback, .telemetry, .handoff, .compact, .pending, .history, .fable, .start, .retro, .docs_watch, .pane, .coordinator$( [[ ${1:-} =~ ^[A-Za-z0-9_-]+$ ]] && echo ", .[\"$1\"]")) | if .features | type == \"object\" then del(.features.accounts, .features.accounts_weekly_switch, .features.notify, .features.retro, .features.docs_watch) else . end"
 }
 
 coord_memo=   # never inherited: valid only for the cwd its caller built it in
@@ -185,6 +185,36 @@ coord_live() {
   elif [ "$(config features.accounts 2>/dev/null)" = true ] && a=$(sock_addr "$pid"); then echo "$n, under another account ($p): SendMessage to \"$a\""
   else echo "$n, under another account ($p): SendMessage reaches it only from there"; fi
 }
+# coord_purpose [ROOT]: config coordinator.purpose of ROOT (default the cwd's project): one line on what its
+# coordinator is for, from that project's person file only (.claude/coordination.local.json), never the repo file or
+# the person-wide one; empty when unset.
+coord_purpose() {
+  ( [ -z "${1:-}" ] || cd "$1" 2>/dev/null || exit 0
+    local f; f=$(person_file 2>/dev/null) && [ -f "$f" ] || exit 0
+    jq -r '.coordinator.purpose | strings | split("\n")[0] // empty | .[0:200] | select(length > 0)' "$f" 2>/dev/null )
+}
+# purpose_set TEXT: writes coordinator.purpose to this project's person file (session-status --purpose).
+# Characters are counted by jq (code points), the same on GNU and BSD and in any locale.
+purpose_set() {
+  local t; t=$(jq -rn --arg v "${1:-}" '$v | gsub("[[:cntrl:]]"; " ") | gsub("^ +| +$"; "") | select(length > 0 and length <= 200)')
+  [ -n "$t" ] || { echo "usage: session-status --purpose 'ONE LINE, at most 200 characters'" >&2; return 2; }
+  person_set purpose '.coordinator.purpose = $v' --arg v "$t"
+}
+# The person's coordinator registry: one coordinated project per line, ROOT<TAB>ACCOUNT<TAB>EPOCH (the Claude config
+# dir and time of its coordinator's last --start). In the state dir, per person, never committed: it names the
+# person's projects, so only their own sessions read it (session-status --coordinators).
+coord_registry() { echo "${XDG_STATE_HOME:-$HOME/.local/state}/session-orchestration/coordinators.tsv"; }
+# coord_register ROOT: ROOT's line, added or brought up to date, under a flock on the registry's .flock file (two
+# coordinators starting at once each keep their line), in a subshell so fd 9 closes with it.
+coord_register() {
+  ( f=$(coord_registry); mkdir -p "${f%/*}" && exec 9>>"$f.flock" || exit 1
+    perl -MFcntl=:flock -e 'alarm 10; open(my $l, ">>&=", 9) or exit 1; flock($l, LOCK_EX) or exit 1' ||
+      echo "couldn't lock $f; going on unlocked" >&2
+    t=$(mktemp "$f.XXXXXX") || exit 1
+    { awk -F'\t' -v r="$1" '$1 != r' "$f" 2>/dev/null
+      printf '%s\t%s\t%s\n' "$1" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" "$(date +%s)"; } > "$t" && mv "$t" "$f" || { rm -f "$t"; exit 1; } )
+}
+
 # coord_start ROOT: opens ROOT's coordinator in a terminal tab (config terminal), named already so others find it
 # before open_pane names it; prints what happened. Exit 1: nothing started (the command to run is printed).
 coord_start() {
@@ -277,6 +307,9 @@ detect_host() {
 #                       the person-wide file; a title press writes it (session-status --pane-section). Bad entries are
 #                       dropped with a warning; hidden reads as line for the on-you sections (PANE_ON_YOU).
 #                       default {}: every section open, resolved one line
+#   coordinator.purpose one line (at most 200 characters) on what this project's coordinator is for, which other
+#                       coordinators route matters by (session-status --coordinators, --purpose writes it). Read from
+#                       this project's .claude/coordination.local.json only (coord_purpose)    default empty
 #   pending.file        the coordinator's handoff file, *.md, relative to the project root, ~ or absolute (pending_path): its entries' history
 #                       and archive (skills/orchestrating-sessions/pending); person only    default empty (none)
 #   history.dirs        JSON list of folders (relative to the root, ~ or absolute) the Stop hook keeps a local git
@@ -395,7 +428,8 @@ config() {
     plan.advisor.design|plan.advisor.build|plan.advisor.mechanical|plan.advisor.review|plan.advisor.release|plan.advisor.scan|plan.advisor.coordinator|plan.advisor.retro|plan.advisor.research) ;;
     handoff.at.chunk|handoff.at.task|handoff.at.coordinator|handoff.hard_after|handoff.stop_room|compact.window) ;;
     pane.sections) pane_sections; return 0 ;;
-    *) echo "unknown config key: ${key:-(none)} (one of tracker host key_pattern approvals.delegate approvals.pr_create features.accounts features.accounts_weekly_switch features.review_inbox features.notify start.mode start.kinds.feedback_apply features.retro retro.scope retro.schedule retro.account retro.sections features.docs_watch docs_watch.files docs_watch.pattern terminal messages feedback.mode feedback.repo_dir feedback.project_dir telemetry pending.file history.dirs fable.accounts plan.enabled plan.max_parallel plan.models.{design,build,mechanical,review,release,scan,coordinator,retro,research} plan.advisor.{design,build,mechanical,review,release,scan,coordinator,retro,research} handoff.at.{chunk,task,coordinator} handoff.hard_after handoff.stop_room compact.window pane.sections)" >&2; return 2 ;;
+    coordinator.purpose) coord_purpose; return 0 ;;
+    *) echo "unknown config key: ${key:-(none)} (one of tracker host key_pattern approvals.delegate approvals.pr_create features.accounts features.accounts_weekly_switch features.review_inbox features.notify start.mode start.kinds.feedback_apply features.retro retro.scope retro.schedule retro.account retro.sections features.docs_watch docs_watch.files docs_watch.pattern terminal messages feedback.mode feedback.repo_dir feedback.project_dir telemetry pending.file history.dirs fable.accounts coordinator.purpose plan.enabled plan.max_parallel plan.models.{design,build,mechanical,review,release,scan,coordinator,retro,research} plan.advisor.{design,build,mechanical,review,release,scan,coordinator,retro,research} handoff.at.{chunk,task,coordinator} handoff.hard_after handoff.stop_room compact.window pane.sections)" >&2; return 2 ;;
   esac
   v=$(coord_json | jq -r --arg k "$key" 'getpath($k | split(".")) | if . == null then empty else tostring end')
   [ -n "$v" ] && case $key in
@@ -484,14 +518,21 @@ pane_section_set() {
   [[ $PANE_SLUGS == *" ${1:-} "* ]] && [[ ${2:-} =~ ^(open|line|hidden)$ ]] ||
     { echo "usage: session-status --pane-section SLUG open|line|hidden (SLUG one of$PANE_SLUGS)" >&2; return 2; }
   [ "$2" != hidden ] || [[ $PANE_ON_YOU != *" $1 "* ]] || { echo "pane-section: $1 needs you: open or line only" >&2; return 2; }
+  person_set pane-section '.pane.sections[$k] = $v' --arg k "$1" --arg v "$2"
+}
+# person_set WHO FILTER [JQ_ARGS…]: applies the jq FILTER to the project's person file (.claude/coordination.local.json,
+# created at the root when there's none), under a flock; refuses a committed file or one that isn't a JSON object. WHO
+# prefixes its messages.
+person_set() {
+  local who=$1 jf=$2 f out; shift 2
   f=$(coord_file coordination.local.json) || f=$(find_root)/.claude/coordination.local.json
-  ! tracked "$f" 2>/dev/null || { echo "pane-section: $f is committed: not written" >&2; return 1; }
+  ! tracked "$f" 2>/dev/null || { echo "$who: $f is committed: not written" >&2; return 1; }
   mkdir -p "${f%/*}" && exec 9>>"$f" || return 1
   perl -MFcntl=:flock -e 'alarm 10; open(my $l, ">>&=", 9) or exit 1; flock($l, LOCK_EX) or exit 1' ||
-    echo "pane-section: couldn't lock $f; going on unlocked" >&2
+    echo "$who: couldn't lock $f; going on unlocked" >&2
   [ -s "$f" ] || echo '{}' > "$f" || return 1
-  out=$(jq --arg k "$1" --arg v "$2" 'if type == "object" then .pane.sections[$k] = $v else error("not a JSON object") end' "$f") ||
-    { echo "pane-section: $f isn't a JSON object: not written" >&2; return 1; }
+  out=$(jq "$@" "if type == \"object\" then $jf else error(\"not a JSON object\") end" "$f") ||
+    { echo "$who: $f isn't a JSON object: not written" >&2; return 1; }
   printf '%s\n' "$out" > "$f"
 }
 

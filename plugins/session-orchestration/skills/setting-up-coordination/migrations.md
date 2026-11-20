@@ -24,7 +24,7 @@ Answering: `--migrate` stamps nothing while an ask or hand id is open. `--apply=
 `--migrate` then skips (`--check` still names it; `--apply=ID` still applies it). m7 isn't declined but put off: it asks
 again while other sessions run and moves unasked once none does.
 
-Changes that needed no migration (cosmetic, a feature offer, no reliable detector, or old rows still read): `--init` itself (0.42), the github adapter (0.43), generic coordinator rules in the plugin (0.44), the Replies line wording (0.64), `features.retro` (0.103), adapter `brief` and `standup-template` (0.113), the CLAUDE.md task line's `--advisor` hint (the release after plan.advisor: the old line still works, the playbook has the rule).
+Changes that needed no migration (cosmetic, a feature offer, no reliable detector, or old rows still read): `--init` itself (0.42), the github adapter (0.43), generic coordinator rules in the plugin (0.44), the Replies line wording (0.64), `features.retro` (0.103), adapter `brief` and `standup-template` (0.113), the CLAUDE.md task line's `--advisor` hint (the release after plan.advisor: the old line still works, the playbook has the rule), `coordinator.purpose` (from the release after coordinator discovery: a feature offer, asked at `--start` while unset).
 
 ## Adding a migration
 

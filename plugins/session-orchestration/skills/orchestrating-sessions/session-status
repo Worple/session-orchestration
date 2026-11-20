@@ -125,6 +125,10 @@
 #        session-status --coordinator-of DIR [--start]   the coordinator of DIR's project when it's another than
 #                       this one (a subproject, the parent): its name; exit 1 not running (--start opens it), 3 listing
 #                       failed, 4 none of its own (--start opens a new one there), 5 nothing opened
+#        session-status --coordinators   every coordinated project of this person (registered at its coordinator's
+#                       --start): NAME · ROOT · ACCOUNT · running or not · PURPOSE, under any account
+#        session-status --purpose 'LINE'   writes this project's config coordinator.purpose (what its coordinator is
+#                       for; --coordinators lists it), to the project's .claude/coordination.local.json
 #        session-status --owner KEY…   who owns each task and why: the row's session, then each candidate
 #                       (first prompt, marker, review, maybe) with its state, first prompt line and markers
 #        session-status --handover ID|--self [--model M] [--effort E] [--escalate] [--] 'WHAT NEXT'   a task or chunk
@@ -371,6 +375,44 @@ sent_marks() {
       END { print m, d, n, w, t }' "$f" 2>/dev/null || printf 'gone\t%s\t%s\t%s\t\n' "$d" "$n" "$w"
   done < "$SENT_LOG"
 }
+# After the cd to ROOT: it writes the root's person file, from a subfolder too.
+[ "${1:-}" = --purpose ] && { [ $# = 2 ] || set -- "$1" ""; purpose_set "$2"; exit; }
+# --coordinators: every coordinated project of this person (lib.sh's coord_registry: each coordinator registers at
+# --start), newest start first, one line each: NAME · ROOT · ACCOUNT (its last --start's) · STATE · PURPOSE. STATE:
+# running (under this account: SendMessage reaches it), running under another account (with its `uds:` address when
+# features.accounts is on here and its socket is there), or not running; then
+# `no inbox` when its CLAUDE.md names no replies folder (--inbox-add --root refuses it).
+# Under any account sharing this transcript store, whatever this project's features.accounts says (as coord_live).
+if [ "${1:-}" = --coordinators ]; then
+  [ $# = 1 ] || { echo "usage: session-status --coordinators" >&2; exit 2; }
+  reg=$(coord_registry)
+  [ -s "$reg" ] || { echo "(none registered yet: a coordinator registers at its next --start; $(tilde "$reg"))"; exit 0; }
+  TMP=$(mktemp -d) || exit 1; trap 'r=$?; rm -rf "$TMP"; exit_fault $r' EXIT
+  load_module features accounts list_accounts 2>/dev/null
+  live=$(list_sessions | awk -F'\t' '$3 !~ /^(done|failed|stopped)$/ { print $2 "\t" $6 "\t" $4 "\t" $1 "\t" $9 }')
+  acc=$(config features.accounts 2>/dev/null)
+  sort -t$'\t' -k3,3nr "$reg" | while IFS=$'\t' read -r r acct _; do
+    [ -n "$r" ] && is_root "$r" || continue   # set up no more, or gone
+    n=$(coord_name "$r")
+    # Its handoff successor counts too: NAME-next, or a Desktop one by the id it recorded in NAME.next (--successor
+    # --started, as ho_name). NAME becomes the live session's listed name, the one SendMessage reaches; column 3
+    # `claude` is this account's own listing, preferred.
+    id=$(cat "${XDG_CACHE_HOME:-$HOME/.cache}/session-status/handover/$n.next" 2>/dev/null)
+    if st=$(awk -F'\t' -v n="$n" -v r="$r" -v id="$id" '($1 == n || $1 == n "-next" || (id != "" && $4 == id)) && ($2 == r || index($2, r "/") == 1) {
+          if (!f || (!own && $3 == "claude")) { m = $1; own = $3 == "claude"; pid = $5 } f = 1 }
+        END { if (!f) exit 1; print m "\t" (own ? "running" : "running under another account") "\t" pid }' <<<"$live"); then
+      IFS=$'\t' read -r n st pid <<<"$st"   # pid last: tabs are IFS whitespace, so an empty one between would collapse
+      # Another account's live coordinator takes a SendMessage at its socket, with features.accounts on (as coord_live).
+      [ "$st" = running ] || [ "$acc" != true ] || ! a=$(sock_addr "$pid") || st="$st: SendMessage to \"$a\""
+    elif [ -e "$TMP/ask.failed" ]; then st="unknown (an account's session listing failed)"
+    else st='not running'; fi
+    [ "$r" != "$ROOT" ] || st="$st, this project"
+    [ -n "$(replies_path "$r")" ] || st="$st, no inbox (its CLAUDE.md names no replies folder)"
+    p=$(coord_purpose "$r")
+    printf '%s · %s · %s · %s · %s\n' "$n" "$(tilde "$r")" "$(tilde "$acct")" "$st" "${p:-(no purpose set: its coordinator sets one with --purpose)}"
+  done | grep . || echo "(none set up any more: each registered root has gone or dropped its setup; $(tilde "$reg"))"
+  exit 0
+fi
 if [ "${1:-}" = --inbox-add ]; then
   shift; from= to=
   usage="usage: session-status --inbox-add [--from WHO] [SENDER_ID] < TEXT | --inbox-add --root DIR < TEXT"
@@ -706,6 +748,9 @@ if [ "${1:-}" = --start ]; then
   else printf '\n## Handover\n(none%s)\n' "${h:+: no $h}"; fi
   u=$(inbox_unread)
   [ -z "$u" ] || printf '\n## Coordinator inbox, unread (%s): act on each, then mark it read: %s --inbox --read N\n%s\n' "$(inbox_file)" "$SELF" "$u"
+  # Other coordinators find this one by its purpose (--coordinators); the registry holds this root from now on.
+  coord_register "$ROOT" || echo "couldn't write $(coord_registry): other coordinators won't list this one" >&2
+  [ -n "$(coord_purpose)" ] || printf '\n## Purpose\n(none: other coordinators route matters by it (--coordinators). Ask the user for one line on what this coordinator is for, then: %s --purpose '"'"'LINE'"'"')\n' "$SELF"
   if [ -z "$rd" ]; then printf '\n## Replies\n(none: the CLAUDE.md section names no replies folder)\n'
   else
     # The last coordinator saw what came before its handover, however old the note.

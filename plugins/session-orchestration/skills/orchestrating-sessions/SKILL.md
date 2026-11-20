@@ -33,6 +33,8 @@ Every coordinator session, before anything else; the user shouldn't have to ask.
    - do each feature line's start step, and whatever the project's coordinator doc adds;
    - prune the handoff file against the status (Handoff file);
    - act on each unread coordinator inbox entry it lists, then mark it read (`session-status --inbox --read N`);
+   - a `## Purpose` section: ask the user for one line on what this coordinator is for, then
+     `session-status --purpose 'LINE'` (Another project's matter);
    - an `## Ended while the background service was off` section gets one ask ([resuming.md](resuming.md), After a
      restart);
    - recheck each ask `open_pane` listed as queued over a day ago, one by one: look the thing up (the PR merged or
@@ -77,6 +79,26 @@ stay as [approvals.md](approvals.md) says. Write a handoff entry `for coordinato
 still reports. Send NAME one message when it's done (the check that proves it) or blocked on something NAME or its
 user must resolve, plus anything you judge NAME needs to know; not your sessions' progress. NAME gone (a successor
 took over): `session-status --coordinator-of <its root>` names the live one.
+
+## Another project's matter
+
+A matter that belongs to another of the user's projects (this machine's setup, a request for a team another project
+handles) goes to that project's coordinator, not to the user to route by hand. `session-status --coordinators` lists
+every coordinator of the user's projects, under any account: `NAME · ROOT · ACCOUNT · STATE · PURPOSE`. Pick the
+one whose purpose fits and send it the matter as you'd brief a task session: what, why, done when. STATE `running`
+(this account): SendMessage it by NAME (the live session's, a successor's too), as Subprojects says; one that prints
+`SendMessage to "uds:…"`, at that address. Otherwise
+(another account with no address, `not running`, `unknown`: the inbox reaches it either way):
+`session-status --inbox-add --root <its ROOT>` (text on stdin; [features/accounts.md](../../features/accounts.md),
+Messaging another project's coordinator), which needs features.accounts on in your project (off: ask the user to
+turn it on) and refuses a target marked `no inbox` (ask the user to route that one). Write a handoff entry
+(`sent to NAME: <matter>`) and resolve it when its answer reaches your inbox. None fits, or two do: ask the user which.
+Never start, message or resume that project's sessions yourself, and never pass an approval along.
+
+Each coordinator registers its root at `--start`; the line is its config `coordinator.purpose`, and `--start` asks for
+it under `## Purpose` while it is unset (ask the user, then `session-status --purpose 'LINE'`). What is shared: nothing.
+The registry is the user's own (`coordinators.tsv` in the state folder) and the purpose sits in each project's
+`.claude/coordination.local.json`; neither is committed, and a teammate's coordinators never show.
 
 ## Status: tools first, sessions last
 
