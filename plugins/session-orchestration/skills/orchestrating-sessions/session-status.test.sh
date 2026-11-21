@@ -1931,14 +1931,21 @@ jq '.pending.file = "p.md"' "$tmp/sj" > "$sj"
 out=$(init "$s" --write --shared) || :; grep -qF 'has person keys, which never go in a team file: pending.file (move them' <<<"$out" ||
   { echo "init (s1) person key: $out"; exit 1; }
 cp "$tmp/sj" "$sj"
+# the team section is scrubbed too: a fact with a home path never reaches the committed CLAUDE.md
+out=$(init "$s" --write --shared 'branch_pattern=~/b/<key>') || :
+grep -qE '^  CLAUDE\.md \(team section\):[0-9]+: a home path: .*~/b/<key>' <<<"$out" &&
+  ! git -C "$s" rev-parse -q --verify "refs/heads/coordination/setup-$(date +%F)" >/dev/null || { echo "init (s1) team section home path: $out"; exit 1; }
 sb=coordination/setup-$(date +%F); swt=$s/.worktrees/$sb
 out=$(init "$s" --write --shared) && [ -z "$(git -C "$s" status --short --untracked-files=all)" ] &&
-  [ "$(git -C "$s" diff --name-only origin/main "$sb" | paste -sd' ' -)" = ".claude/coordination/coordination.json .gitattributes" ] &&
+  [ "$(git -C "$s" diff --name-only origin/main "$sb" | paste -sd' ' -)" = ".claude/coordination/coordination.json .gitattributes CLAUDE.md" ] &&
+  [ "$(git -C "$s" show "$sb:CLAUDE.md" | sed -n 1,3p)" = $'# c\n\n## Coordinated sessions (team)' ] &&
+  git -C "$s" show "$sb:CLAUDE.md" | grep -qF -- '- **Reserved**, even when approvals are delegated' &&
+  ! git -C "$s" show "$sb:CLAUDE.md" | grep -qiE -e 'replies folder|project memory:|-coordinator' -e "$tmp" &&
   [ "$(git -C "$s" show "$sb:.gitattributes")" = $'/.claude/coordination/memory.md merge=union\n/.claude/coordination/memory/*.md merge=union' ] &&
   grep -qxF /.claude/coordination/coordination.json "$s/.git/info/exclude" && ! grep -qxF /.claude/coordination/ "$s/.git/info/exclude" &&
   [ "$(git -C "$s" show "$sb:.claude/coordination/coordination.json" | jq -c .)" = '{"tracker":"none","host":"github","features":{"review_inbox":false}}' ] &&
   [ "$(git -C "$s" log -1 --format=%an "$sb")" = t ] &&
-  grep -qxF "Team PR: show its diff in one pane ask (git -C $swt show), then on yes: git -C $swt push -u origin $sb && gh pr create -R o/sail --base main --head $sb --title 'coordination: shared setup (repo keys, merge=union for team memory)' --body 'Shared coordination files: every collaborator reads them once this merges; personal files stay out of git.'" <<<"$out" &&
+  grep -qxF "Team PR: show its diff in one pane ask (git -C $swt show), then on yes: git -C $swt push -u origin $sb && gh pr create -R o/sail --base main --head $sb --title 'coordination: shared setup (repo keys, team CLAUDE.md section, merge=union for team memory)' --body 'Shared coordination files: every collaborator reads them once this merges; personal files stay out of git.'" <<<"$out" &&
   grep -qF 'Personal: everything above, out of git' <<<"$out" || { echo "init (s1) --shared: $out / $(git -C "$s" status --short --untracked-files=all)"; exit 1; }
 out=$(init "$s" --write --shared) || :; grep -qF "refused: --shared: $sb exists already" <<<"$out" || { echo "init (s1) second --shared: $out"; exit 1; }
 # merged: the pull replaces this checkout's ignored repo file, and the next --shared has nothing to open
@@ -1959,6 +1966,10 @@ out=$(init "$c") && grep -F "     .claude/coordination/session-status-adapter (s
 [ "$(init "$c" --write --trust=session-status-adapter@0000)" = "--trust=session-status-adapter@0000: session-status-adapter changed since it was shown: run session-status --init again and review it" ] ||
   { echo "init (s2) stale trust: $(init "$c" --write --trust=session-status-adapter@0000)"; exit 1; }
 init "$c" --write >/dev/null; rm -f "$c/.claude/session-status-adapter"   # declined: the local one is written; drop it
+# the committed CLAUDE.md has the team section, so the personal one in CLAUDE.local.md keeps only its own lines
+grep -qxF '## Coordinated sessions (team)' "$c/CLAUDE.md" && grep -qF 'Replies folder (status reports' "$c/CLAUDE.local.md" &&
+  grep -qF 'The team'"'"'s rules (approvals, reserved actions, task names, worktrees): CLAUDE.md, "Coordinated sessions (team)".' "$c/CLAUDE.local.md" &&
+  ! grep -qE 'Reserved|approvals\.delegate|A task is' "$c/CLAUDE.local.md" || { echo "init (s2) personal section: $(cat "$c/CLAUDE.local.md")"; exit 1; }
 [ "$(init "$c" --check)" = "partial: the committed .claude/coordination/session-status-adapter isn't trusted yet: run setup to review it" ] ||
   { echo "init (s2) untrusted check: $(init "$c" --check)"; exit 1; }
 out=$(init "$c" --write --trust=session-status-adapter@"$sha") && [ ! -e "$c/.claude/session-status-adapter" ] &&
@@ -1968,11 +1979,11 @@ out=$(init "$c" --write --trust=session-status-adapter@"$sha") && [ ! -e "$c/.cl
 # --check names the team files sessions read before the person's, only those git tracks
 mkdir -p "$c/.claude/coordination/memory"; echo '# Team memory' > "$c/.claude/coordination/memory.md"; echo x > "$c/.claude/coordination/memory/misc.md"
 echo '# Team review' > "$c/.claude/coordination/review-brief.md"
-init "$c" --check | grep -qx 'team: adapter (trusted)' || { echo "init (s2) team line, untracked files: $(init "$c" --check)"; exit 1; }
+init "$c" --check | grep -qx 'team: section, adapter (trusted)' || { echo "init (s2) team line, untracked files: $(init "$c" --check)"; exit 1; }
 git -C "$c" add -f .claude/coordination && gc "$c" -m 'team files'
-init "$c" --check | grep -qx 'team: memory, review-brief, adapter (trusted)' || { echo "init (s2) team line: $(init "$c" --check)"; exit 1; }
+init "$c" --check | grep -qx 'team: section, memory, review-brief, adapter (trusted)' || { echo "init (s2) team line: $(init "$c" --check)"; exit 1; }
 printf '#!/bin/sh\n' > "$c/.claude/session-status-adapter"; chmod +x "$c/.claude/session-status-adapter"
-init "$c" --check | grep -qx 'team: memory, review-brief, adapter (trusted, local wins)' || { echo "init (s2) team line, local adapter: $(init "$c" --check)"; exit 1; }
+init "$c" --check | grep -qx 'team: section, memory, review-brief, adapter (trusted, local wins)' || { echo "init (s2) team line, local adapter: $(init "$c" --check)"; exit 1; }
 rm "$c/.claude/session-status-adapter"
 echo '# changed' >> "$c/.claude/coordination/session-status-adapter"
 [ -z "$(cd "$c" && HOME=$tmp "$here/session-status" --urls 2>/dev/null)" ] &&

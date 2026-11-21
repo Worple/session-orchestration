@@ -8,8 +8,9 @@
 #                                   read it), the indented value lines open_pane reads (`review_inbox url: URL`,
 #                                   `notify after: N min`), and a line per warning (a config value not valid, a module that doesn't load whole,
 #                                   delegation still in CLAUDE.md, a second account with features.accounts off, a
-#                                   terminal detected but not recorded), and `team[ (DIR)]: memory, review-brief, adapter
-#                                   (trusted[, local wins])`: the team files git tracks in .claude/coordination/ (DIR,
+#                                   terminal detected but not recorded), and `team[ (DIR)]: section, memory, review-brief, adapter
+#                                   (trusted[, local wins])`: the team files git tracks in .claude/coordination/ and the
+#                                   committed CLAUDE.md's "Coordinated sessions (team)" section (section) (DIR,
 #                                   relative to the root, in a workspace's team repo), read before the person's
 #   session-status --init           the proposal: what it found and what it would write, numbered for one reply
 #   session-status --init --write [--delegate] [--own] [--shared] [--trust=REL@SHA…] [--review-brief] [--retro-brief]
@@ -24,7 +25,9 @@
 #                                   .claude/coordination.local.json (features.accounts, terminal, approvals.delegate: true with
 #                                   --delegate, which also turns it on when set); both excluded up front, also in a
 #                                   folder set up already. --shared (shared mode) also commits the team files (the
-#                                   repo file's keys, a .gitattributes merge=union line for team memory) in a worktree
+#                                   repo file's keys, a .gitattributes merge=union line for team memory, in one repo
+#                                   the CLAUDE.md team section: claude-section.md's rule lines, while the personal
+#                                   section in CLAUDE.local.md keeps the coordinator, replies, memory, handoff) in a worktree
 #                                   from origin/<default> on coordination/setup-<date>, after a scrub (no home path,
 #                                   email, session name or ID, person key), and prints the push + PR command for one
 #                                   pane ask; the main checkout gets only personal, excluded files. --trust=REL@SHA records
@@ -318,6 +321,7 @@ if [ -n "$adapter" ] && [ -n "$replies" ]; then state=configured
 elif [ -z "$adapter$noexec" ] && [ -n "$parent" ] && [ -z "$own" ]; then state=parent
 elif [ -n "$adapter$replies$noexec" ]; then state=partial
 else state=unconfigured; fi
+team_head='## Coordinated sessions (team)'   # the team section's heading in a committed CLAUDE.md (shared mode)
 
 if [ "$mode" = check ]; then
   # doc_line NAME DOC: `  NAME: <start step> Read DOC when <events>`, from the `> **Start**:` and `> **Read when**:`
@@ -384,6 +388,9 @@ if [ "$mode" = check ]; then
                   ! jq -e '(.pending.file // .history.dirs) != null' "$sd/coordination.json" >/dev/null 2>&1 ||
                     echo "[m8 $c8] pending.file and history.dirs are ignored in the repo file (they name personal paths): move them to .claude/coordination.local.json"
                   tf=()
+                  # the team section in this folder's committed CLAUDE.md (a workspace's team repo's isn't read from here)
+                  [ "$sd" != "$root/.claude/coordination" ] || ! git -C "$root" ls-files --error-unmatch CLAUDE.md >/dev/null 2>&1 ||
+                    ! grep -qxF "$team_head" "$root/CLAUDE.md" || tf+=(section)
                   for x in memory.md:memory memory:memory review-brief.md:review-brief session-status-adapter:adapter; do
                     v=${x#*:}; case " ${tf[*]-} " in *" $v "*) continue ;; esac   # memory.md and memory/: one entry
                     [ -n "$(git -C "$sd" ls-files -- "${x%%:*}" 2>/dev/null | head -1)" ] || continue
@@ -475,7 +482,7 @@ url_slug() { sed -E 's#\.git$##; s#^[a-z+]+://[^/]+/##; s#^[^@]+@[^:]+:##; s#^[A
 # team_scrub LABEL TEXT: each line of TEXT that must not reach a team file, as `LABEL:N: why: line`.
 team_scrub() {
   local p
-  for p in '/(Users|home)/[^/" ]+	a home path' '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}	an email' \
+  for p in '/(Users|home)/[^/" ]+	a home path' '(^|[^A-Za-z0-9_.])~/	a home path' '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}	an email' \
            '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}	a session ID' '-coordinator([^A-Za-z0-9_-]|$)	a session name'; do
     grep -nE -- "${p%%	*}" <<<"$2" | while IFS=: read -r n l; do echo "$1:$n: ${p#*	}: $l"; done
   done
@@ -1093,6 +1100,22 @@ trel=${td#"$trepo"/}
 # The team memory: memory.md (the prune PR's lines) and memory/*.md.
 gattr="/$trel/memory.md merge=union
 /$trel/memory/*.md merge=union"
+# The team section: claude-section.md's rule lines (team_sec) in the committed CLAUDE.md. Once this checkout's
+# CLAUDE.md has it, the personal section keeps only its own lines (local_sec): the coordinator, replies, memory,
+# handoff; until the team PR merges it stays whole, so no session goes without the rules. Shared mode adds it in one
+# repo only (a workspace's sessions start above the team repo and wouldn't read its CLAUDE.md), and the personal
+# section then goes to CLAUDE.local.md, unless section_file= was said.
+team_sec= local_sec= tsec_need= srel=
+if [ -n "$top" ]; then
+  srel=${root#"$top"}; srel=${srel#/}; srel=${srel:+$srel/}
+  git -C "$root" ls-files --error-unmatch CLAUDE.md >/dev/null 2>&1 && grep -qxF "$team_head" "$root/CLAUDE.md" && local_sec=1
+  if [ -n "$shared" ] && [ "$trepo" = "$top" ]; then
+    tsec_need=1; [[ " ${over[*]-} " == *" section_file="* ]] || section_file=CLAUDE.local.md
+  fi
+fi
+# tsec_missing: origin/<default>'s CLAUDE.md lacks the team section
+tsec_missing() { ! git -C "$trepo" show "origin/$tdb:${srel}CLAUDE.md" 2>/dev/null | grep -qxF "$team_head"; }
+[ -z "$tsec_need" ] || tsec_missing || tsec_need=
 # key_pattern isn't written: the adapter answers it for session keys, and a tracker key's prefix would narrow the
 # default PROJ-123 pattern. It's the user's override only.
 # The features: the review inbox where the project names one (Bitbucket or Forgejo), accounts with a second one.
@@ -1126,7 +1149,7 @@ if [ "${#review[@]}" -gt 0 ]; then
   for t in "${review[@]}"; do shared_lines+="     ${sd#"$root"/}/${t%@*} (sha256 ${t##*@})"$'\n'; done
   shared_lines+="   To trust them as they are now: --trust=$(sed 's/ / --trust=/g' <<<"${review[*]}")$( [[ " ${review[*]} " == *" session-status-adapter@"* ]] && [ -z "$(adapter_path "$root" 2>/dev/null)" ] && printf ' (the committed adapter is then used, no local one written)')"$'\n'
 fi
-[ -z "$shared" ] || shared_lines+="   Shared (a team PR, read by every collaborator once merged): $([ -n "$repo_tracked" ] && printf '%s is committed already, so only ' "$trel/coordination.json" || printf '%s (repo keys only: tracker, host, features.review_inbox) and ' "$trel/coordination.json")the .gitattributes line $gattr, committed on $tb in a worktree from origin/$tdb. Personal (out of git, this machine only): everything else here."$'\n'
+[ -z "$shared" ] || shared_lines+="   Shared (a team PR, read by every collaborator once merged): $([ -n "$repo_tracked" ] && printf '%s is committed already, so only ' "$trel/coordination.json" || printf '%s (repo keys only: tracker, host, features.review_inbox) and ' "$trel/coordination.json")the .gitattributes line $gattr$([ -n "$tsec_need" ] && printf ', and a team section "%s" in %sCLAUDE.md (approvals, reserved actions, task names, worktrees; no paths or names)' "${team_head#\#\# }" "$srel"), committed on $tb in a worktree from origin/$tdb. Personal (out of git, this machine only): everything else here."$'\n'
 cfg_line="tracker=$tracker host=$cfg_host features.review_inbox=$review_inbox features.accounts=$accounts terminal=$term_found$cfg_note$term_note"
 if [ "$state" = configured ] && [ "$mode" = propose ]; then
   if [ -z "$miss_repo$miss_person$shared_lines" ] && [ -n "$deleg_set" ]; then
@@ -1218,23 +1241,24 @@ if [ -n "$shared" ]; then
   fi
   ga_old=$(git -C "$trepo" show "origin/$tdb:.gitattributes" 2>/dev/null)
   ga_need=$(while IFS= read -r l; do grep -qxF -- "$l" <<<"$ga_old" || echo "$l"; done <<<"$gattr")
+  [ -z "$tsec_need" ] || tsec_missing || tsec_need=   # again, on the origin just fetched
   # An earlier day's setup branch (open or not merged yet) counts too: one team PR at a time.
   prev=$(git -C "$trepo" for-each-ref --format='%(refname:short)' 'refs/heads/coordination/setup-*' 'refs/remotes/origin/coordination/setup-*' | head -1)
-  if [ -n "$tj$ga_need" ] && { [ -n "$prev" ] || [ -e "$wt" ]; }; then
+  if [ -n "$tj$ga_need$tsec_need" ] && { [ -n "$prev" ] || [ -e "$wt" ]; }; then
     prev=${prev:-$tb}
     echo "refused: --shared: $prev exists already: open its PR, or remove it (git -C $trepo worktree remove $trepo/.worktrees/${prev#origin/}; git -C $trepo branch -D ${prev#origin/}), then run this again"; exit 1
   fi
 fi
 key_re_flag=; [ "$keys" = session ] && key_re_flag=1   # the default pattern already matches PROJ-123
 tracker_keys=; [ "$keys" = tracker ] && tracker_keys=1
-fill() { # template, then flags: lines starting {{?FLAG}} kept when FLAG is set, {{?!FLAG}} when it isn't
+fill() { # template, then flags: lines starting {{?FLAG}} kept when FLAG is set, {{?!FLAG}} when it isn't (chained: all must hold)
   local line out= f
   while IFS= read -r line || [ -n "$line" ]; do
-    if [[ $line =~ ^\{\{\?(!?)([a-z_]+)\}\}(.*)$ ]]; then
+    while [[ $line =~ ^\{\{\?(!?)([a-z_]+)\}\}(.*)$ ]]; do
       f=${BASH_REMATCH[2]}; f=${!f:-}
-      if [ -n "${BASH_REMATCH[1]}" ]; then [ -z "$f" ] || continue; else [ -n "$f" ] || continue; fi
+      if [ -n "${BASH_REMATCH[1]}" ]; then [ -z "$f" ] || continue 2; else [ -n "$f" ] || continue 2; fi
       line=${BASH_REMATCH[3]}
-    fi
+    done
     out+=$line$'\n'
   done < "$tpl/$1"
   for v in name orch handoff replies_dir default_branch key_example key_re branch_pattern worktree_cmd enc_root urls repo_slug merge_cmd post_cmd done_rule; do
@@ -1242,6 +1266,12 @@ fill() { # template, then flags: lines starting {{?FLAG}} kept when FLAG is set,
   done
   printf '%s' "$out"
 }
+tsec=
+if [ -n "$tsec_need" ]; then
+  tsec=$(team_sec=1 local_sec='' fill claude-section.md)
+  bad=$(team_scrub "${srel}CLAUDE.md (team section)" "$tsec" | sort -u)
+  [ -z "$bad" ] || { echo "refused: --shared: these lines would put personal details in a team file (correct the fact with KEY=VALUE); setup stopped before writing:"; sed 's/^/  /' <<<"$bad"; exit 1; }
+fi
 wrote=()
 for p in ${todo[@]+"${todo[@]}"}; do
   t=${p%%	*} f=$(at "${p#*	}")
@@ -1299,7 +1329,9 @@ else printf 'Wrote:\n'; printf '  %s\n' "${wrote[@]}"; fi
 # checkout), for one team PR.
 if [ -n "$shared" ]; then
   echo "Personal: everything above, out of git (.git/info/exclude, $section_file, $P): this machine only."
-  if [ -z "$tj$ga_need" ]; then echo "Shared: origin/$tdb has the team files already: no team PR."
+  [ -z "$tsec_need" ] || [ ! -e "$root/CLAUDE.md" ] || git -C "$root" ls-files --error-unmatch CLAUDE.md >/dev/null 2>&1 ||
+    echo "Note: this checkout's CLAUDE.md is untracked and the team PR adds one: move its lines to CLAUDE.local.md before pulling the merge."
+  if [ -z "$tj$ga_need$tsec_need" ]; then echo "Shared: origin/$tdb has the team files already: no team PR."
   else
     tf=()
     git -C "$trepo" worktree add -q -b "$tb" "$wt" "origin/$tdb" 2>&1 || { echo "Shared: git worktree add failed: no team PR"; exit 1; }
@@ -1316,9 +1348,15 @@ if [ -n "$shared" ]; then
       printf '%s\n' "$ga_need" >> "$wt/.gitattributes" || tfail "writing .gitattributes failed"
       tf+=(".gitattributes ($(paste -sd ';' - <<<"$ga_need" | sed 's/;/; /g'): two people's team memory appends merge on rebase)")
     fi
-    tmsg="coordination: shared setup ($([ -n "$tj" ] && printf 'repo keys, ')merge=union for team memory)"
+    if [ -n "$tsec" ]; then
+      f=$wt/${srel}CLAUDE.md; mkdir -p "$(dirname "$f")" || tfail "writing ${srel}CLAUDE.md failed"
+      [ ! -s "$f" ] || { [ -z "$(tail -c1 "$f")" ] || echo; echo; } >> "$f"
+      printf '%s\n' "$tsec" >> "$f" || tfail "writing ${srel}CLAUDE.md failed"
+      tf+=("${srel}CLAUDE.md (team section \"${team_head#\#\# }\": approvals, reserved actions, task names, worktrees; no paths or names)")
+    fi
+    tmsg="coordination: shared setup ($([ -n "$tj" ] && printf 'repo keys, ')$([ -n "$tsec" ] && printf 'team CLAUDE.md section, ')merge=union for team memory)"
     # -f: an ignore rule (this clone's own exclude, or one like .claude/*) would hide the team folder
-    git -C "$wt" add -f -- ${tj:+"$trel/coordination.json"} ${ga_need:+.gitattributes} &&
+    git -C "$wt" add -f -- ${tj:+"$trel/coordination.json"} ${ga_need:+.gitattributes} ${tsec:+"${srel}CLAUDE.md"} &&
       git -C "$wt" commit -q -m "$tmsg" || tfail "the commit in $wt failed"
     turl=$(git -C "$trepo" config --get remote.origin.url)
     pr="git -C $wt push -u origin $tb" prnote=

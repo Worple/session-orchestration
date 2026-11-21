@@ -24,8 +24,9 @@ by a parent. Configured adds:
 - `second account found, accounts off: run setup (session-status --init --write)` when another Claude account shares
   this one's transcripts and `features.accounts` is off;
 - `committed code new or changed upstream: REL…: run setup to review it` (shared mode, below);
-- `team[ (DIR)]: memory, review-brief, adapter (trusted|not trusted[, local wins])`: not a warning, the team files git
-  tracks in the team folder, which sessions read before the person's (worker.md, Project memory). DIR, in a
+- `team[ (DIR)]: section, memory, review-brief, adapter (trusted|not trusted[, local wins])`: not a warning, the team files git
+  tracks in the team folder, which sessions read before the person's (worker.md, Project memory); `section`: the
+  committed `CLAUDE.md` has the team section (one repo only). DIR, in a
   workspace, is that folder (relative to the root when inside it); without it, `.claude/coordination/`;
 - `pending.file and history.dirs are ignored in the repo file (…)` when the repo file still sets them: move them to
   `.claude/coordination.local.json`;
@@ -142,8 +143,14 @@ excluded) with the person's git identity, so the main checkout stays clean:
   tracker, host, features.review_inbox, plus any repo key set in this checkout's file) and the `.gitattributes` lines
   `/.claude/coordination/memory.md merge=union` and `/.claude/coordination/memory/*.md merge=union`, so two people's
   team memory appends merge on rebase. This checkout's exclude hides only the repo file, not the folder, so team
-  files added there later show in `git status`.
-- **Personal** (out of git, this machine only): everything else it writes, as in a solo setup.
+  files added there later show in `git status`. In one repo (not a workspace, whose sessions start above the team
+  repo), also the team section `## Coordinated sessions (team)` appended to `CLAUDE.md`: the section template's rule
+  lines (approvals, the reserved list, task names, branches, worktrees), no path, name or coordinator.
+- **Personal** (out of git, this machine only): everything else it writes, as in a solo setup; the section goes to
+  `CLAUDE.local.md`, whole until the team PR merges (no session goes without the rules). A clone whose committed
+  `CLAUDE.md` has the team section gets a personal section with only its own lines (coordinator name, replies
+  folder, memory, handoff) and a pointer to the team section. A whole section written earlier keeps its rule lines
+  (a duplicate, harmless; delete them by hand).
 
 Before writing anything it refuses a repo file with a person key or a line naming a home path, an email, a session
 ID or a coordinator session name, and names each line. Its `Team PR:` line gives the diff command and the push + PR

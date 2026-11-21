@@ -2,7 +2,7 @@
 
 > **Read when**: you were started to review someone else's PR (`Review {{repo}}#{{id}} ({{key}})`).
 
-Posting anything under the user's name is reserved (CLAUDE.md, "Cross-session messages").
+Posting anything under the user's name is reserved (the **Reserved** list in CLAUDE.md).
 
 - Review read-only; never push or check out the PR branch. Diff with `git diff origin/{{default_branch}}...origin/<branch>`.
   To build or test, use a detached worktree, removed when done.
