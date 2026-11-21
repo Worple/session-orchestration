@@ -1,0 +1,74 @@
+name: Plugin feedback
+description: A bug, missing step or friction in a plugin, shaped like a case file (skills/orchestrating-sessions/feedback.md)
+title: "[feedback] "
+labels: ["todo"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Write it in the plugin's terms: no ticket keys, paths of your own, people or project names.
+        A session triages and applies the issue from these fields. Finish the title after the prefix.
+  - type: dropdown
+    id: plugin
+    attributes:
+      label: Plugin
+      options:
+        - session-orchestration
+        - project-memory
+    validations:
+      required: true
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - bugfixes
+        - features
+        - refactorings
+    validations:
+      required: true
+  - type: input
+    id: where
+    attributes:
+      label: Where
+      description: The file at fault, relative to `plugins/<plugin>/`, with a line if you know it. `README.md` when no file fits.
+      placeholder: skills/orchestrating-sessions/session-status:206
+    validations:
+      required: true
+  - type: input
+    id: found
+    attributes:
+      label: Found while
+      description: Your role and step, not the task.
+      placeholder: coordinating; a status sweep
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Plugin version
+      description: The version in `installed_plugins.json`, or `claude plugin list`.
+      placeholder: 0.139.0
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: What you saw, at most 3 lines.
+      placeholder: '`done` printed an empty line; status printed "failed" and dropped the board'
+    validations:
+      required: true
+  - type: textarea
+    id: suggested
+    attributes:
+      label: Suggested
+      description: The change you would make, if you have one.
+      placeholder: treat empty output as "none done"
+  - type: checkboxes
+    id: public
+    attributes:
+      label: Public
+      options:
+        - label: This issue is public, and holds no private names, paths, hosts or credentials.
+          required: true
