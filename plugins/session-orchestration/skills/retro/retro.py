@@ -169,6 +169,14 @@ def advisor(u):
     return len(its), sum(usd(*req_tokens(x), x.get("model")) for x in its)
 
 
+def ctx_of(u):
+    """A request's context: input + cache read + cache write of its last message iteration when it has iterations (the
+    totals add up each one an advisor call splits the turn into), else of the whole usage."""
+    its = [x for x in u.get("iterations") or [] if isinstance(x, dict) and x.get("type") == "message"]
+    x = its[-1] if its else u
+    return x.get("input_tokens", 0) + x.get("cache_read_input_tokens", 0) + x.get("cache_creation_input_tokens", 0)
+
+
 def req_usd(u, model):
     """A request's cost: its own tokens at MODEL's rates plus its advisor calls."""
     return usd(*req_tokens(u), model) + advisor(u)[1]
@@ -206,7 +214,7 @@ def sessions(days=7):
                 rid = o.get("requestId")
                 if rid and rid not in seen:
                     seen.add(rid)
-                    ctx = u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0) + u.get("cache_creation_input_tokens", 0)
+                    ctx = ctx_of(u)
                     peak = max(peak, ctx)
                     cost += req_usd(u, m.get("model"))
                     out += u.get("output_tokens", 0); cw += u.get("cache_creation_input_tokens", 0)
@@ -340,7 +348,7 @@ def requests(f, whole=False):
         seen.add(rid)
         m = o.get("message") or {}
         u = m.get("usage") or {}
-        yield ts, u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0) + u.get("cache_creation_input_tokens", 0), \
+        yield ts, ctx_of(u), \
             req_usd(u, m.get("model"))
 
 
@@ -590,7 +598,7 @@ def stat(f):
             if rid and rid not in seen:
                 seen.add(rid)
                 u = m.get("usage") or {}
-                ctx = u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0) + u.get("cache_creation_input_tokens", 0)
+                ctx = ctx_of(u)
                 s["growth"] += max(0, ctx - prev) if prev is not None else 0
                 prev = ctx
                 s["peak"] = max(s["peak"], ctx)
@@ -1265,7 +1273,7 @@ def scan(f):
                 u = m.get("usage") or {}
                 items += [it + [len(reqs)] for it in pending]
                 pending.clear()
-                reqs.append([u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0) + u.get("cache_creation_input_tokens", 0),
+                reqs.append([ctx_of(u),
                              u.get("output_tokens", 0), o.get("timestamp") or ""])
             for b in c if isinstance(c, list) else []:
                 if not isinstance(b, dict) or b.get("type") != "tool_use":

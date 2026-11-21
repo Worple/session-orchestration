@@ -130,6 +130,14 @@ sed 's/"cache_read_input_tokens":98995/"cache_read_input_tokens":158995/' "$t/mc
 out=$(jq -nc --arg f "$t/mc.jsonl" --arg c "$t/proj" '{session_id: "mc", transcript_path: $f, hook_event_name: "UserPromptSubmit", cwd: $c}' |
   bash "$here/context-watch.sh"); [ -z "$out" ] || fail "stale ctx after /compact: $out"
 expect mc "$task" 150000 'at 150K: hand off'
+# An advisor call splits a turn into two message iterations whose totals add up to 181K; the context is the last one's 95K.
+expect adv "$task" 100000 ''
+jq -nc '{type: "assistant", message: {usage: {input_tokens: 6, cache_read_input_tokens: 175985, cache_creation_input_tokens: 4828,
+  iterations: [{type: "message", input_tokens: 4, cache_read_input_tokens: 82411, cache_creation_input_tokens: 3404},
+    {type: "advisor_message", input_tokens: 86381, cache_read_input_tokens: 0, cache_creation_input_tokens: 0},
+    {type: "message", input_tokens: 2, cache_read_input_tokens: 93574, cache_creation_input_tokens: 1424}]}}}' >> "$t/adv.jsonl"
+out=$(jq -nc --arg f "$t/adv.jsonl" --arg c "$t/proj" '{session_id: "adv", transcript_path: $f, hook_event_name: "PostToolUse", cwd: $c}' |
+  bash "$here/context-watch.sh"); [ -z "$out" ] || fail "advisor iterations counted as context: $out"
 
 # A first prompt on a 30 MB transcript returns at once though classifying takes over 5 s (a slow git: a loaded
 # machine; first_prompt's head stands in), and writes .kind for the next prompt, which reads only the tail: both well

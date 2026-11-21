@@ -165,7 +165,9 @@ fi
 
 # The last 256K first: BSD tail -n 300 on a transcript of large tool results reads ~10 MB (150 ms); 256K takes 20 ms.
 # ponytail: the last 300 lines only when 256K holds no usage (a tool result bigger than that).
-# Subagent (sidechain) lines and all-zero usage (a synthetic or failed reply) don't count.
+# Subagent (sidechain) lines and all-zero usage (a synthetic or failed reply) don't count. A line with
+# usage.iterations counts its last `message` one: the totals add up every iteration (an advisor call splits the turn
+# in two, each re-reading the context) and leave the advisor's own read out.
 # The same pass tests a task session's tail (one with messages) against coord_re (lib.sh: session-status's definition): a match makes it
 # a coordinator from then on, `Session task:` line or not, with its own at and text. Each extra process costs ~10 ms.
 # A compact_boundary resets it: a manual /compact writes no assistant line before the next prompt, so the usage
@@ -173,7 +175,7 @@ fi
 scan() { LC_ALL=C grep -E "\"usage\":|compact_boundary${re:+|$re}" | jq -Rrn --arg re "$re" '[inputs] | (if $re != "" and any(.[]; test($re))
   then "coordinator" else "-" end) + " " + ([.[] | fromjson? | if .type == "system" and .subtype == "compact_boundary" then -1
   else select(.type == "assistant" and (.isSidechain | not))
-  | .message.usage // empty | (.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0)
+  | .message.usage // empty | ((.iterations | if type == "array" then map(select(.type? == "message")) | last else null end) // .) | (.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0)
   | select(. > 0) end] | reduce .[] as $x (""; if $x < 0 then "" else $x end) | tostring)' 2>/dev/null; }
 out=$(tail -c 262144 "$tp" | scan); ctx=${out#* }
 [ -n "$ctx" ] || { ctx=$(tail -n 300 "$tp" | scan); ctx=${ctx#* }; }

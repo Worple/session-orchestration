@@ -5,7 +5,8 @@
 #   SINCE  epoch seconds when that activity started (consecutive calls with the same text count as one); 0 unknown
 #   LAST   the last line of its own text
 #   MODEL  the latest model id its model attachments name ("" when the tail has none)
-#   CTX    tokens in its context: the last main-thread reply's input + cache read + cache creation, or a later
+#   CTX    tokens in its context: the last main-thread reply's input + cache read + cache creation (of its last message
+#          iteration when its usage has iterations), or a later
 #          /compact's postTokens; 0 unknown
 # The approach is flightdeck's agent cards (github.com/scasella/claude-flightdeck): a card's title is its task
 # description, its clock counts from when that started, and a call without one is described by its input.
@@ -28,8 +29,9 @@ reduce (inputs | fromjson? | select(type == "object" and .isSidechain != true)) 
   {todo: null, todoAt: 0, tool: null, toolAt: 0, text: null, pend: {}, tasks: {}, ctx: 0, model: ""};
   ($e.timestamp | epoch) as $ts
   | if $e.type == "assistant" and ($e.message.usage | type) == "object" then
-      # A synthetic or failed reply (all zero) leaves the last real reading.
-      ([$e.message.usage | .input_tokens, .cache_read_input_tokens, .cache_creation_input_tokens | numbers] | add // 0) as $n
+      # A synthetic or failed reply (all zero) leaves the last real reading. With usage.iterations, its last message
+      # iteration (the totals add up each one an advisor call splits the turn into).
+      ([$e.message.usage | ((.iterations | if type == "array" then map(select(.type? == "message")) | last else null end) // .) | .input_tokens, .cache_read_input_tokens, .cache_creation_input_tokens | numbers] | add // 0) as $n
       | if $n > 0 then .ctx = $n else . end
     elif $e.type == "system" and $e.subtype == "compact_boundary" then .ctx = ($e.compactMetadata.postTokens // 0)
     else . end
