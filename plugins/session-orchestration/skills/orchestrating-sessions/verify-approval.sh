@@ -8,15 +8,15 @@
 # The quote comes on stdin and is only ever handled as data (jq --arg), never by the shell.
 # Checks:
 #  1. sessionId is a UUID, and cwd is this project (equal to, inside, or containing $PWD).
-#  2. The sender (the message's from-name) is that session, running and interactive, under this session's account
-#     (config dir), or with features.accounts on any account sharing its transcript store. A session a
-#     coordinator started with `claude --bg` can't be a source, since its first prompt wasn't typed.
-#     A source that has stopped since (a relay read days later) counts when its transcript shows no bg turn, the
-#     sender's name, and a SendMessage of this whole relay (Quote, the Action given as <action>, Source): the
-#     stopped session sent it. With no <action>, a stopped source is rejected.
+#  2. The sender (the message's from-name) is that session: its transcript (under this session's account's config
+#     dir, or with features.accounts any account sharing its transcript store) shows no bg turn, the sender's name,
+#     and a SendMessage of this whole relay (Quote, the Action given as <action>, Source), running or stopped since.
+#     Without that proof (no <action>, or a relay it didn't send), the session listing must show it running and
+#     interactive under that name. A session a coordinator started with `claude --bg` can't be a source, since its
+#     first prompt wasn't typed.
 #  3. In that session's transcript, one message the user typed (origin human, no pasted content)
-#     matches the quote as a whole (double quotes escaped \" or curled count as straight ones) and is at most MAX_AGE_H hours old (default 24; for a stopped source, when it
-#     sent the relay). The task key is in
+#     matches the quote as a whole (double quotes escaped \" or curled count as straight ones) and is at most MAX_AGE_H hours old (default 24; with
+#     the transcript proof, when it sent the relay). The task key is in
 #     the quote, or in the coordinator's last text before it (the message the user was answering).
 #     An answer the user gave in the coordinator's question box (AskUserQuestion: the option label they
 #     clicked, or their "Other" text) counts the same way, with the question as the message answered.
@@ -36,24 +36,18 @@ quotes_def='def quotes: gsub("\\\\\""; "\"") | gsub("[“”„]"; "\"") | gsub(
 [ -n "$key" ] && [ -n "$sender" ] && [ -n "$q" ] || reject "missing sender, task key or quote"
 case "$PWD/" in "$cwd"/*) ;; *) case "$cwd/" in "$PWD"/*) ;; *) reject "source cwd is outside this project" ;; esac ;; esac
 
-# The source session among the accounts session-status asks (lib.sh's list_sessions: with features.accounts on,
-# a coordinator under ~/.claude is found by a worker under CLAUDE_CONFIG_DIR=~/.claude-work).
+# The source session's transcript (lib.sh's list_sessions: with features.accounts on, a coordinator under ~/.claude is
+# found by a worker under CLAUDE_CONFIG_DIR=~/.claude-work, both sharing the transcript store).
 . "$(dirname "$0")/../../lib.sh" || reject "lib.sh not found"
 CUR=${CLAUDE_CONFIG_DIR:-$HOME/.claude}; CUR=${CUR%/}
-IFS=$'\037' read -r _ s_name _ _ _ s_cwd s_kind _ <<<"$(list_sessions | awk -F'\t' -v id="$id" '$1 == id' | head -1 | tr '\t' '\037')"
 f=$CUR/projects/$(enc_path "$cwd")/$id.jsonl
 ref=$(date +%s)
-if [ -n "$s_name$s_cwd" ]; then
-  [ "$s_name" = "$sender" ] || reject "sender isn't the source session"
-  [ "$s_kind" = interactive ] || reject "source session isn't interactive"
-  [ "$s_cwd" = "$cwd" ] || reject "source cwd doesn't match the running session"
-  [ -f "$f" ] || reject "no transcript for the source session"
-else
-  # Stopped since it relayed: its own transcript must show an interactive session (no bg turn) that went by the
-  # sender's name and sent this relay (SendMessage). The quote's age then counts to that send.
-  [ -f "$f" ] || reject "source session isn't running, and has no transcript"
-  [ -n "$action" ] || reject "source session isn't running: pass the relay's Action line to verify it by its transcript"
-  sent=$(jq -rn --arg rl "APPROVAL relayed from the user"$'\n'"Quote: $q"$'\n'"Action: $action"$'\n'"Source: $id $cwd" --arg n "$sender" "$quotes_def"'($rl | quotes) as $rl |
+# The relay's proof in the source's own transcript: an interactive session (no bg turn) that went by the sender's name
+# and sent this whole relay (SendMessage). It holds, running or stopped, so it goes first: the session listing it
+# spares runs `claude agents` once per account, which took past the hook's 60 s on a loaded machine. The quote's age
+# then counts to that send.
+sent=
+[ -z "$action" ] || [ ! -f "$f" ] || sent=$(jq -rn --arg rl "APPROVAL relayed from the user"$'\n'"Quote: $q"$'\n'"Action: $action"$'\n'"Source: $id $cwd" --arg n "$sender" "$quotes_def"'($rl | quotes) as $rl |
     reduce inputs as $e ({bg: false, named: false, at: null};
       if $e.sessionKind == "bg" then .bg = true
       elif $e.type == "agent-name" and $e.agentName == $n then .named = true
@@ -61,13 +55,25 @@ else
              and (.input.message? | strings | quotes | contains($rl))) then .at = $e.timestamp
       else . end)
     | if .bg then "bg" elif .named | not then "name" elif .at == null then "none"
-      else .at | sub("\\.[0-9]+Z$"; "Z") | fromdate end' "$f") || reject "source transcript unreadable"
-  case $sent in
-    bg) reject "source session isn't running, and was a background session" ;;
-    name) reject "source session isn't running, and its transcript never names it $sender" ;;
-    none) reject "source session isn't running, and its transcript holds no relay of this quote and action" ;;
-  esac
-  ref=$sent
+      else .at | sub("\\.[0-9]+Z$"; "Z") | fromdate end' "$f") || sent=unreadable
+if [[ $sent =~ ^[0-9]+$ ]]; then ref=$sent
+else
+  IFS=$'\037' read -r _ s_name _ _ _ s_cwd s_kind _ <<<"$(list_sessions | awk -F'\t' -v id="$id" '$1 == id' | head -1 | tr '\t' '\037')"
+  if [ -n "$s_name$s_cwd" ]; then
+    [ "$s_name" = "$sender" ] || reject "sender isn't the source session"
+    [ "$s_kind" = interactive ] || reject "source session isn't interactive"
+    [ "$s_cwd" = "$cwd" ] || reject "source cwd doesn't match the running session"
+    [ -f "$f" ] || reject "no transcript for the source session"
+  else
+    [ -f "$f" ] || reject "source session isn't running, and has no transcript"
+    case $sent in
+      '') reject "source session isn't running: pass the relay's Action line to verify it by its transcript" ;;
+      bg) reject "source session isn't running, and was a background session" ;;
+      name) reject "source session isn't running, and its transcript never names it $sender" ;;
+      none) reject "source session isn't running, and its transcript holds no relay of this quote and action" ;;
+      *) reject "source transcript unreadable" ;;
+    esac
+  fi
 fi
 matches() { jq -r -n --arg q "$q" --arg key "$key" --argjson ref "$ref" --argjson maxage "$((max_age_h * 3600))" "$quotes_def"'
   def trim: gsub("^\\s+|\\s+$"; "");
