@@ -30,6 +30,14 @@ check "$(g c1 $ss '{"title":"-next","prompt":"`--successor --started `"}')" deny
 check "$(g w1 $ss '{"prompt":"x"}')" allow 'start_session from a task session'
 check "$(jq -nc --arg c "$root/src" '{session_id: "c1", agent_id: "a1", tool_name: "mcp__ccd_session__start_session", tool_input: {title: "PROJ-1-fix", prompt: "x"}, cwd: $c}' |
   HOME=$tmp XDG_CACHE_HOME=$tmp/.cache XDG_CONFIG_HOME=$tmp/.config bash "$here/coordinator-guard.sh" | jq -r .hookSpecificOutput.permissionDecision)" deny 'start_session from a subagent of the coordinator'
+echo '{"pending":{"file":"docs/pending.md"},"start":{"sidebar":true}}' > "$root/.claude/coordination.local.json"
+check "$(g c1 $ss '{"title":"PROJ-1-fix","prompt":"Work on PROJ-1: fix it."}')" allow 'a sidebar task with start.sidebar on'
+echo '{"pending":{"file":"docs/pending.md"},"start":{"sidebar":"yes"}}' > "$root/.claude/coordination.local.json"
+check "$(g c1 $ss '{"title":"PROJ-1-fix","prompt":"Work on PROJ-1: fix it."}')" deny 'start.sidebar not a boolean'
+echo '{"pending":{"file":"docs/pending.md"}}' > "$root/.claude/coordination.local.json"
+cl=$root/.claude/coordination.local.json
+check "$(g c1 Write "$(jq -nc --arg p "$cl" '{file_path: $p, content: "{\"start\":{\"sidebar\":true}}"}')")" deny 'the coordinator turning start.sidebar on'
+check "$(g c1 Edit "$(jq -nc --arg p "$cl" '{file_path: $p, old_string: "a", new_string: "propose"}')")" allow 'another config edit'
 check "$(w "$root/src/a.ts")" deny 'a project file'
 check "$(w "$root/CLAUDE.md")" deny 'CLAUDE.md'
 check "$(g c1 Edit "{\"file_path\":\"$root/src/a.ts\"}")" deny 'Edit'

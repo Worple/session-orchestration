@@ -3,7 +3,7 @@
 # No model call, no tracker call: everything comes from the folder, its git repos and their remotes.
 #   session-status --init --check   one line, exit 0 configured, 1 unconfigured or partial, 3 covered by a parent;
 #                                   configured adds the active line (`active: tracker=… host=… delegate=…
-#                                   pr_create=… start=…[,feedback_apply:…] terminal=… messages=… features=…`), under it one indented line per doc of the
+#                                   pr_create=… start=…[,feedback_apply:…][,sidebar] terminal=… messages=… features=…`), under it one indented line per doc of the
 #                                   terminal, the messages module and each enabled feature (its start step and when to
 #                                   read it), the indented value lines open_pane reads (`review_inbox url: URL`,
 #                                   `notify after: N min`), and a line per warning (a config value not valid, a module that doesn't load whole,
@@ -332,7 +332,7 @@ if [ "$mode" = check ]; then
                 cd "$root" || exit 1
                 wf=$(mktemp) || exit 1
                 t=$(config tracker 2>>"$wf") h=$(config host 2>>"$wf") d=$(config approvals.delegate 2>>"$wf") pc=$(config approvals.pr_create 2>>"$wf")
-                st=$(config start.mode 2>>"$wf") sa=$(config start.kinds.feedback_apply 2>>"$wf")
+                st=$(config start.mode 2>>"$wf") sa=$(config start.kinds.feedback_apply 2>>"$wf") sb=$(config start.sidebar 2>>"$wf")
                 a=$(config features.accounts 2>>"$wf") r=$(config features.review_inbox 2>>"$wf")
                 te=$(config terminal 2>>"$wf") m=$(config messages 2>>"$wf") no=$(config features.notify 2>>"$wf") rt=$(config features.retro 2>>"$wf")
                 # The modules in use, loaded as they will be: a syntax error, a missing function or a shadowed
@@ -349,6 +349,7 @@ if [ "$mode" = check ]; then
                 [ "$d" = true ] && d=on || d=off
                 [ "$pc" = true ] && pc=on || pc=off
                 [ "$sa" = "$st" ] || st=$st,feedback_apply:$sa   # the per-kind override, only where it differs
+                [ "$sb" != true ] || st=$st,sidebar   # start.sidebar on: tasks may start as Desktop sidebar sessions
                 f= docs=()
                 # A module's doc: the .md beside the file found (terminals/ghostty.md).
                 [ "$te" = plain ] || { md=$(find_module terminals "$te") && md=${md%.sh}.md && [ -f "$md" ] && docs+=("terminal $te" "$md"); }

@@ -178,7 +178,7 @@ without asking the user: they signed in for it.
 - **In Claude Code Desktop too, a task starts with `claude --bg`, never as a sidebar session** (`start_session`: a
   sidebar session, or a New task card for the user to start): the status, idle notices, `--resume-ended` and
   `--stop` work on `claude --bg` sessions, and a sidebar session gets none of them, so you'd lose sight of it. The
-  one sidebar session you start is your successor ([handover.md](handover.md)); a hook refuses any other. No `claude` on PATH: hand the user its install (README).
+  one sidebar session you start is your successor ([handover.md](handover.md)); a hook refuses any other. No `claude` on PATH: hand the user its install (README). The exception is the user's: with config `start.sidebar` `true` (person key, never yours to set) a task may start as a sidebar session when the user asks for one; the status doesn't list it, so you follow it through the user and its replies, and your handoff file names each one (title and what it works on) for your successor.
 - **Read for coordination, never to do or pre-empt the task.** You may read a task's content (tracker comments, a
   PR, review comments, chat threads, code) when coordinating needs it: answering a worker's question, checking
   something before you relay or approve it, or resolving a dependency between two sessions. Read only what that

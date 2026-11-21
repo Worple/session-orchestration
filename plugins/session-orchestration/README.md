@@ -59,7 +59,10 @@ the same settings. Then:
   coordinator's sidebar title follows its name (`NAME-prev-K` for the old one), and once the successor holds the name
   it archives the old one (the app asks you first, except in auto and bypass permissions modes) or says why it can't.
   The successor is the only sidebar session the coordinator starts: a hook refuses `start_session` for a task, which
-  then starts with `claude --bg` like every task.
+  then starts with `claude --bg` like every task. To watch and answer tasks in the app instead, set
+  `"start": {"sidebar": true}` in `.claude/coordination.local.json` (from the release after 0.139.0): the hook
+  lets the coordinator start tasks as sidebar sessions, which then get no status row, idle notice, resume after a
+  restart or stop, and you answer their questions in the app rather than through the coordinator.
 
 ## Install
 
@@ -122,7 +125,7 @@ Installing the plugin adds these to every Claude Code session, in every project:
   starts with `cd`, and an edit of a project file outside `.claude/`, the replies folder, the handoff file and the
   project memory: those belong to a task session. It also refuses Claude Code Desktop's `start_session` (a sidebar
   session), from the coordinator or any of its subagents, for anything but the coordinator's successor: tasks start
-  with `claude --bg`.
+  with `claude --bg`, unless config `start.sidebar` is `true`.
 - **Local history** (`skills/orchestrating-sessions/history-git`, Stop): when a turn ends, commits what changed in the
   project's state folder, replies folder, handoff files and the folders in config `history.dirs`, one commit per repo named after
   the session. A folder's git dir sits outside it, unless the folder (or its parent) is the top of a repo with no

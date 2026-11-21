@@ -1862,6 +1862,11 @@ echo '{"start":{"mode":"at_once"}}' > "$b/.claude/coordination/coordination.json
   { echo "config start: $(cfg "$a" start.mode) $(cfg "$a" start.kinds.feedback_apply) $(cfg "$b" start.mode) $(init "$a" --check)"; exit 1; }
 echo '{"start":{"mode":"soon"}}' > "$a/.claude/coordination.local.json"
 [ "$(cfg "$a" start.kinds.feedback_apply 2>/dev/null)" = read_only ] || { echo "config start bad value"; exit 1; }
+# start.sidebar: a person key, off unless the person's file turns it on
+echo '{"start":{"sidebar":true}}' > "$a/.claude/coordination.local.json"
+echo '{"start":{"sidebar":true}}' > "$b/.claude/coordination/coordination.json"
+[ "$(cfg "$a" start.sidebar)" = true ] && [ "$(cfg "$b" start.sidebar)" = false ] ||
+  { echo "config start.sidebar: $(cfg "$a" start.sidebar) $(cfg "$b" start.sidebar)"; exit 1; }
 # a mistyped override is named by --check, not dropped silently
 echo '{"start":{"kinds":{"feedback_apply":"atonce"}}}' > "$a/.claude/coordination.local.json"
 grep -qx 'warning: config start.kinds.feedback_apply=atonce is not valid: using the default' <<<"$(init "$a" --check)" ||

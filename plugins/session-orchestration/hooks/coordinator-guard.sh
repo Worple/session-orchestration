@@ -4,7 +4,9 @@
 #   Only the prefix: a `cd` later in a chain isn't parsed out of the shell text.
 # - Claude Code Desktop's start_session (a sidebar session): refused, in a subagent too, unless it is the call
 #   `--successor` prints (title NAME-next, its prompt running `--successor --started NAME`). A task goes to
-#   `claude --bg`: a sidebar session is in no listing the status reads.
+#   `claude --bg`: a sidebar session is in no listing the status reads. Config start.sidebar true (a person key,
+#   default false) lets every start_session through: the user chose sidebar tasks over the status's view of them.
+#   An edit of .claude/coordination.local.json naming "sidebar" is refused: only the user turns it on.
 # - Edit/Write/MultiEdit/NotebookEdit of a file inside the project root: allowed only in .claude/ (not its settings*.json
 #   or hooks/), the replies folder, the handoff file (pending.file), the project memory CLAUDE.md names (the file and its memory/ folder)
 #   and the root's CLAUDE.local.md while git doesn't track it (a worktree session can't reach it); never in
@@ -35,7 +37,8 @@ if [ "$tool" = mcp__ccd_session__start_session ]; then
   # shortcut: NAME is checked against the title, not this coordinator's own name; upgrade if a task ever carries that exact text
   jq -e '.tool_input | (.title // "" | strings) as $t | ($t | endswith("-next") and length > 5) and
     (.prompt // "" | strings | split("--successor --started " + ($t | rtrimstr("-next")))[1:] | any(test("^([^A-Za-z0-9._-]|$)")))' <<<"$input" >/dev/null && exit 0
-  deny "Coordinator rule: start a task with claude --bg (SKILL.md, Rules), never as a Desktop sidebar session: a sidebar session gets no status row, no idle notice, no resume after a restart and no stop, so you would lose sight of it. start_session is only for your successor: if this was your handover, run session-status --successor again and pass the call it prints unchanged. If claude isn't on PATH, hand the user its install: curl -fsSL https://claude.ai/install.sh | bash." sidebar
+  ( l=$(cd "${0%/*}/.." 2>/dev/null && pwd)/lib.sh; cd "${cwd:-.}" 2>/dev/null && . "$l" && [ "$(config start.sidebar 2>/dev/null)" = true ] ) && exit 0
+  deny "Coordinator rule: start a task with claude --bg (SKILL.md, Rules), never as a Desktop sidebar session: a sidebar session gets no status row, no idle notice, no resume after a restart and no stop, so you would lose sight of it. start_session is only for your successor: if this was your handover, run session-status --successor again and pass the call it prints unchanged. If claude isn't on PATH, hand the user its install: curl -fsSL https://claude.ai/install.sh | bash. Only the user can allow sidebar tasks." sidebar
 fi
 [ -n "$path" ] || exit 0
 here=$(cd "$(dirname "$0")" && pwd)
@@ -48,6 +51,8 @@ path=$(real "$path") || exit 0
 case $path in "$root"/*) ;; *) exit 0 ;; esac
 under() { [ -n "$2" ] && case $1 in "${2%/}"/*) true ;; *) false ;; esac; }
 cd "$root" && ROOT=$root
+[ "$path" = "$root/.claude/coordination.local.json" ] && jq -e '.tool_input | [.content, .new_string, (.edits // [] | .[].new_string)] | any(strings | test("sidebar"))' <<<"$input" >/dev/null &&
+  deny "Coordinator rule: start.sidebar is the user's choice, never yours: leave it to them (README, Claude Code Desktop)." sidebar-config
 abs() { local r=${1/#\~/$HOME}; case $r in '') ;; /*) real "$r" ;; *) real "$root/$r" ;; esac; }
 if ! under "$path" "$root/.claude/worktrees" && ! under "$path" "$root/.worktrees"; then
   # .claude/ but its settings and hooks: those fixes are a session's too (SKILL.md, Rules)
