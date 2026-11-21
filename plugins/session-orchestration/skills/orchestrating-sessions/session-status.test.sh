@@ -2326,6 +2326,72 @@ grep -qxF '[m10 apply] done' <<<"$out" && grep -q '^  waits for m1 (approvals.de
   grep -qF -- "${dl%%$'\n'*}" "$c" && grep -qxF 'stamp: not yet (open: m1)' <<<"$out" || { echo "migrate (g8) waits: $out"; exit 1; }
 out=$(init "$m" --migrate --apply=m1); grep -q '^\[m10 ask\]' <<<"$out" || { echo "migrate (g8) after m1: $out"; exit 1; }
 out=$(init "$m" --migrate --apply=m10); grep -q '^stamp: layout ' <<<"$out" && [ "$(sort "$c")" = "$(sort "$tmp/g8.md")" ] || { echo "migrate (g8) m1 then m10: $out / $(cat "$c")"; exit 1; }
+# migration fixture: team files (m8 on a committed repo file, m10 on a committed CLAUDE.md)
+# (g9) a team repo (a local bare origin behind the GitHub URL): a fix to a file git tracks goes to a team PR, never the
+# checkout. A's --apply=m8 moves history.dirs into its own file and commits the repo file's change (history.dirs out,
+# layout raised) on coordination/migrate-m8 from origin/main, with the PR command; while that branch has a commit
+# HEAD lacks, A and B (a teammate's clone that sees the pushed branch) show [m8 wait], unstamped. Merged as a rebase
+# does (patch-equal, new SHA), each one's pull stamps. A home path the fix would add is refused, no branch left; a
+# team layout past this plugin's is a newer plugin's.
+to=$(mkdir -p "$tmp/init/g9.git" && cd "$tmp/init/g9.git" && pwd -P); git -C "$to" init -q --bare && git -C "$to" symbolic-ref HEAD refs/heads/main
+# tclone DIR: a clone of the team repo behind the GitHub URL (empty while origin is), with the person's identity
+tclone() {
+  local d; d=$(mkdir -p "$1" && cd "$1" && pwd -P)
+  git -C "$d" init -q && git -C "$d" symbolic-ref HEAD refs/heads/main && git -C "$d" remote add origin https://github.com/o/x.git &&
+    git -C "$d" config url."$to".insteadOf https://github.com/o/x.git && git -C "$d" config user.name t && git -C "$d" config user.email t@t
+  ! git -C "$to" rev-parse -q --verify main >/dev/null || { git -C "$d" fetch -q origin && git -C "$d" reset -q --hard origin/main && git -C "$d" branch -q -u origin/main; }
+  echo "$d"
+}
+m=$(tclone "$tmp/init/g9a"); pm=$(pof "$m"); rj=$m/.claude/coordination/coordination.json tb=coordination/migrate-m8
+tw=$m/.worktrees/$tb
+echo '# x' > "$m/CLAUDE.md" && git -C "$m" add CLAUDE.md && gc "$m" -m i && init "$m" --write >/dev/null
+jq '.history.dirs = ["notes"]' "$rj" > "$tmp/x.json" && mv "$tmp/x.json" "$rj" && git -C "$m" add -f "$rj" && gc "$m" -m 'team config' &&
+  git -C "$m" push -q -u origin main && cp "$rj" "$tmp/g9.json"
+out=$(init "$m" --migrate)
+grep -q '^\[m8 ask\] ' <<<"$out" && grep -qxF '  out of the committed .claude/coordination/coordination.json (git tracks it: a team PR, committed on coordination/migrate-m8 from origin/main; this checkout gets it with the merge)' <<<"$out" ||
+  { echo "migrate (g9) list: $out"; exit 1; }
+out=$(init "$m" --migrate --apply=m8)
+grep -qxF '[m8 apply] done' <<<"$out" && [ "$(jq -c .history.dirs "$m/.claude/coordination.local.json")" = '["notes"]' ] &&
+  cmp -s "$rj" "$tmp/g9.json" && [ -z "$(git -C "$m" status --short)" ] && [ "$(git -C "$m" rev-list --count "origin/main..$tb")" = 1 ] &&
+  [ "$(git -C "$m" diff --name-only origin/main "$tb")" = .claude/coordination/coordination.json ] &&
+  [ "$(git -C "$m" show "$tb:.claude/coordination/coordination.json" | jq -c '[.history, .layout]')" = "[null,$L]" ] &&
+  grep -qxF "Team PR: committed on $tb ($tw): show its diff in one pane ask (git -C $tw show), then on yes: git -C $tw push -u origin $tb && gh pr create -R o/x --base main --head $tb --title 'coordination: migrate m8 (lines from an older setup)' --body 'An older setup made current in the shared coordination files: every collaborator gets it with the merge.'" <<<"$out" ||
+  { echo "migrate (g9) apply: $out / $(git -C "$m" status --short)"; exit 1; }
+wt="[m8 wait] a team PR is open on $tb (yours or a teammate's): it applies here once it merges and you pull"
+out=$(init "$m" --migrate); grep -qxF "$wt" <<<"$out" && grep -qxF 'stamp: not yet (team PR open: m8)' <<<"$out" && ! grep -q '^\[m8 ask\]' <<<"$out" &&
+  grep -qF "  not going ahead with it (no, closed, or merged changed): close its PR and drop the branch (git -C $m worktree remove --force $tw; git -C $m branch -D $tb;" <<<"$out" &&
+  grep -qxF 'stamp: not yet (team PR open: m8)' <<<"$(init "$m" --migrate --dry-run)" &&
+  grep -qxF "m8: a team PR is open on $tb: nothing to apply until it merges and you pull" <<<"$(init "$m" --migrate --apply=m8)" ||
+  { echo "migrate (g9) wait: $out"; exit 1; }
+# a teammate's clone, once the branch is pushed: their PR, not a second branch
+git -C "$tw" push -q origin "$tb"
+b=$(tclone "$tmp/init/g9b"); init "$b" --write >/dev/null
+out=$(init "$b" --migrate); grep -qxF "$wt" <<<"$out" && [ -z "$(git -C "$b" for-each-ref refs/heads/coordination)" ] || { echo "migrate (g9) teammate: $out"; exit 1; }
+# merged as a rebase merge does: the same patch, a new SHA
+git clone -q "$to" "$tmp/init/g9m" && git -C "$tmp/init/g9m" -c user.name=u -c user.email=u@u cherry-pick "origin/$tb" >/dev/null &&
+  git -C "$tmp/init/g9m" push -q origin main && [ "$(git -C "$to" rev-parse main)" != "$(git -C "$m" rev-parse "$tb")" ]
+for c in "$m" "$b"; do
+  git -C "$c" pull -q --ff-only; out=$(init "$c" --migrate)
+  grep -q "^stamp: layout $L → " <<<"$out" && ! grep -q '^\[m8 ' <<<"$out" &&
+    [ "$(jq -c '[.history, .layout]' "$c/.claude/coordination/coordination.json")" = "[null,$L]" ] || { echo "migrate (g9) merged ($c): $out"; exit 1; }
+done
+grep -q '^current: layout ' <<<"$(init "$m" --migrate)" || { echo "migrate (g9) current: $(init "$m" --migrate)"; exit 1; }
+# a home path the team PR would add (the Replies line of an older template, in a committed CLAUDE.md): refused
+# (first unpushed: the checkout's copy isn't origin's, so the fix would change something else: refused, no branch)
+echo "- Replies folder (the plugin's \"folder for this\"): \`$pm/replies/\`." >> "$m/CLAUDE.md" && gc "$m" -am 'old line'
+rm -f "$pm/setup.json"; out=$(init "$m" --migrate --apply=m10) || :
+grep -qxF "[m10 apply] failed: refused: CLAUDE.md here isn't origin/main's (an uncommitted edit, another branch or an unpushed commit): land it on main first, then run this again" <<<"$out" &&
+  [ -z "$(git -C "$m" for-each-ref refs/heads/coordination/migrate-m10)" ] && [ ! -e "$m/.worktrees/coordination/migrate-m10" ] || { echo "migrate (g9) unpushed: $out"; exit 1; }
+git -C "$m" push -q; out=$(init "$m" --migrate --apply=m10) || :
+grep -q '^\[m10 apply\] failed: refused: coordination/migrate-m10 would put personal details in a team file:$' <<<"$out" &&
+  grep -q '^  coordination/migrate-m10:[0-9]*: a home path: ' <<<"$out" && [ -z "$(git -C "$m" for-each-ref refs/heads/coordination/migrate-m10)" ] &&
+  [ ! -e "$m/.worktrees/coordination/migrate-m10" ] && [ -z "$(git -C "$m" status --short)" ] || { echo "migrate (g9) home path: $out"; exit 1; }
+# the team's files migrated by a newer plugin
+jq '.layout = 99' "$rj" > "$tmp/x.json" && mv "$tmp/x.json" "$rj" && gc "$m" -am 'newer'
+nw="the team's committed files were migrated by a newer plugin (layout 99 in .claude/coordination/coordination.json; this one knows $L): update this account's plugin"
+rc=0; w=$(init "$m" --write 2>&1) || rc=$?
+grep -qxF "$nw" <<<"$(init "$m" --check)" && [ "$rc" = 1 ] && grep -qxF "refused: $nw" <<<"$w" && [ "$(init "$m" --migrate)" = "$nw" ] ||
+  { echo "migrate (g9) newer team: $rc $w / $(init "$m" --check)"; exit 1; }
 
 fi
 

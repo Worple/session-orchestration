@@ -66,7 +66,9 @@ hand line comes with what its answer changes; `--apply=ID [--dry-run]` runs one 
 ask or hand id away (kept in `P/setup.json`'s `declined`, which the stamp then ignores; `--check` still names it). m7
 asks instead of moving while other sessions of the project run (`--decline=m7` only puts it off). Two runs at once:
 the second prints `busy: …` and does nothing. A stamp from a newer plugin's layout: `--migrate` prints which and
-stops, `--write` refuses; update this account's plugin. `session-status --start` runs `--migrate` first (a
+stops, `--write` refuses; update this account's plugin (so too a committed repo file's `layout`). A fix to a file git
+tracks goes to a team PR on `coordination/migrate-<id>`, never the checkout: hand its `Team PR:` line as `--shared`'s
+(below); while it's open, `--migrate` lists `[ID wait]` and stamps once it merges and you pull. `session-status --start` runs `--migrate` first (a
 `## Migration` section when it asks or fails), and `open_pane` turns each open ask or hand id into a pane ask
 `migrate-<id>`. Details per id: [migrations.md](migrations.md).
 

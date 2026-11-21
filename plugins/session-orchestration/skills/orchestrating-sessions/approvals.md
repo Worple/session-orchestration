@@ -47,7 +47,8 @@ user a command).
   the Quote. It verifies for 24h from the click, and only from this plugin's click, so a typed copy doesn't count.
   An answer for `migrate-<id>` (an older layout's migration, queued by `open_pane`): run the command its details
   name for that option (`session-status --init --migrate --apply=<id>` or `--decline=<id>`; Start a session: start
-  one for it).
+  one for it). An `--apply` that prints a `Team PR:` line (a team file): put it on the pane as one ask with its diff
+  (`ask_approval`, the diff in `details`) and push + open the PR only on that yes.
   - Make each option stand alone: the worker sees the answer and the question, not the other options.
   - Keep the question one line (the action, as the hook names it) and put what the user reads into the optional
     fields: `details` (markdown: what's being decided, the review comment being answered), `target` (`app#282

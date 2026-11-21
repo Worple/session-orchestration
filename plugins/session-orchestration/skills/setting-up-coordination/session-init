@@ -41,7 +41,8 @@
 #   session-status --init --migrate [--dry-run]
 #                                   an older layout made current: --check's `[mN auto|ask]` lines (prefixed on each
 #                                   line that names one), the auto ones fixed, backed up and logged, the ask ones
-#                                   listed, P/setup.json stamped once none is left (see Migrate below).
+#                                   listed, P/setup.json stamped once none is left (see Migrate below). A file git
+#                                   tracks is changed in a team PR (coordination/migrate-<id>), never in the checkout.
 # Configured: the nearest adapter (.claude/session-status-adapter, as session-status finds the root) is in this
 # folder, and its CLAUDE.md or CLAUDE.local.md names a replies folder (the line --handover reads). A folder with its
 # own adapter is its own project even when a parent folder has one too (a subproject coordinator); with no adapter
@@ -129,6 +130,10 @@ P=$(proj_dir "$root")
 # so --check warns and --write (--move too) writes nothing.
 sl=$(jq -r '.layout // 0' "$P/setup.json" 2>/dev/null); [[ $sl =~ ^[0-9]+$ ]] || sl=0
 newer=; [ "$sl" -le "$LAYOUT" ] || newer="migrated by plugin $(jq -r '.plugin // "?"' "$P/setup.json") (layout $sl; this one knows $LAYOUT): update this account's plugin"
+# The same for the team's committed repo file, whose `layout` a team migration PR raises (Migrate below).
+tl=0; [ -z "$sd" ] || ! git -C "$sd" ls-files --error-unmatch coordination.json >/dev/null 2>&1 || tl=$(jq -r '.layout // 0' "$sd/coordination.json" 2>/dev/null)
+[[ $tl =~ ^[0-9]+$ ]] || tl=0
+[ -n "$newer" ] || [ "$tl" -le "$LAYOUT" ] || newer="the team's committed files were migrated by a newer plugin (layout $tl in ${sd#"$root"/}/coordination.json; this one knows $LAYOUT): update this account's plugin"
 [ "$mode" != write ] || [ -z "$newer" ] || { echo "refused: $newer"; exit 1; }
 # The orch folder setup writes into: P, else an existing section's (its memory line's; a replies folder in the old
 # state dir says nothing about it). A correction (orch=) can change it below.
@@ -464,6 +469,17 @@ cfg_repo=$root/.claude/coordination/coordination.json
 [ -n "$team" ] && cfg_repo=$root/$team/.claude/coordination/coordination.json
 [ -z "$sd" ] || [ -n "$team" ] || cfg_repo=$sd/coordination.json
 repo_tracked=; git -C "$(dirname "$cfg_repo")" ls-files --error-unmatch coordination.json >/dev/null 2>&1 && repo_tracked=1
+# url_slug URL: OWNER/REPO of a remote URL, as configured (gh resolves that, not the insteadOf-rewritten one).
+url_slug() { sed -E 's#\.git$##; s#^[a-z+]+://[^/]+/##; s#^[^@]+@[^:]+:##; s#^[A-Za-z0-9.-]+:##' <<<"$1"; }
+# team_scrub LABEL TEXT: each line of TEXT that must not reach a team file, as `LABEL:N: why: line`.
+team_scrub() {
+  local p
+  for p in '/(Users|home)/[^/" ]+	a home path' '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}	an email' \
+           '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}	a session ID' '-coordinator([^A-Za-z0-9_-]|$)	a session name'; do
+    grep -nE -- "${p%%	*}" <<<"$2" | while IFS=: read -r n l; do echo "$1:$n: ${p#*	}: $l"; done
+  done
+  [ "${#HOME}" -lt 2 ] || grep -nF -- "$HOME" <<<"$2" | while IFS=: read -r n l; do echo "$1:$n: a home path: $l"; done
+}
 # --- Migrate (--migrate [--dry-run] [--apply=ID | --decline=ID]): an older setup's layout made current ------------
 # The detectors are --check's `[ID CLASS]` lines (CLASS auto, ask or hand). Each auto one is fixed in id order, its
 # rewritten personal files backed up first to P/migrate-backup/<date>/, and logged to P/migrate.log (`<id> start`, each
@@ -473,7 +489,9 @@ repo_tracked=; git -C "$(dirname "$cfg_repo")" ls-files --error-unmatch coordina
 # this project run: they hold the old paths until they restart. --apply=ID runs ID's fix whatever its class
 # (--dry-run: what it would change), --decline=ID adds an ask or hand id to `declined`; either then runs the plain
 # --migrate. P/setup.json is stamped with LAYOUT once --check names nothing open: a stamp at LAYOUT ends the next run
-# after one read. --dry-run: what it would do, writing nothing.
+# after one read. --dry-run: what it would do, writing nothing. A fix never writes a file git tracks in the checkout:
+# it writes that file's copy in a team worktree (R/.worktrees/coordination/migrate-<id>, from origin/<default>), one
+# team PR per id, and while one is open (a branch with a commit HEAD lacks, by patch) the id is `[ID wait]`.
 if [ "$mode" = migrate ]; then
   stamp=$P/setup.json log=$P/migrate.log l=$sl
   [ -z "$newer" ] || { echo "$newer"; exit 0; }
@@ -511,10 +529,108 @@ if [ "$mode" = migrate ]; then
       awk -F'\t' -v r="$root" -v me="${CLAUDE_CODE_SESSION_ID:-}" '$1 != me && $3 !~ /^(done|failed|stopped)$/ && ($6 == r || index($6, r "/") == 1) { n++ } END { print n + 0 }')
     [ ! -e "$t/ask.failed" ] || n='?'; rm -rf "$t"; echo "$n"
   }
+  # --- Team files: a fix's change to a tracked file goes to a team PR (coordination/migrate-<id>), never the checkout
+  # dbr R: R's default branch
+  dbr() {
+    local b; b=$(git -C "$1" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null) && { echo "${b#origin/}"; return; }
+    git -C "$1" rev-parse -q --verify origin/main >/dev/null || ! git -C "$1" rev-parse -q --verify origin/master >/dev/null || { echo master; return; }
+    echo main
+  }
+  # trs: the repos a team PR may be in: the root's and the one holding the committed files' folder
+  trs() {
+    local t
+    { [ -z "$top0" ] || echo "$top0"; [ -z "$sd" ] || { t=$(git -C "$sd" rev-parse --show-toplevel 2>/dev/null) && (cd "$t" && pwd -P); }; } | awk '!s[$0]++'
+  }
+  tdrop() { git -C "$1" worktree remove --force "$1/.worktrees/$2" >/dev/null 2>&1; git -C "$1" branch -q -D "$2" >/dev/null 2>&1; return 0; }
+  # tfetch: the migrate branches on origin (teammates' open PRs), best effort
+  # (no credential prompt: open_pane runs this unattended)
+  tfetch() { local R; while IFS= read -r R; do GIT_TERMINAL_PROMPT=0 git -C "$R" fetch -q --prune origin '+refs/heads/coordination/migrate-*:refs/remotes/origin/coordination/migrate-*' 2>/dev/null; done < <(trs); return 0; }
+  # open_pr ID: the branch of ID's open team PR (a local or origin branch with a commit HEAD lacks: cherry compares
+  # patches, as a rebase merge rewrites the SHAs) and, indented, how to drop it when it won't merge; else fails
+  open_pr() {
+    local R r B=coordination/migrate-$1
+    while IFS= read -r R; do
+      for r in "refs/heads/$B" "refs/remotes/origin/$B"; do
+        git -C "$R" rev-parse -q --verify "$r" >/dev/null && git -C "$R" cherry HEAD "$r" 2>/dev/null | grep -q '^+' &&
+          { echo "$B"; echo "  not going ahead with it (no, closed, or merged changed): close its PR and drop the branch (git -C $R worktree remove --force $R/.worktrees/$B; git -C $R branch -D $B; git -C $R push origin --delete $B), then --migrate asks again"; return 0; }
+      done
+    done < <(trs)
+    return 1
+  }
+  # tf FILE (inside fix, sees its i): the path a fix writes FILE at: FILE itself when untracked (or with pv set), else
+  # its copy in ID's team worktree, made from origin/<default> on first use
+  tf() {
+    local f=$1 R B W d ex
+    if [ -n "$pv" ] || ! git -C "${f%/*}" ls-files --error-unmatch -- "${f##*/}" >/dev/null 2>&1; then echo "$f"; return 0; fi
+    f=$(cd "${f%/*}" && pwd -P)/${f##*/}   # physical, as R is (a `team` path with .. or a symlink)
+    R=$(git -C "${f%/*}" rev-parse --show-toplevel) && R=$(cd "$R" && pwd -P) || { echo "refused: no repo for $f"; return 1; }
+    B=coordination/migrate-$i W=$R/.worktrees/coordination/migrate-$i
+    if [ ! -d "$W" ]; then
+      git -C "$R" worktree prune 2>/dev/null
+      # an earlier run's branch with nothing open (merged) goes; one with open commits is a PR not seen as open here
+      if git -C "$R" rev-parse -q --verify "refs/heads/$B" >/dev/null; then
+        git -C "$R" cherry HEAD "$B" 2>/dev/null | grep -q '^+' || tdrop "$R" "$B"
+        ! git -C "$R" rev-parse -q --verify "refs/heads/$B" >/dev/null ||
+          { echo "refused: $B exists already in $R: push it and open its PR, or remove it (git -C $R branch -D $B)"; return 1; }
+      fi
+      d=$(dbr "$R")
+      GIT_TERMINAL_PROMPT=0 git -C "$R" fetch -q origin "$d" 2>/dev/null   # best effort: offline, the origin/$d fetched last
+      git -C "$R" rev-parse -q --verify "origin/$d^{commit}" >/dev/null || { echo "refused: no origin/$d in $R to branch the team PR from"; return 1; }
+      git -C "$R" worktree add -q -b "$B" "$W" "origin/$d" >/dev/null 2>&1 || { echo "refused: git worktree add $W failed"; return 1; }
+      ex=$(git -C "$R" rev-parse --git-path info/exclude); case $ex in /*) ;; *) ex=$R/$ex ;; esac
+      (cd "$R" && git check-ignore -q .worktrees/x) || echo /.worktrees/ >> "$ex"   # the main checkout stays clean
+    fi
+    # the fix read the checkout's copy: one that isn't origin's would change something else, or nothing (checked while
+    # the team copy is untouched: m3 comes back to it per hook)
+    ! git -C "$W" diff --quiet -- "${f#"$R"/}" 2>/dev/null || cmp -s "$f" "$W/${f#"$R"/}" ||
+      { echo "refused: ${f#"$R"/} here isn't origin/$(dbr "$R")'s (an uncommitted edit, another branch or an unpushed commit): land it on $(dbr "$R") first, then run this again"; return 1; }
+    echo "$W/${f#"$R"/}"
+  }
+  # tnote FILE (inside fix): where a tracked FILE's change goes, for out
+  tnote() {
+    git -C "${1%/*}" ls-files --error-unmatch -- "${1##*/}" >/dev/null 2>&1 || return 0
+    echo " (git tracks it: a team PR, committed on coordination/migrate-$i from origin/$(dbr "$(git -C "${1%/*}" rev-parse --show-toplevel)"); this checkout gets it with the merge)"
+  }
+  # team_pr ID [fail]: ID's team worktrees committed (the repo file's layout raised, the added lines scrubbed), each
+  # with the push + PR command for one pane ask; fail: the ones with no commit go
+  team_pr() {
+    local R B=coordination/migrate-$1 W d rel bad msg url pr note rc=0 sdp dd
+    sdp=$( [ -n "$sd" ] && cd "$sd" 2>/dev/null && pwd -P)
+    while IFS= read -r R; do
+      W=$R/.worktrees/$B; [ -d "$W" ] || continue
+      d=$(dbr "$R")
+      if [ -n "${2:-}" ]; then [ -n "$(git -C "$W" rev-list -1 "origin/$d..HEAD" 2>/dev/null)" ] || tdrop "$R" "$B"; continue; fi
+      msg="coordination: migrate $1 (lines from an older setup)"   # no ' : it goes in the PR command's quotes
+      if [ -n "$(git -C "$W" status --porcelain)" ]; then
+        case $sdp in "$R"/*) rel=${sdp#"$R"/}/coordination.json
+          [ ! -f "$W/$rel" ] || { jq --argjson l "$LAYOUT" '.layout = ([.layout // 0, $l] | max)' "$W/$rel" > "$W/$rel.tmp" && mv "$W/$rel.tmp" "$W/$rel"; } || rc=1 ;;
+        esac
+        git -C "$W" add -A || rc=1
+        # the added lines, less those the file had already (jq's rewrite re-indents: compared trimmed, no trailing comma)
+        dd=$(git -C "$W" diff --cached -U0)
+        bad=$(team_scrub "$B" "$(awk 'function t(s) { gsub(/^[ \t]+|[ \t,]+$/, "", s); return s }
+          FNR == NR { if (/^-/ && !/^--- /) old[t(substr($0, 2))] = 1; next }
+          /^\+/ && !/^\+\+\+ / && !(t(substr($0, 2)) in old) { print substr($0, 2) }' <(printf '%s\n' "$dd") <(printf '%s\n' "$dd"))" | sort -u)
+        if [ -n "$bad" ]; then
+          tdrop "$R" "$B"; echo "refused: $B would put personal details in a team file:"; sed 's/^/  /' <<<"$bad"; rc=1; continue
+        fi
+        [ "$rc" = 0 ] && git -C "$W" commit -q -m "$msg" || { tdrop "$R" "$B"; echo "refused: the commit in $W failed"; rc=1; continue; }
+      fi
+      if [ -z "$(git -C "$W" rev-list -1 "origin/$d..HEAD" 2>/dev/null)" ]; then tdrop "$R" "$B"; echo "  origin/$d has it already: pull $d"; continue; fi
+      url=$(git -C "$R" config --get remote.origin.url) pr="git -C $W push -u origin $B" note=
+      case $url in   # as configured, not insteadOf-rewritten: what gh resolves
+        *github.com*) pr+=" && gh pr create -R $(url_slug "$url") --base $d --head $B --title '$msg' --body 'An older setup made current in the shared coordination files: every collaborator gets it with the merge.'" ;;
+        *) note="Then open a PR from $B into $d on the code host." ;;
+      esac
+      echo "Team PR: committed on $B ($W): show its diff in one pane ask (git -C $W show), then on yes: $pr"
+      [ -z "$note" ] || echo "$note"
+    done < <(trs)
+    return "$rc"
+  }
   # fix ID: ID's fix (an auto or an ask one), what it did in $out; with pv set, what it would change, writing nothing
   pv=
   fix() {
-    local i=$1 rc=0 x f k v c d n src ds ct new ks=()
+    local i=$1 rc=0 x f g k v c d n src ds ct new ks=()
     out=
     case $i in
       m1) ! tracked "$cfg_person" || { out="refused: the committed .claude/coordination.local.json can't take approvals.delegate"; return 1; }
@@ -526,9 +642,10 @@ if [ "$mode" = migrate ]; then
           ! grep -q '^\[m2 ask\] review inbox found' <<<"$chk" || ks+=("$cfg_repo	features.review_inbox	true")
           for x in ${ks[@]+"${ks[@]}"}; do
             IFS=$'\t' read -r f k v <<<"$x"
-            if tracked "$f" 2>/dev/null; then out+="refused: the committed ${f#"$root"/} can't take $k=$v (change it in a PR)"$'\n'; rc=1; continue; fi
-            out+="$k=$v → ${f#"$root"/}"$'\n'
-            [ -n "$pv" ] || { backup "$f" && jset "$f" --arg k "$k" --argjson v "$v" 'setpath($k | split("."); $v)'; } || rc=1
+            [ "$f" != "$cfg_person" ] || ! tracked "$f" || { out+="refused: the committed .claude/coordination.local.json can't take $k"$'\n'; rc=1; continue; }
+            out+="$k=$v → ${f#"$root"/}$(tnote "$f")"$'\n'
+            g=$(tf "$f") || { out+="$g"$'\n'; rc=1; continue; }
+            [ -n "$pv" ] || { { [ "$g" != "$f" ] || backup "$f"; } && jset "$g" --arg k "$k" --argjson v "$v" 'setpath($k | split("."); $v)'; } || rc=1
           done
           return "$rc" ;;
       m3) # each hook --check named: its folder (the one `git -C DIR` or `cd DIR` names, in the command or a script it
@@ -550,12 +667,12 @@ if [ "$mode" = migrate ]; then
             for f in "$root"/.claude/settings.json "$root"/.claude/settings.local.json; do
               jq -e --arg c "$c" 'any(.hooks.Stop[]?.hooks[]?; .command? == $c)' "$f" >/dev/null 2>&1 || continue
               k=1
+              g=$(tf "$f") || { out+="$g"$'\n'; rc=1; continue; }
               new=$(jq --arg c "$c" '.hooks.Stop |= (map(.hooks |= map(select(.command? != $c))) | map(select((.hooks | length) > 0)))
-                | if .hooks.Stop == [] then del(.hooks.Stop) else . end | if .hooks == {} then del(.hooks) else . end' "$f") || { rc=1; continue; }
-              out+="the hook out of ${f#"$root"/}"
-              ! tracked "$f" || out+=" (git tracks it: the change shows in git status, for a commit of yours)"
-              out+=$'\n'$(diff <(jq . "$f") <(printf '%s\n' "$new") | sed -n 's/^< /- /p; s/^> /+ /p')$'\n'
-              [ -n "$pv" ] || { backup "$f" && printf '%s\n' "$new" > "$f.tmp" && mv "$f.tmp" "$f"; } || rc=1
+                | if .hooks.Stop == [] then del(.hooks.Stop) else . end | if .hooks == {} then del(.hooks) else . end' "$g") || { rc=1; continue; }
+              out+="the hook out of ${f#"$root"/}$(tnote "$f")"
+              out+=$'\n'$(diff <(jq . "$g") <(printf '%s\n' "$new") | sed -n 's/^< /- /p; s/^> /+ /p')$'\n'
+              [ -n "$pv" ] || { { [ "$g" != "$f" ] || backup "$f"; } && printf '%s\n' "$new" > "$g.tmp" && mv "$g.tmp" "$g"; } || rc=1
             done
             [ -n "$k" ] || { out+="refused: no settings file holds the Stop hook ($c) as --check read it: drop it by hand"$'\n'; rc=1; continue; }
             [ -n "$pv" ] || { backup "$cfg_person" && jset "$cfg_person" --arg d "$d" '.history.dirs = ((.history.dirs // []) + [$d] | unique)'; } || rc=1
@@ -609,17 +726,18 @@ if [ "$mode" = migrate ]; then
           if tracked "$cfg_person"; then out="the committed .claude/coordination.local.json can't take them"; return 1; fi
           if [ -n "$pv" ]; then
             out="would move pending.file, history.dirs → .claude/coordination.local.json (yours win; $(jq -c '{pending: .pending.file, history: .history.dirs}' "$rf"))"
-            ! git -C "$sd" ls-files --error-unmatch coordination.json >/dev/null 2>&1 ||
-              out+=$'\n'"out of the committed ${rf#"$root"/} (git tracks it: the change shows in git status, for a commit of yours)"
+            x=$(tnote "$rf"); [ -z "$x" ] || out+=$'\n'"out of the committed ${rf#"$root"/}$x"
             return 0
           fi
-          backup "$rf" "$cfg_person" && mkdir -p "$root/.claude" && { [ -e "$cfg_person" ] || echo '{}' > "$cfg_person"; } &&
+          # the personal half reads the checkout's repo file; the delete goes to its team copy when git tracks it
+          g=$(tf "$rf") || { out=$g; return 1; }
+          { [ "$g" != "$rf" ] || backup "$rf"; } && backup "$cfg_person" && mkdir -p "$root/.claude" && { [ -e "$cfg_person" ] || echo '{}' > "$cfg_person"; } &&
             # the person's own value wins; the repo file's goes either way
             jq --slurpfile r "$rf" 'reduce (["pending", "file"], ["history", "dirs"]) as $k (.;
               if getpath($k) == null and ($r[0] | getpath($k)) != null then setpath($k; $r[0] | getpath($k)) else . end)' \
               "$cfg_person" > "$cfg_person.tmp" && mv "$cfg_person.tmp" "$cfg_person" &&
             jq 'del(.pending.file, .history.dirs) | with_entries(select((.key | IN("pending", "history") | not) or .value != {}))' \
-              "$rf" > "$rf.tmp" && mv "$rf.tmp" "$rf" && out="pending.file, history.dirs → .claude/coordination.local.json" || rc=1 ;;
+              "$g" > "$g.tmp" && mv "$g.tmp" "$g" && out="pending.file, history.dirs → .claude/coordination.local.json" || rc=1 ;;
       m9) ad=$root/.claude/session-status-adapter; map=$(stale_ad)
           if [ -z "$map" ]; then out="nothing left to point"   # a run that stopped after the rewrite
           elif [ -n "$pv" ]; then out=$(RQ=word rew "$ad" check)
@@ -629,9 +747,9 @@ if [ "$mode" = migrate ]; then
       m10) # each file's old template lines (a hand-edited one stays, named); the copy keeps the file's mode
           while IFS= read -r f; do
             [ -n "$f" ] && d=$(drift "$f" check) && grep -q '^+ ' <<<"$d" || continue
-            x=${f#"$root"/}; ! git -C "$root" ls-files --error-unmatch -- "$x" >/dev/null 2>&1 || x+=" (git tracks it: the change shows in git status, for a commit of yours)"
-            out+="$x"$'\n'"$d"$'\n'
-            [ -n "$pv" ] || { backup "$f" && cp -p "$f" "$f.tmp" && drift "$f" > "$f.tmp" && mv "$f.tmp" "$f"; } || { rm -f "$f.tmp"; rc=1; }
+            out+="${f#"$root"/}$(tnote "$f")"$'\n'"$d"$'\n'
+            g=$(tf "$f") || { out+="$g"$'\n'; rc=1; continue; }
+            [ -n "$pv" ] || { { [ "$g" != "$f" ] || backup "$f"; } && cp -p "$g" "$g.tmp" && drift "$g" > "$g.tmp" && mv "$g.tmp" "$g"; } || { rm -f "$g.tmp"; rc=1; }
           done <<<"$(drift_files)"
           [ -n "$out" ] || out="nothing left to bring current" ;;
       *) out="no fix for $i in this plugin (a session does it by hand)"; return 1 ;;
@@ -642,8 +760,15 @@ if [ "$mode" = migrate ]; then
   run_fix() {
     local i=$1 why
     jl "$i start"
-    if fix "$i"; then jl "$i done"; echo "[$i $2] done"; grep . <<<"$out" | sed 's/^ */  /'
-    else why=$(grep -m1 -E '^(refused|move failed):' <<<"$out" || grep . <<<"$out" | tail -1); jl "$i failed: $why"; echo "[$i $2] failed: $why"; return 1; fi
+    local tp=
+    # a tracked file's change is committed in its team worktree once the fix is through (team_pr), or dropped
+    if fix "$i" && tp=$(team_pr "$i"); then jl "$i done"; echo "[$i $2] done"; grep . <<<"$out" | sed 's/^ */  /'; [ -z "$tp" ] || echo "$tp"
+    else
+      out=$tp$'\n'$out; team_pr "$i" fail
+      why=$(grep -m1 -E '^(refused|move failed):' <<<"$out" || grep . <<<"$out" | tail -1); jl "$i failed: $why"; echo "[$i $2] failed: $why"
+      [ -z "$tp" ] || grep '^  ' <<<"$tp"   # the scrub's lines
+      return 1
+    fi
   }
   if [ -n "$apply$decline" ]; then
     i=${apply:-$decline} rc=0
@@ -651,7 +776,9 @@ if [ "$mode" = migrate ]; then
     [ -n "$apply" ] || [ -z "$dry" ] || { echo "--decline has no --dry-run"; exit 2; }
     case $apply in h*) echo "$i: no --apply (a hand one: a session does it; --decline=$i puts it away)"; exit 2 ;; esac
     [ -z "$apply" ] || ! grep -q "^\[$i hand\] " <<<"$chk" || { echo "$i: no --apply (a hand one now: a session does it; --decline=$i puts it away)"; exit 2; }
+    [ -z "$apply" ] || ! grep -q "^\[$i " <<<"$chk" || tfetch
     if ! grep -q "^\[$i " <<<"$chk"; then echo "$i: not open (--check doesn't name it)"
+    elif [ -n "$apply" ] && b=$(open_pr "$i"); then echo "$i: a team PR is open on ${b%%$'\n'*}: nothing to apply until it merges and you pull"; echo "${b#*$'\n'}"; exit 0
     elif [ -n "$apply" ] && [ -n "$dry" ]; then pv=1; fix "$i"; rc=$?; grep . <<<"$out"; exit "$rc"
     elif [ -n "$apply" ]; then
       run_fix "$i" apply || rc=1
@@ -664,7 +791,7 @@ if [ "$mode" = migrate ]; then
     fi
     bash "$0" --migrate || rc=1; exit "$rc"
   fi
-  failed= open= dec=
+  failed= open= dec= waiting= tfd=
   # every id, in run order: m8 before m7 (m9, m10 last), so the move sees (and rewrites) the pending.file m8 brings over
   for i in m1 m2 m3 m4 m5 m6 m8 m7 m9 m10 h1 h2; do
     lines=$(grep "^\[$i " <<<"$chk") || continue
@@ -675,6 +802,12 @@ if [ "$mode" = migrate ]; then
       lines="[m7 ask] coordinator files outside $x, and $n of this project keep the old paths until they restart: move now (--apply=m7) or wait"
     fi
     if ! grep -q "^\[$i auto\] " <<<"$lines"; then
+      # its team PR open (this person's or a teammate's): not asked again (open_pane queues only ask and hand lines)
+      [ -n "$tfd" ] || { tfetch; tfd=1; }   # once, and only for an id still open
+      if b=$(open_pr "$i"); then
+        echo "[$i wait] a team PR is open on ${b%%$'\n'*} (yours or a teammate's): it applies here once it merges and you pull"; echo "${b#*$'\n'}"
+        waiting+=" $i"; continue
+      fi
       # a hand one with its indented lines (what to do), an ask one with what the answer would change
       if grep -q "^\[$i hand\] " <<<"$lines"; then awk -v p="[$i hand] " 'index($0, p) == 1 { f = 1; print; next } f && /^  / { print; next } { f = 0 }' <<<"$chk"
       else echo "$lines"; ( pv=1; fix "$i"; grep . <<<"$out" ) 2>/dev/null | sed 's/^/  /'; fi
@@ -685,13 +818,18 @@ if [ "$mode" = migrate ]; then
     run_fix "$i" auto || failed+=" $i"
   done
   [ -z "$dec" ] || echo "declined:$dec (--check still names them; --apply=ID applies one)"
-  [ -z "$dry" ] || { [ -n "$open" ] && echo "stamp: not yet (open:$open)" || echo "stamp: would write layout $LAYOUT to $(tilde "$stamp")"; exit 0; }
+  if [ -n "$dry" ]; then
+    if [ -n "$open" ]; then echo "stamp: not yet (open:$open)"; elif [ -n "$waiting" ]; then echo "stamp: not yet (team PR open:$waiting)"
+    else echo "stamp: would write layout $LAYOUT to $(tilde "$stamp")"; fi
+    exit 0
+  fi
   [ -z "$failed" ] || { echo "stamp: not written (failed:$failed; --check still names it, files left where they are)"; exit 1; }
   # the detectors decide: an auto fix that left its line is a failure too (an open or declined one isn't)
   left=$(bash "$0" --check 2>/dev/null | grep -E '^\[m[0-9]+ auto\] ')
-  x=$(echo $open $declined | tr ' ' '|'); [ -z "$x" ] || [ -z "$left" ] || left=$(grep -vE "^\[($x) auto\] " <<<"$left")
+  x=$(echo $open $declined $waiting | tr ' ' '|'); [ -z "$x" ] || [ -z "$left" ] || left=$(grep -vE "^\[($x) auto\] " <<<"$left")
   [ -z "$left" ] || { echo "stamp: not written, still found:"; sed 's/^/  /' <<<"$left"; exit 1; }
   [ -z "$open" ] || { echo "stamp: not yet (open:$open)"; exit 0; }
+  [ -z "$waiting" ] || { echo "stamp: not yet (team PR open:$waiting)"; exit 0; }
   dec=$(jq -c '.declined // []' "$stamp" 2>/dev/null); ver=$(jq -r .version "$LIB_DIR/.claude-plugin/plugin.json")
   mkdir -p "$P" && jq -n --argjson l "$LAYOUT" --arg v "$ver" --arg at "$(ts)" --argjson d "${dec:-[]}" \
     '{layout: $l, plugin: $v, at: $at, declined: $d}' > "$stamp.tmp" && mv "$stamp.tmp" "$stamp" || exit 1
@@ -839,7 +977,6 @@ case $url in
 esac
 cfg_host=$host cfg_note=   # the config's host: GitLab isn't one yet (TODO: GitLab support)
 [ "$host" = gitlab ] && cfg_host=none cfg_note=" (host=none: GitLab support is a TODO)"
-url_slug() { sed -E 's#\.git$##; s#^[a-z+]+://[^/]+/##; s#^[^@]+@[^:]+:##; s#^[A-Za-z0-9.-]+:##' <<<"$1"; }
 repo_slug=$(url_slug "$url")
 gh=; [ "$host" = github ] && command -v gh >/dev/null && gh=1
 # The briefs' commands: a PR merge and a review post, by code host; `retro.py units` counts these by default
@@ -1058,16 +1195,8 @@ fi
 
 # --- Write -------------------------------------------------------------------------------------------------------
 # Shared mode, checked before anything is written: the team files that origin/<default> lacks, each past the scrub.
-# Shared: what reaches the team PR (the repo file's keys, the .gitattributes line). Personal: all the rest, below.
-# team_scrub LABEL TEXT: each line of TEXT that must not reach a team file, as `LABEL:N: why: line`.
-team_scrub() {
-  local p
-  for p in '/(Users|home)/[^/" ]+	a home path' '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}	an email' \
-           '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}	a session ID' '-coordinator([^A-Za-z0-9_-]|$)	a session name'; do
-    grep -nE -- "${p%%	*}" <<<"$2" | while IFS=: read -r n l; do echo "$1:$n: ${p#*	}: $l"; done
-  done
-  [ "${#HOME}" -lt 2 ] || grep -nF -- "$HOME" <<<"$2" | while IFS=: read -r n l; do echo "$1:$n: a home path: $l"; done
-}
+# Shared: what reaches the team PR (the repo file's keys, the .gitattributes line; team_scrub, above). Personal: all
+# the rest, below.
 tj= ga_need=
 if [ -n "$shared" ]; then
   [ -n "$trepo" ] || { echo "refused: --shared needs a git repo for the team files (here, or the team repo in a workspace)"; exit 1; }
