@@ -30,7 +30,9 @@ then the adapter, the handoff file and the docs watch (`features/docs-watch.md`)
 e.g. a reviewer: `· reviews KEY`), and last, at most once a day, `plugin feedback: N open (M seen ≥2×) — apply?` (or
 its plugin-coordinator form, below). It
 asks `claude agents --json` of your account (with `features.accounts`, every account sharing your transcripts:
-[features/accounts.md](../../features/accounts.md)).
+[features/accounts.md](../../features/accounts.md)). A background session whose process ended (Claude Code still
+lists it `blocked`, with no pid) has ended: its row says `closed`, and neither Waiting on you nor Other sessions lists
+it, so the user is never asked to stop it. Its `claude attach` command resumes it if its work goes on.
 
 **Waiting on you** shows what a blocked session waits on from the plugin's hooks. A task's worker at rest
 (Claude Code reports a background session `blocked` once its turn ends) whose row only waits on a reviewer

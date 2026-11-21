@@ -70,7 +70,8 @@ acct=\$(basename "\${CLAUDE_CONFIG_DIR:-none}")
 echo "\$acct \$*" >> "$tmp/calls"
 case "\$1" in
   agents) f="$tmp/agents-\$acct.json"; [ -f "\$f" ] || { echo '[]'; exit 0; }
-    if echo "\$*" | grep -q -- --all; then cat "\$f"; else jq '[.[]? | select(.pid != null)]' "\$f"; fi ;;
+    # LIST_ENDED: like Claude Code, list a background session whose process ended as blocked (lib.sh drops it)
+    if echo "\$*" | grep -q -- --all; then cat "\$f"; else jq --arg e "\${LIST_ENDED:-}" '[.[]? | select(.pid != null or (\$e != "" and .state == "blocked"))]' "\$f"; fi ;;
   stop) f="$tmp/agents-\$acct.json"   # its process ends: no pid from now on
     jq --arg id "\$2" '[.[]? | if (.sessionId | startswith(\$id)) then .pid = null else . end]' "\$f" > "\$f.t" && mv "\$f.t" "\$f"
     echo "stopped \$2" ;;
@@ -1614,6 +1615,12 @@ out=$(run)
   grep -q '^  "old-prompt" (claude attach b6000006) — blocked: a prompt · unanswered [0-9]*d; stop: claude stop b6000006$' <<<"$out" &&
   grep -qxF '  "moot" (claude attach b7000007) — blocked: Bash `npm test` · its work landed; stop: claude stop b7000007' <<<"$out" &&
   grep -q '^ABC-87 .*sess:"stale-conflict" stale$' <<<"$out" && grep -q '^  "code" idle ' <<<"$out" || { echo "review fixes failed: $out"; exit 1; }
+# A background session whose process ended, still listed as blocked (LIST_ENDED), has ended: its question (g1) puts it
+# under Waiting on you no more, and Other sessions doesn't list it (c1).
+setacct cfg "$(sess "$g1" long '' null),$(sess "$c1" code idle null),$(sess "$u1" unrecorded waiting 1)"
+out=$(LIST_ENDED=1 run)
+[ "$(sed -n '/^Waiting on you:/,/^$/p' <<<"$out" | grep .)" = "$(printf 'Waiting on you:\n  "unrecorded" (claude attach b1000001) — blocked: a prompt')" ] &&
+  ! grep -q '"long"' <<<"$out" && ! grep -q '"code"' <<<"$out" || { echo "an ended session stayed listed: $out"; exit 1; }
 fi
 
 if section init; then

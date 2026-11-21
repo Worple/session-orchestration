@@ -682,7 +682,7 @@ no_cli() {
 
 # list_sessions [--all]: one session per line of every account list_accounts names: id, name, state, command prefix
 # to reach it, started (epoch s), cwd, kind (background/interactive), status, pid (tabs). `--all` adds retired ones
-# (stopped, done: no process, no pid). A listing that failed touches $TMP/ask.failed (when TMP is set): callers
+# (stopped, done, failed, and blocked background ones whose process ended: no process, no pid). A listing that failed touches $TMP/ask.failed (when TMP is set): callers
 # mustn't read "not listed" into it.
 # state vs status: a background session's state is blocked both when it has finished its turn (status idle) and
 # when it waits on a permission prompt or a question (status waiting); a running one is busy.
@@ -695,8 +695,10 @@ list_sessions() {
     else out=$(CLAUDE_CONFIG_DIR=$d claude agents --json "$@" 2>/dev/null)
     fi
     jq -e 'type == "array"' <<<"$out" >/dev/null 2>&1 || { [ -z "${TMP:-}" ] || : > "$TMP/ask.failed"; continue; }
-    # Background sessions report `state` (e.g. blocked) beside `status`.
-    jq -r --arg pre "$pre" '.[]? | select(.sessionId)
+    # Background sessions report `state` (e.g. blocked) beside `status`. One whose process ended is still listed as
+    # blocked, with no pid: it has ended, so only --all lists it.
+    jq -r --arg pre "$pre" --arg all "$*" '.[]? | select(.sessionId)
+      | select(($all | test("--all")) or .kind != "background" or .pid != null or .state != "blocked")
       | "\(.sessionId)\t\(.name)\t\(.state // .status // "?")\t\($pre)\t\((.startedAt // 0) / 1000 | floor)\t\(.cwd)\t\(.kind // "")\t\(.status // "")\t\(.pid // "")"' <<<"$out"
   done < <(list_accounts) | awk -F'\t' '!s[$1]++'
 }
