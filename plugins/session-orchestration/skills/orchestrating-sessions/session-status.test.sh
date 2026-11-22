@@ -457,9 +457,9 @@ out=$(run --changes); grep -qxF '  * app#1,app#2 all-merged (ABC-12, -) → "fix
 fi
 
 if section watch; then
-# Setup: the adapter, a stub claude whose session state is $tmp/state, and a PR events record (an open PR, recorded).
-notices_adapter; echo blocked > "$tmp/state"
-printf '#!/bin/sh\nprintf %s "$(cat %s/state)"\n' "'[{\"sessionId\":\"$sid\",\"name\":\"fix it\",\"cwd\":\"$root\",\"state\":\"%s\"}]'" "$tmp" > "$tmp/bin/claude"
+# Setup: the adapter, a stub claude whose session state is $tmp/sstate ($tmp/state is XDG_STATE_HOME), and a PR events record (an open PR, recorded).
+notices_adapter; echo blocked > "$tmp/sstate"
+printf '#!/bin/sh\nprintf %s "$(cat %s/sstate)"\n' "'[{\"sessionId\":\"$sid\",\"name\":\"fix it\",\"cwd\":\"$root\",\"state\":\"%s\"}]'" "$tmp" > "$tmp/bin/claude"
 run --changes >/dev/null; echo 'app#1 OPEN | ' > "$tmp/prs"; run --changes >/dev/null; rm "$tmp/prs"; run --changes >/dev/null
 # Under --watch (SESSION_STATUS_FORWARD) a committing run sends the nudge itself (here a resume: the stub lists no pid)
 # and lists it under Forwarded beside other news, never as news alone; a peek sends nothing.
@@ -555,14 +555,28 @@ case "\$1" in
     jq --arg id "\$2" '[.[] | if (.sessionId | startswith(\$id)) then .pid = null else . end]' "$tmp/agents.json" > "$tmp/agents.t" && mv "$tmp/agents.t" "$tmp/agents.json" ;;
 esac
 EOF
+# A done session with a live process (agent view's finished turn) is at rest, not retired: a handoff entry naming it
+# with its transcript on disk isn't flagged gone.
+echo '{"pending": {"file": "pend.md"}}' > "$root/.claude/coordination.local.json"
+printf '# Pending\n\n- 2026-11-01 ABC-34: waits on aaaaaaaa\n' > "$root/pend.md"
+echo '{"type":"user","message":{"content":"Work on ABC-34"}}' > "$proj/aaaaaaaa-0000-0000-0000-000000000001.jsonl"
+out=$(run --stale); rm "$root/pend.md" "$root/.claude/coordination.local.json" "$proj/aaaaaaaa-0000-0000-0000-000000000001.jsonl"
+! grep -q 'aaaaaaaa, gone' <<<"$out" || { echo "a live done session read as gone: $out"; exit 1; }
 run --changes >/dev/null; : > "$tmp/stops"
 out=$(SESSION_STATUS_PEEK=1 SESSION_STATUS_FORWARD=1 run --changes) && [ ! -s "$tmp/stops" ] &&
   [ "$(grep -c 'would stop' <<<"$out")" = 1 ] && grep -qxF '  * would stop: ABC-34 Done — "ABC-34 old" (aaaaaaaa)' <<<"$out" &&
   out=$(SESSION_STATUS_FORWARD=1 run --changes) && [ "$(cat "$tmp/stops")" = aaaaaaaa ] &&
   [ "$(sed -n '/^Stopped/,$p' <<<"$out")" = "$(printf '%s\n%s' "Stopped (finished tasks' sessions and worktrees, by the watcher; tell the user in one line):" '  * ABC-34 Done — "ABC-34 old" (aaaaaaaa)')" ] &&
-  ! grep -q 'aaaaaaaa$' <<<"$out" && run | grep -q '"ABC-34 asks": claude stop bbbbbbbb$' && run | grep -q '"ABC-34 tab": claude stop cccccccc$' &&
+  ! grep -q 'aaaaaaaa$' <<<"$out" && l=$(run) && grep -q '"ABC-34 asks": claude stop bbbbbbbb$' <<<"$l" && grep -q '"ABC-34 tab": claude stop cccccccc$' <<<"$l" &&
   [ "$(SESSION_STATUS_FORWARD=1 run --changes)" = "no changes" ] && [ "$(cat "$tmp/stops")" = aaaaaaaa ] &&
+  [ "$(grep -c '"k":"auto","what":"stop"}$' "$tmp/state/session-orchestration/usage.jsonl")" = 1 ] &&
   [ -d "$root/wt2" ] || { echo "watcher's stop failed (or removed a worktree a live session holds): $out / $(cat "$tmp/stops")"; exit 1; }
+# A prompt the blocked hook didn't record: Waiting on you names what it waits for when the engine says (waitingFor).
+cp "$tmp/agents.json" "$tmp/agents.keep"
+grep -qxF '  "ABC-34 asks" (claude attach bbbbbbbb) — blocked: a prompt' <<<"$l" &&
+  jq '[.[] | if (.sessionId | startswith("bbbbbbbb")) then .waitingFor = "dialog\topen" else . end]' "$tmp/agents.keep" > "$tmp/agents.json" &&
+  grep -qxF '  "ABC-34 asks" (claude attach bbbbbbbb) — blocked: dialog open' <<<"$(run)" || { echo "waitingFor not shown: $(run)"; exit 1; }
+mv "$tmp/agents.keep" "$tmp/agents.json"
 # With no live session left on the key, the watcher also removes a finished task's worktree and local branch that lose
 # nothing: wt2's commit landed rebased (a copy on origin/main, another SHA: `branch -d` would refuse). It keeps one with
 # an untracked file (wt4), a commit not on main (wt5), a merge commit (wt6), an ignored file the main checkout lacks
@@ -596,6 +610,7 @@ out=$(SESSION_STATUS_PEEK=1 SESSION_STATUS_FORWARD=1 run --changes) && [ -d "$ro
   [ "$(grep -c 'would remove' <<<"$out")" = 1 ] && grep -qxF '  * would remove: ABC-34 Done — worktree wt2, branch feature/ABC-34-old' <<<"$out" &&
   out=$(SESSION_STATUS_FORWARD=1 run --changes) && [ ! -e "$root/wt2" ] && ! git -C "$root" rev-parse -q --verify feature/ABC-34-old >/dev/null &&
   [ "$(sed -n '/^Stopped/,$p' <<<"$out")" = "$(printf '%s\n%s' "Stopped (finished tasks' sessions and worktrees, by the watcher; tell the user in one line):" '  * ABC-34 Done — removed worktree wt2 and branch feature/ABC-34-old')" ] &&
+  [ "$(grep -c '"k":"auto","what":"remove"}$' "$tmp/state/session-orchestration/usage.jsonl")" = 1 ] &&
   [ "$(grep -c wt2 <<<"$out")" = 1 ] && b=$(run | sed -n '/^Leftovers/,/^$/p') &&
   grep -qF 'worktree wt4 has 1 uncommitted file(s)' <<<"$b" && grep -qF 'worktree wt5 has 1 commit(s) not pushed' <<<"$b" &&
   grep -qF 'worktree wt6 has 1 commit(s) not pushed' <<<"$b" && grep -qF 'worktree remove wt8 &&' <<<"$b" && grep -qF 'worktree remove wt11 &&' <<<"$b" &&
@@ -2384,7 +2399,13 @@ out=$(init "$m" --migrate --decline=h1)
 grep -qxF 'h1: declined (--check still names it; --apply=h1 applies it)' <<<"$out" && ! grep -q '^\[h1 ' <<<"$out" && grep -q '^\[h2 hand\]' <<<"$out" &&
   grep -qxF 'declined: h1 (--check still names them; --apply=ID applies one)' <<<"$out" && grep -qxF 'stamp: not yet (open: h2)' <<<"$out" &&
   [ "$(jq -c '[.layout, .declined]' "$pm/setup.json")" = '[0,["h1"]]' ] || { echo "migrate (g5) decline: $out / $(cat "$pm/setup.json")"; exit 1; }
-out=$(init "$m" --migrate --decline=h2)
+# a crontab that can't be read: --check says m5 is unmeasured (not "no rnd-weekly line"), and no stamp is written
+cp "$tmp/bin/crontab" "$tmp/crontab.ok"; printf '#!/bin/sh\necho "crontab: Operation not permitted" >&2; exit 1\n' > "$tmp/bin/crontab"
+um='unmeasured: m5, crontab -l failed: crontab: Operation not permitted'
+grep -qxF "$um" <<<"$(init "$m" --check)" && out=$(init "$m" --migrate --decline=h2) && grep -qxF "stamp: not yet ($um)" <<<"$out" &&
+  [ "$(jq -c .layout "$pm/setup.json")" = 0 ] || { echo "migrate (g5) unmeasured: $out"; exit 1; }
+mv "$tmp/crontab.ok" "$tmp/bin/crontab"
+out=$(init "$m" --migrate)
 grep -qxF "stamp: layout $L → $ps" <<<"$out" && [ "$(jq -c '[.layout, .declined]' "$pm/setup.json")" = "[$L,[\"h1\",\"h2\"]]" ] &&
   [ "$(init "$m" --migrate)" = "current: layout $L ($ps)" ] &&
   [ "$(init "$m" --check | grep -oE '^\[[mh][0-9]+ [a-z]+\]' | paste -sd' ' -)" = "[h1 hand] [h2 hand]" ] || { echo "migrate (g5) stamped: $out / $(cat "$pm/setup.json")"; exit 1; }

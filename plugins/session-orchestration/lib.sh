@@ -547,7 +547,8 @@ person_set() {
 # guesses a name can confirm it; then optionally its size S, M or L, logged as size; env ADVISOR, the advisor it
 # starts with, logged as advisor) or escalate (session-status
 # --handover --escalate: NAME task or chunk, then the successor's model and effort and the old session's name, as
-# sess). With telemetry=full only, the fault kinds too, as `usage NAME KIND [N [AT]]`, each with the plugin's version
+# sess) or auto (the watcher acting on its own: NAME stop, a finished task's session at rest, or remove, its
+# landed worktree). With telemetry=full only, the fault kinds too, as `usage NAME KIND [N [AT]]`, each with the plugin's version
 # as v: block (a hook's deny or ask: NAME approved-action-deny|-ask or coordinator-guard-cd|-edit|-sidebar, AT the hook file:line
 # that decided), refuse (Claude Code refused a tool call, the PermissionDenied hook: NAME the tool's name), relay (the
 # approval hook passed over a relayed approval: NAME why: used-once, no-key, not-landing, unverified), wake
@@ -559,7 +560,7 @@ person_set() {
 usage_log() { echo "${XDG_STATE_HOME:-$HOME/.local/state}/session-orchestration/usage.jsonl"; }
 usage() {
   local f x=
-  [[ ${1:-} =~ ^[a-z0-9-]{1,40}$ && ${2:-path} =~ ^(press|path|chunk|start|escalate|block|refuse|relay|wake|error)$ ]] || return 0
+  [[ ${1:-} =~ ^[a-z0-9-]{1,40}$ && ${2:-path} =~ ^(press|path|chunk|start|escalate|auto|block|refuse|relay|wake|error)$ ]] || return 0
   if [[ ${2:-} =~ ^(block|refuse|relay|wake|error)$ ]]; then
     [[ $# -le 4 && ${3:-0} =~ ^[0-9]{1,6}$ && ${4:-x} =~ ^[A-Za-z0-9._-][A-Za-z0-9._/-]{0,79}(:[0-9]{1,5})?$ && ${4:-} != *..* ]] || return 0
     [ "$(config telemetry 2>/dev/null)" = full ] || return 0
@@ -688,11 +689,13 @@ no_cli() {
 }
 
 # list_sessions [--all]: one session per line of every account list_accounts names: id, name, state, command prefix
-# to reach it, started (epoch s), cwd, kind (background/interactive), status, pid (tabs). `--all` adds retired ones
-# (stopped, done, failed, and blocked background ones whose process ended: no process, no pid). A listing that failed touches $TMP/ask.failed (when TMP is set): callers
-# mustn't read "not listed" into it.
-# state vs status: a background session's state is blocked both when it has finished its turn (status idle) and
-# when it waits on a permission prompt or a question (status waiting); a running one is busy.
+# to reach it, started (epoch s), cwd, kind (background/interactive), status, pid, waitingFor (tabs). `--all` adds
+# retired ones (stopped, done, failed, and blocked background ones whose process ended: no pid). A listing that
+# failed touches $TMP/ask.failed (when TMP is set): callers mustn't read "not listed" into it.
+# state vs status: a background session at rest reads blocked both when it has finished its turn (status idle) and
+# when it waits on a permission prompt or a question (status waiting, waitingFor says on what); a running one is busy.
+# Agent view (2.1.330 on) reports a finished turn as done with the process alive: that is listed as blocked too, so
+# done here means retired, except done with a stale busy status (a cut turn: mid_turn reads it). waitingFor (empty on older engines) has tabs and newlines flattened, 80 chars.
 list_sessions() {
   local d pre out
   no_cli >&2 && { [ -z "${TMP:-}" ] || : > "$TMP/ask.failed"; return; }
@@ -706,7 +709,8 @@ list_sessions() {
     # blocked, with no pid: it has ended, so only --all lists it.
     jq -r --arg pre "$pre" --arg all "$*" '.[]? | select(.sessionId)
       | select(($all | test("--all")) or .kind != "background" or .pid != null or .state != "blocked")
-      | "\(.sessionId)\t\(.name)\t\(.state // .status // "?")\t\($pre)\t\((.startedAt // 0) / 1000 | floor)\t\(.cwd)\t\(.kind // "")\t\(.status // "")\t\(.pid // "")"' <<<"$out"
+      | (if .state == "done" and .pid != null and .status != "busy" then "blocked" else .state // .status // "?" end) as $st
+      | "\(.sessionId)\t\(.name)\t\($st)\t\($pre)\t\((.startedAt // 0) / 1000 | floor)\t\(.cwd)\t\(.kind // "")\t\(.status // "")\t\(.pid // "")\t\(.waitingFor // "" | tostring | gsub("[\t\n\r]"; " ") | .[:80])"' <<<"$out"
   done < <(list_accounts) | awk -F'\t' '!s[$1]++'
 }
 

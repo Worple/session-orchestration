@@ -54,7 +54,8 @@ default), or a finished turn that asks nothing. Its row says `idle` or `busy`; o
 A question needs a `?`, a `! command` line or the words outside code (fenced blocks and `spans` are
 skipped). Limits: a turn that asks while its branch has landed counts as landed; a squash-merged branch never
 counts as landed; `--changes` still ignores a plain entry appearing (workers report questions by message).
-A prompt hooks/blocked.sh didn't record (status `waiting`, no record) shows as `— blocked: a prompt`, aged by its
+A prompt hooks/blocked.sh didn't record (status `waiting`, no record) shows what Claude Code's `waitingFor` names
+(`— blocked: dialog open`; from the release after agent view's `done` state), else `— blocked: a prompt`, aged by its
 transcript's last write (nothing is written while it waits). A prompt unanswered for 6 hours (`SESSION_STATUS_STALE_HOURS`) moves to **Stale prompts**, with
 `· unanswered Nh; stop: PREFIX stop ID`, and its row says `stale`: answer it or stop the session. So does a prompt
 whose work landed (above), at any age, with `· its work landed`: the prompt is moot. The pane

@@ -400,6 +400,11 @@ echo "{\"t\":1791824400,\"k\":\"start\",\"what\":\"build\",\"model\":\"opus\",\"
 out=$(XDG_STATE_HOME=$tmp/state retro kinds 7)
 grep -q $'^build+fable\topus\tmedium\t1\t1\t13.0\t13.0\t0.00\t0\t0\t-\t0\t2\t11.0$' <<<"$out" && grep -q $'^build\topus\tmedium\t2\t1\t10.0\t' <<<"$out" ||
   fail "kinds: an advisor start is its own arm; fable rates; advisor calls and cost, subagents' once each" "$out"
+# kinds with no usage log, or one that starts after the window: unmeasured (exit 2, why on stderr), not empty rows.
+rc=0; out=$(XDG_STATE_HOME=$tmp/nostate retro kinds 7 2>&1) || rc=$?
+[ "$rc" = 2 ] && [ "$out" = "unmeasured: no usage log (telemetry off, or nothing logged yet)" ] || fail "kinds, no log: rc $rc" "$out"
+rc=0; out=$(TZ=UTC HOME=$home CLAUDE_CONFIG_DIR=$home/.claude-work XDG_STATE_HOME=$tmp/state python3 -I "$here/retro.py" --until 2026-09-01T00:00:00 kinds 7 2>&1) || rc=$?
+[ "$rc" = 2 ] && [[ $out == "unmeasured: the usage log starts 2026-"*", after the window's end" ]] || fail "kinds, log after the window: rc $rc" "$out"
 
 # handoff: a coordinated root with one open entry (reworded once) and one resolved twice (recurring), whose history
 # one session read

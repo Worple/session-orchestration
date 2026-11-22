@@ -72,9 +72,11 @@ to a session whose first prompt or `Session task:` names the key.
 - **A name that doesn't fit the ticket is a stop sign** (a retro name on a product ticket): recheck with `--owner`,
   don't explain it away.
 
-**Blocked isn't done.** A background session that has finished its turn sits in `state: blocked`, so blocked means
-idle *or* waiting. `status` tells them apart: `idle` (turn over), `waiting` (a permission prompt or question), `busy`
-(mid-turn); `--activity` prints it. Read the session's last turn before saying what it waits on.
+**Blocked isn't done.** A background session that has finished its turn sits in `state: blocked` on older engines;
+agent view (2.1.330 on) says `state: done` while its process is alive (`pid` set), and `done` with no `pid` once it
+ended. session-status lists a live `done` as blocked, so there blocked means idle *or* waiting and done means retired.
+`status` tells them apart: `idle` (turn over), `waiting` (a permission prompt or question; `waitingFor` names it on
+newer engines), `busy` (mid-turn); `--activity` prints it. Read the session's last turn before saying what it waits on.
 
 ## Starting a session
 

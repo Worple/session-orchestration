@@ -42,7 +42,8 @@ usage: python3 -I retro.py [--until YYYY-MM-DDTHH:MM[:SS]] CMD [args] [--project
                                   median), share reaching `reply … done`, handovers, nudges, median minutes to done,
                                   escalations, median advisor calls per start and their USD (subagents' too); a
                                   sized start (--kind build:L) groups as build:L, one with an advisor
-                                  (plan.advisor.KIND) as build+fable
+                                  (plan.advisor.KIND) as build+fable. No usage log, or one starting after the
+                                  window's end: `unmeasured: WHY` on stderr, exit 2 (chunks says it too, and goes on)
   trial [days=28]                 the planner trial's arms side by side (tasks with a chunk session vs the rest):
                                   units, median USD and tokens per unit, peak, compactions, handoffs, /code-review
                                   findings and runs per unit, step-ins per unit
@@ -700,6 +701,22 @@ def log_lines(k):
                    and isinstance(o.get("t"), (int, float)) and o["t"] <= END), key=lambda o: o["t"])
 
 
+def log_gap():
+    """Why the usage log can't measure the window, or None: it's missing, empty, or starts after the window's end (an
+    old window rerun with --until). A log with lines by then measures, zeros included."""
+    log = os.path.join(STATE, "usage.jsonl")
+    if not os.path.exists(log):
+        return "no usage log (telemetry off, or nothing logged yet)"
+    ts = [o["t"] for _, o in lines(log) if isinstance(o, dict) and isinstance(o.get("t"), (int, float))]
+    if not ts:
+        return "the usage log has no lines"
+    if min(ts) > END:
+        return f"the usage log starts {time.strftime('%Y-%m-%d', time.gmtime(min(ts)))}, after the window's end"
+    if min(ts) > CUT:
+        print(f"partial: the usage log starts {time.strftime('%Y-%m-%d', time.gmtime(min(ts)))}, inside the window", file=sys.stderr)
+    return None
+
+
 def kinds(days=7):
     """Per kind, model and effort of the usage log's start lines in the window (session-status --kind KIND NAME): starts,
     joined (a session whose name hashes to the line's sess, started from it to that name's next start, plus its
@@ -710,6 +727,9 @@ def kinds(days=7):
     (median) and their USD sum, subagents' included. A start without sess (before the name was logged) is unjoined."""
     import hashlib
     window(days)
+    if gap := log_gap():   # empty rows would read as no starts: a measured zero
+        print(f"unmeasured: {gap}", file=sys.stderr)
+        sys.exit(2)
     ss = stats()
     epoch = lambda ts: P(ts).timestamp() if ts else 0
     by_hash = {}
@@ -761,6 +781,8 @@ def chunks(days=7, *opts):
     if str(days).startswith("--"):
         days, opts = 7, (days,) + opts
     window(days)
+    if gap := log_gap():   # the rows still measure the transcripts; only kind, effort, est and ratio are missing
+        print(f"unmeasured: kind, effort, est and ratio ({gap})", file=sys.stderr)
     o_ = dict(zip(opts[::2], opts[1::2]))
     if "--session" in o_:   # the session and the predecessors its Supersedes: chain reaches (a handed-over chunk)
         groups, files = {}, {os.path.basename(f)[:8]: f for f in transcripts()}
@@ -1547,7 +1569,7 @@ def usage(days=30):
                 at = f"{o['at']}@{o['v']}" if ":" in o.get("at", "") and o.get("v") else o.get("at")  # a file:line holds for its version; a --flag across them
                 h = (h[0], " ".join(str(x) for x in (h[1], at, n) if x not in (None, "")))
             if CUT <= o["t"] <= END:
-                if h in count or h[0] in ("path", *FAULTS):
+                if h in count or h[0] in ("path", "auto", *FAULTS):
                     count[h] = count.get(h, 0) + 1
     flags = [n for k, n in inv if k == "flag"]
     # The pane runs these itself (no transcript shows it): their presses are measured instead, never flagged here.
@@ -1590,9 +1612,9 @@ def usage(days=30):
     # ponytail: config keys have no use count (they're set in files, not called): listed, never flagged; count the
     # roots that set each one if a key's removal comes up. Presses count only with the log; path lines aren't inventoried.
     for k, n in sorted(count):
-        known = k not in ("config", "path", *FAULTS) and (k != "press" or on)
+        known = k not in ("config", "path", "auto", *FAULTS) and (k != "press" or on)
         unused = known and (k, n) not in pane and count[(k, n)] == 0 and first.get((k, n), today) <= start
-        logged = k in ("path", *FAULTS)
+        logged = k in ("path", "auto", *FAULTS)
         print(f"{k}\t{n}\t{count[(k, n)] if known or logged else '-'}\t{first.get((k, n), '-' if logged else today)}\t{'unused' if unused else ''}")
 
 

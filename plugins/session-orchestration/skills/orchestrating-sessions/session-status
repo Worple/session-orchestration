@@ -859,7 +859,7 @@ if [ "${1:-}" = --resume-ended ]; then
     [ "${#1}" -ge 8 ] || { echo "$1: an id needs 8+ characters: not resumed"; rc=2; return 1; }
     rm -f "$TMP/ask.failed"; all=$(list_sessions --all)
     [ ! -e "$TMP/ask.failed" ] || { echo "$1: couldn't list the sessions: not resumed"; rc=1; return 1; }
-    IFS=$'\037' read -r id name st _ _ _ _ _ pid <<<"$(awk -F'\t' -v w="$1" 'index($1, w) == 1' <<<"$all" | head -1 | tr '\t' '\037')"
+    IFS=$'\037' read -r id name st _ _ _ _ _ pid _ <<<"$(awk -F'\t' -v w="$1" 'index($1, w) == 1' <<<"$all" | head -1 | tr '\t' '\037')"
     [ -n "$id" ] || { echo "$1: not listed in any account: not resumed"; rc=2; return 1; }
     [ "$st" = failed ] && [ -z "$pid" ] || { echo "\"$name\" (${id:0:8}) is $st now, not ended: not resumed"; rc=3; return 1; }
     ended_free "$all" "$id" "$name" ||
@@ -1062,6 +1062,7 @@ if [ "${1:-}" = --changes ]; then
     while IFS=$'\t' read -r id kl name; do
       r=$("$SELF" --stop "$id" </dev/null 2>/dev/null) && [[ $r == stopped* ]] || { kept+="$kl"$'\n'; continue; }
       stopped+="  * $kl — \"$name\" (${id:0:8})"$'\n'
+      usage stop auto
       new=$(grep -vE " stop ${id:0:8}\$" <<<"$new")   # and from the baseline: its going isn't news beside Stopped
       [ ! -f "$last" ] || { grep -vE " stop ${id:0:8}\$" "$last" > "$last.$$"; mv "$last.$$" "$last"; }
     done < "$last.fin.$$"
@@ -1078,6 +1079,7 @@ if [ "${1:-}" = --changes ]; then
         git -C "$r" worktree remove "$wt" </dev/null >/dev/null 2>&1; } || continue
     if git -C "$r" branch -D "$br" </dev/null >/dev/null 2>&1; then stopped+="  * $kl — removed worktree $rel and branch $br"$'\n'
     else stopped+="  * $kl — removed worktree $rel (branch $br kept: git branch -D failed)"$'\n'; fi
+    usage remove auto
     # its Leftovers line, exactly as the sweep printed it, leaves the report and the baseline
     new=$(grep -vxF "  $ln" <<<"$new")
     [ ! -f "$last" ] || { grep -vxF "  $ln" "$last" > "$last.$$"; mv "$last.$$" "$last"; }
@@ -1396,7 +1398,7 @@ activity_fields() {
   printf '%s\t%s\t%s\t%s\t%s' "$doing" "${since:-0}" "$last" "${ctx:-0}" "$win"
 }
 # Reads a tab-separated session line into the named variables, empty fields kept (IFS=tab would collapse them).
-read_row() { IFS=$'\037' read -r "$@" <<<"$(tr '\t' '\037' <<<"$row")"; }
+read_row() { IFS=$'\037' read -r "$@" _ <<<"$(tr '\t' '\037' <<<"$row")"; }
 # The read row's session is mid-turn: busy (with no status: state working). Busy with state done is a stale flag (the
 # turn ended; a session limit can leave it busy), not mid-turn, once its last message ended the turn, or once its
 # transcript is a minute quiet. Not by quiet alone: a message to it and a /rename write there between turns.
@@ -2102,7 +2104,7 @@ landed() {  # CWD STARTED
     git -C "$top" merge-base --is-ancestor HEAD "$base" 2>/dev/null && [ "$(git -C "$top" log -1 --format=%ct)" -ge "${2:-0}" ]
 }
 # Whether a blocked session (Claude Code's state once a turn ends, and on a prompt) waits on the user; first match:
-#   stale BLOCKED  an open prompt (blocked_of, or status waiting unrecorded: `blocked: a prompt`, aged by its
+#   stale BLOCKED  an open prompt (blocked_of, or status waiting unrecorded: `blocked: WAITINGFOR`, else `blocked: a prompt`, aged by its
 #                  transcript) over an hour old whose worktree's work landed (landed): moot
 #   on BLOCKED     an open prompt newer than SESSION_STATUS_STALE_HOURS (6)
 #   stale BLOCKED  an older one, unanswered: an abandoned probe or a forgotten ask; listed apart, stop or answer it
@@ -2115,16 +2117,16 @@ landed() {  # CWD STARTED
 # Cached per run. Rules from the 2026-10-21 backtest.
 STALE_S=$(( ${SESSION_STATUS_STALE_HOURS:-6} * 3600 ))
 verdict() {  # ID
-  local c=$TMP/verdict.$1 st started cwd status b t f
+  local c=$TMP/verdict.$1 st started cwd status wf b t f
   [ -f "$c" ] || {
-    IFS=$'\037' read -r st started cwd status < <(awk -F'\t' -v id="$1" '$1==id {print $3 "\037" $5 "\037" $6 "\037" $8}' "$TMP/agents.all")
+    IFS=$'\037' read -r st started cwd status wf < <(awk -F'\t' -v id="$1" '$1==id {print $3 "\037" $5 "\037" $6 "\037" $8 "\037" $10}' "$TMP/agents.all")
     b=$(blocked_of "$1" "$status"); f=$(transcript_of "$1")
     if [ -n "$b" ] || [ "$status" = waiting ]; then
       if [ -n "$b" ]; then
         t=$(jq -r '.time // empty' ~/.cache/session-status/blocked/"$1".json 2>/dev/null)
         [ -n "$t" ] || t=$(mtime ~/.cache/session-status/blocked/"$1".json)
-      else   # a prompt hooks/blocked.sh didn't record: the transcript isn't written while it waits
-        b='blocked: a prompt'; t=$( { [ -n "$f" ] && mtime "$f"; } || echo "$NOW")
+      else   # a prompt hooks/blocked.sh didn't record (named by the engine's waitingFor when it has one): the transcript isn't written while it waits
+        b="blocked: ${wf:-a prompt}"; t=$( { [ -n "$f" ] && mtime "$f"; } || echo "$NOW")
       fi
       # Its work landed by another route: the prompt is moot. Not in its first hour: that may be a post-merge step.
       if [ -n "$cwd" ] && [ "$t" -lt $((NOW - 3600)) ] && landed "$cwd" "$started"; then printf 'stale\t%s · its work landed' "$b"
@@ -2352,14 +2354,16 @@ if [ -s "$TMP/cand" ] && [ -n "$ADAPTER" ]; then
       grep -qxF "$id" "$TMP/busy_ids" && continue   # also owns a task that's still open
       grep -qxF "$id" "$TMP/superseded.ids" && continue   # Other sessions says it's superseded
       t=$(mtime "$TRANSCRIPTS/$id.jsonl" 2>/dev/null) || t=$NOW   # transcript elsewhere: not known idle
-      # Only an idle or done session: a blocked one still waits on someone, however old.
-      awk -F'\t' -v id="$id" -v kl="$kl" -v old=$((t < NOW - RESOLVE_S)) \
-        '$1==id {printf "%s\t  %s — session \"%s\": %s stop %s\n", old && $3 ~ /^(idle|done)$/, kl, $2, $4, substr(id,1,8)}' "$TMP/agents"
-      # For the watcher's stop (--changes): a background session at rest (idle or done, not on a prompt), quiet
+      # Only a session at rest (idle, or blocked with status idle and not under Waiting on you): one on a prompt or
+      # asking the user still waits on someone, however old.
+      on=0; grep -qxF "$id" "$TMP/listed.ids" && on=1
+      awk -F'\t' -v id="$id" -v kl="$kl" -v old=$((t < NOW - RESOLVE_S)) -v on=$on \
+        '$1==id {printf "%s\t  %s — session \"%s\": %s stop %s\n", old && ($3 ~ /^(idle|done)$/ || ($3 == "blocked" && $8 == "idle" && !on)), kl, $2, $4, substr(id,1,8)}' "$TMP/agents"
+      # For the watcher's stop (--changes): a background session at rest (finished its turn, not on a prompt), quiet
       # STOP_AFTER_S (its last steps had time), not waiting on the user, and neither the caller nor a coordinator.
       grep -qxF "$id" "$TMP/listed.ids" || [ "$id" = "${CLAUDE_CODE_SESSION_ID:-}" ] || grep -q "/$id\.jsonl$" "$TMP/watchers" ||
         [ "$t" -gt $(( NOW - ${SESSION_STATUS_STOP_AFTER_S:-600} )) ] ||
-        awk -F'\t' -v id="$id" -v kl="$kl" '$1==id && $3 ~ /^(idle|done)$/ && $7 == "background" && $8 != "busy" && $8 != "waiting" {print id "\t" kl "\t" $2}' "$TMP/agents" >> "$TMP/finished"
+        awk -F'\t' -v id="$id" -v kl="$kl" '$1==id && ($3 ~ /^(idle|done)$/ || ($3 == "blocked" && $8 == "idle")) && $7 == "background" && $8 != "busy" && $8 != "waiting" {print id "\t" kl "\t" $2}' "$TMP/agents" >> "$TMP/finished"
     done
     # The watcher removes the key's worktrees only once no live session holds the key but ones it stops (finished).
     held=$(grep -vxF -f <(cut -f1 "$TMP/finished") <<<"$ids" | grep .)

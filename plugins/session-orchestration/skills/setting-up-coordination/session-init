@@ -8,7 +8,8 @@
 #                                   read it), the indented value lines open_pane reads (`review_inbox url: URL`,
 #                                   `notify after: N min`), and a line per warning (a config value not valid, a module that doesn't load whole,
 #                                   delegation still in CLAUDE.md, a second account with features.accounts off, a
-#                                   terminal detected but not recorded), and `team[ (DIR)]: section, memory, review-brief, adapter
+#                                   terminal detected but not recorded, `unmeasured: ID, why` for a migration detector that couldn't look:
+#                                   --migrate writes no stamp while one shows), and `team[ (DIR)]: section, memory, review-brief, adapter
 #                                   (trusted[, local wins])`: the team files git tracks in .claude/coordination/ and the
 #                                   committed CLAUDE.md's "Coordinated sessions (team)" section (section) (DIR,
 #                                   relative to the root, in a workspace's team repo), read before the person's
@@ -455,7 +456,10 @@ if [ "$mode" = check ]; then
                 rb=$(retro_brief "$orch" retro rnd); [ "${rb##*/}" != rnd-brief.md ] ||
                   echo "[m4 auto] old brief name $rb: session-status --init --migrate renames it retro-brief.md"
                 # the scheduled retro's old entry point in this account's crontab, for this root
-                crontab -l 2>/dev/null | grep -F rnd-weekly | tr -d "\"'" | awk -v r="$root" '{ for (i = 1; i <= NF; i++) if ($i == r) f = 1 } END { exit !f }' &&
+                # A crontab that can't be read (permission denied) isn't one without the line: say so. No crontab
+                # command: there's no crontab to hold it.
+                ct=$(command -v crontab >/dev/null && crontab -l 2>&1) || { ! command -v crontab >/dev/null || grep -qi 'no crontab' <<<"$ct" || echo "unmeasured: m5, crontab -l failed: $(head -1 <<<"${ct:-no output}" | cut -c1-80)"; ct=; }
+                grep -F rnd-weekly <<<"$ct" | tr -d "\"'" | awk -v r="$root" '{ for (i = 1; i <= NF; i++) if ($i == r) f = 1 } END { exit !f }' &&
                   echo "[m5 ask] the crontab still runs rnd-weekly for this folder: replace that line with the one session-status's retro-run --install prints"
                 # a start mode kept in memory from before the start.mode key (0.99)
                 if [ -n "$memf" ] && ! coord_json 2>/dev/null | jq -e '.start.mode != null' >/dev/null 2>&1; then
@@ -833,17 +837,21 @@ if [ "$mode" = migrate ]; then
   done
   [ -z "$dec" ] || echo "declined:$dec (--check still names them; --apply=ID applies one)"
   if [ -n "$dry" ]; then
+    um=$(grep '^unmeasured: ' <<<"$chk" | paste -sd';' -)
     if [ -n "$open" ]; then echo "stamp: not yet (open:$open)"; elif [ -n "$waiting" ]; then echo "stamp: not yet (team PR open:$waiting)"
+    elif [ -n "$um" ]; then echo "stamp: not yet ($um)"
     else echo "stamp: would write layout $LAYOUT to $(tilde "$stamp")"; fi
     exit 0
   fi
   [ -z "$failed" ] || { echo "stamp: not written (failed:$failed; --check still names it, files left where they are)"; exit 1; }
   # the detectors decide: an auto fix that left its line is a failure too (an open or declined one isn't)
-  left=$(bash "$0" --check 2>/dev/null | grep -E '^\[m[0-9]+ auto\] ')
+  c2=$(bash "$0" --check 2>/dev/null); left=$(grep -E '^\[m[0-9]+ auto\] ' <<<"$c2")
   x=$(echo $open $declined $waiting | tr ' ' '|'); [ -z "$x" ] || [ -z "$left" ] || left=$(grep -vE "^\[($x) auto\] " <<<"$left")
   [ -z "$left" ] || { echo "stamp: not written, still found:"; sed 's/^/  /' <<<"$left"; exit 1; }
   [ -z "$open" ] || { echo "stamp: not yet (open:$open)"; exit 0; }
   [ -z "$waiting" ] || { echo "stamp: not yet (team PR open:$waiting)"; exit 0; }
+  # a detector that couldn't look found nothing only by not looking: the stamp would end the checks for good
+  um=$(grep '^unmeasured: ' <<<"$c2" | paste -sd';' -); [ -z "$um" ] || { echo "stamp: not yet ($um)"; exit 0; }
   dec=$(jq -c '.declined // []' "$stamp" 2>/dev/null); ver=$(jq -r .version "$LIB_DIR/.claude-plugin/plugin.json")
   mkdir -p "$P" && jq -n --argjson l "$LAYOUT" --arg v "$ver" --arg at "$(ts)" --argjson d "${dec:-[]}" \
     '{layout: $l, plugin: $v, at: $at, declined: $d}' > "$stamp.tmp" && mv "$stamp.tmp" "$stamp" || exit 1

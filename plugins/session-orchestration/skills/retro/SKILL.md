@@ -141,7 +141,8 @@ and no heading.
      (messages, skill, `worker.md`, card and reply loads by session kind).
    - `features`: `usage 30 > usage.tsv` and `events 30 > events30.tsv`.
    - `sizing`: `chunks 7 > chunks.tsv` and `trial > trial.tsv` when the usage log has chunk lines; `kinds 7 >
-     kinds.tsv` when it has start lines.
+     kinds.tsv` when it has start lines. Exit 2 with `unmeasured: WHY` on stderr (no usage log, or one starting after
+     the window's end) is no measurement: write that line in the report, never a zero.
    - The plugin series' first run (no `retro-plugin-<N>.md` yet) also runs every command above again with
      `--until <this window's start>` into `<R>/retro/plugin-1/prev/`: the "last run" column. Its rnd-run reports
      mixed both scopes, so they are not its baseline.
