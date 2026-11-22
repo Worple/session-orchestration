@@ -69,6 +69,16 @@ grep -qF -- "orchestrating-sessions/session-status --handover --self -- '<next s
 out=$(fire chunk4 "$chunk" 151000); grep -qF -- '--handover --self' <<<"$out" && ! grep -qF -- '--coordinator' <<<"$out" || fail "chunk hard self-handover: $out"
 [ -z "$(grep -l window "$t"/cache/session-status/* 2>/dev/null)" ] || fail 'window line under the expected window'
 
+# A sub-coordinator (`Coordinate KEY`): the coordinator's mark, a worker's self-handover from KEY-coordinator.md, and
+# its coordinator commands (a --watch, open_pane) never make it the project's coordinator.
+sc='Coordinate PROJ-123: run the plan.'
+watch='{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"session-status --watch PROJ-123"}}]}}'
+LINE=$watch expect subc "$sc" 144000 ''
+out=$(LINE=$watch fire subc "$sc" 146000)
+grep -q '## Handoff` in PROJ-123-coordinator.md' <<<"$out" && grep -qF -- '--handover --self' <<<"$out" &&
+  grep -q 'handoff ready: PROJ-123"' <<<"$out" && ! grep -q 'handover file' <<<"$out" || fail "sub-coordinator soft: $out"
+grep -q '^subcoordinator PROJ-123 ' "$t/cache/session-status/handoff-subc.kind" || fail "sub-coordinator .kind: $(cat "$t/cache/session-status/handoff-subc.kind")"
+EXTRA='{"tool_name": "mcp__session-orchestration__open_pane", "tool_input": {}}' LINE=$pane expect subc "$sc" 171000 'Stop now.*PROJ-123-coordinator.md'
 # Window 200000 from env: the mismatch line once, and a lower hard (ceiling 167K - 15K = 152K; at 142K).
 export CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000
 expect cw "$coord" 143000 "at 143K: hand off.*window is 200000 from env; expected 220000"
@@ -211,6 +221,10 @@ EXTRA="{\"cwd\": \"$t/proj2\"}" expect bare2 'PROJ-1: fix it' 146000 'handoff re
 # `Session task: KEY.` drops the period.
 fire dot $'Session task: PROJ-123.\nFix it.' 1000 >/dev/null; read -r _ k _ < "$t/cache/session-status/handoff-dot.kind"
 [ "$k" = PROJ-123 ] || fail "key kept its period: $k"
+# A coordinator's .kind: no key (`-`), a `Coordinate …` that names none isn't a sub.
+fire ck "$coord" 1000 >/dev/null; fire ck2 'Coordinate the release.' 1000 >/dev/null
+read -r kd k _ < "$t/cache/session-status/handoff-ck.kind"; [ "$kd $k" = 'coordinator -' ] || fail "coordinator .kind: $kd $k"
+read -r kd k _ < "$t/cache/session-status/handoff-ck2.kind"; [ "$kd $k" = 'task -' ] || fail "keyless Coordinate .kind: $kd $k"
 # A window too small for the stop room: 60% and 80% of it; a window of 0 is unknown: config's at and hard.
 CLAUDE_CODE_AUTO_COMPACT_WINDOW=40000 expect w40 "$task" 4500 'at 4K: hand off.*too small for handoff.stop_room'
 CLAUDE_CODE_AUTO_COMPACT_WINDOW=40000 expect w40 "$task" 5700 'Stop now'
@@ -237,6 +251,12 @@ rm "$XDG_CONFIG_HOME/session-orchestration/config.json"
 cd "$t/proj"; . "$here/../lib.sh"
 chunk_of 'Chunk: foo' && fail 'Chunk: foo is a chunk'
 [ "$(chunk_of $'Session task: PROJ-123\nChunk: PROJ-123/3b')" = 'PROJ-123 3b' ] || fail 'chunk_of PROJ-123/3b'
+# first_key takes `Coordinate KEY`; sub_key only that, on the first line, and fails on anything else.
+KEYRE=$(key_re)
+[ "$(first_key 'Coordinate PROJ-12: x')" = PROJ-12 ] && [ "$(first_key 'Work on PROJ-3.')" = PROJ-3 ] || fail first_key
+[ "$(sub_key $'Coordinate PROJ-12: continue\nSupersedes: x')" = PROJ-12 ] || fail 'sub_key Coordinate PROJ-12'
+! sub_key 'Work on PROJ-12' && ! sub_key $'Fix it.\nCoordinate PROJ-12' && ! sub_key 'Coordinate the release' &&
+  ! sub_key 'Act as a coordinator' || fail 'sub_key on a non-sub'
 [ "$(config handoff.at.chunk)" = 125000 ] || fail "handoff.at.chunk default"
 [ "$(config compact.window)" = 220000 ] && [ "$(config plan.models.scan)" = haiku/low ] && [ "$(config plan.max_parallel)" = 3 ] || fail defaults
 echo '{"handoff": {"at": {"chunk": 90000}}, "plan": {"max_parallel": 0, "models": {"build": "fable/high", "review": "opus/ultra", "design": "sonnet/max"}}}' > "$XDG_CONFIG_HOME/session-orchestration/config.json"

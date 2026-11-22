@@ -83,6 +83,22 @@ chmod +x "$tmp/bin/claude"; : > "$tmp/calls"; }
 
 if section board; then
 [ "$(run --coordinator)" = coord ] && [ -z "$(CLAUDE_CODE_SESSION_ID=$cid run --coordinator)" ] || { echo "--coordinator failed"; exit 1; }
+# Scope-aware: ABC-12's worker gets its sub-coordinator, ABC-12-coordinator, first; no one else sees the sub, the sub
+# itself gets the project's coordinator.
+bid=12121212-2222-3333-4444-555555555555; mkdir -p "$tmp/bin4"
+printf '%s\n' '{"type":"user","message":{"content":"Coordinate ABC-12: run the plan"}}' '{"type":"assistant","input":{"command":"session-status --watch ABC-12"}}' > "$proj/$bid.jsonl"
+printf '#!/bin/sh\necho %s\n' "'[{\"sessionId\":\"$sid\",\"name\":\"fix it\",\"cwd\":\"$root\",\"status\":\"idle\"},{\"sessionId\":\"$cid\",\"name\":\"coord\",\"cwd\":\"$root\",\"status\":\"idle\"},{\"sessionId\":\"$bid\",\"name\":\"ABC-12-coordinator\",\"cwd\":\"$root\",\"status\":\"idle\"}]'" > "$tmp/bin4/claude"; chmod +x "$tmp/bin4/claude"
+run4() { (cd "$root" && HOME=$tmp XDG_STATE_HOME=$tmp/state CLAUDE_CONFIG_DIR=$tmp/cfg PATH=$tmp/bin4:$PATH "$here/session-status" "$@"); }
+[ "$(CLAUDE_CODE_SESSION_ID=$sid run4 --coordinator | paste -sd'|' -)" = 'ABC-12-coordinator|coord' ] &&
+  [ "$(run4 --coordinator | paste -sd'|' -)" = coord ] && [ "$(CLAUDE_CODE_SESSION_ID=$bid run4 --coordinator | paste -sd'|' -)" = coord ] ||
+  { echo "--coordinator, sub-coordinator: worker $(CLAUDE_CODE_SESSION_ID=$sid run4 --coordinator | paste -sd'|' -), none $(run4 --coordinator | paste -sd'|' -)"; exit 1; }
+# Its successor (handing over: both named ABC-12-coordinator) gets the project's coordinator, not the old sub.
+b2=13131313-2222-3333-4444-555555555555; printf '%s\n' '{"type":"user","message":{"content":"Coordinate ABC-12: continue from replies/ABC-12-coordinator.md"}}' > "$proj/$b2.jsonl"
+printf '#!/bin/sh\necho %s\n' "'[{\"sessionId\":\"$sid\",\"name\":\"fix it\",\"cwd\":\"$root\",\"status\":\"idle\"},{\"sessionId\":\"$cid\",\"name\":\"coord\",\"cwd\":\"$root\",\"status\":\"idle\"},{\"sessionId\":\"$bid\",\"name\":\"ABC-12-coordinator\",\"cwd\":\"$root\",\"status\":\"idle\"},{\"sessionId\":\"$b2\",\"name\":\"ABC-12-coordinator\",\"cwd\":\"$root\",\"status\":\"idle\"}]'" > "$tmp/bin4/claude"
+[ "$(CLAUDE_CODE_SESSION_ID=$b2 run4 --coordinator | paste -sd'|' -)" = coord ] && [ "$(CLAUDE_CODE_SESSION_ID=$sid run4 --coordinator | paste -sd'|' -)" = 'ABC-12-coordinator|coord' ] ||
+  { echo "--coordinator, sub successor: $(CLAUDE_CODE_SESSION_ID=$b2 run4 --coordinator | paste -sd'|' -); $(cat "$tmp/bin4/claude")"; exit 1; }
+rm "$proj/$b2.jsonl"
+rm "$proj/$bid.jsonl"
 # A ready successor (coord-next, handover/coord.ready) goes before the old one still holding the name, though older.
 nid=77777777-2222-3333-4444-555555555555; mkdir -p "$tmp/bin3"
 echo '{"type":"assistant","input":{"command":"session-status --changes"}}' > "$proj/$nid.jsonl"; touch -t "$(date -d "-1 hours" +%Y%m%d%H%M 2>/dev/null || date -v-1H +%Y%m%d%H%M)" "$proj/$nid.jsonl"
@@ -673,6 +689,12 @@ out=$(run --owner ABC-101)
   grep -q '^  f1000002 marker · closed [0-9]*h · first: Session task: rnd-skills (no ticket). Study skills · marks: ABC-101$' <<<"$out" &&
   [ "$(sed -n 2p <<<"$out" | cut -c3-10)" = f1000001 ] && [ "$(run --owner x; echo $?)" = "$(printf 'usage: session-status --owner KEY [KEY…]\n2')" ] ||
   { echo "--owner failed: $out"; exit 1; }
+# A sub-coordinator (`Coordinate KEY`) owns KEY though it runs --watch, before its newer chunk sessions.
+tid=f100000b-2222-3333-4444-555555555555 ago=300; tj "$(up 'Coordinate ABC-107: run the plan')" "$(ran 'session-status --watch ABC-107')"
+tid=f100000c-2222-3333-4444-555555555555 ago=1; tj "$(up 'Session task: ABC-107\nChunk: ABC-107/1\nRead the brief.')"
+out=$(run --owner ABC-107)
+[ "$(head -1 <<<"$out" | sed 's/ closed [0-9]*h$//')" = 'ABC-107: sess:f100000b' ] && grep -q '^  f100000b subcoordinator · ' <<<"$out" &&
+  grep -q '^  f100000c first-prompt · ' <<<"$out" || { echo "--owner, sub-coordinator: $out"; exit 1; }
 rm "$proj"/f100000*.jsonl
 # A session in one of the adapter's session-dirs shows under Other sessions and never owns a task.
 mkdir -p "$tmp/tools"; tools=$(cd "$tmp/tools" && pwd -P)
@@ -1041,6 +1063,18 @@ out=$(run --handover "$gid" 'Go on'); grep -q 'superseded by "abc-41 thing" (abc
   calls | grep -qF "cfg --bg --permission-mode default -n abc-41 thing Work on ABC-41: continue from replies/ABC-41.md. Go on. Supersedes: $gid" ||
   { echo "handover of a status-running worker failed"; calls; exit 1; }
 rm "$tmp/cfg/settings.json"
+# A sub-coordinator hands over from its KEY-coordinator.md (KEY.md is its plan), keeps its name and stays a sub.
+sbid=b5b5b5b5-2222-3333-4444-555555555555
+printf '%s\n' '{"type":"user","message":{"content":"Coordinate ABC-45: run the plan"}}' '{"type":"assistant","input":{"command":"session-status --watch ABC-45"}}' > "$proj/$sbid.jsonl"
+echo plan > "$root/replies/ABC-45.md"; setacct cfg "$(sess "$sbid" ABC-45-coordinator idle 1)"; calls >/dev/null
+out=$(run --handover "$sbid" 'Go on') && rc=0 || rc=$?
+[ "$rc" = 2 ] && [ "$out" = 'no replies/ABC-45-coordinator.md: ask "ABC-45-coordinator" for a status report first, or write one' ] ||
+  { echo "sub-coordinator handover without its report: $rc $out"; exit 1; }
+echo report > "$root/replies/ABC-45-coordinator.md"
+out=$(run --handover "$sbid" 'Go on'); grep -q 'superseded by "ABC-45-coordinator" (abcdef12)' <<<"$out" &&
+  calls | grep -qF "cfg --bg -n ABC-45-coordinator Coordinate ABC-45: continue from replies/ABC-45-coordinator.md. Go on. Supersedes: $sbid" ||
+  { echo "sub-coordinator handover: $out"; calls; exit 1; }
+rm "$proj/$sbid.jsonl"
 # A chunk session: no KEY.md needed; --model/--effort and the four chunk lines reach `claude --bg`, named KEY-cN.
 kid=dddddddd-2222-3333-4444-555555555555
 jq -nc '{type: "user", message: {content: "Session task: PROJ-9\nChunk: PROJ-9/3b\nRead the brief."}}' > "$proj/$kid.jsonl"
@@ -1336,6 +1370,9 @@ rf=$root/replies/p-fix-thing.md
   [ "$(printf 'cached key' | as "$z" --report-file "$z")" = "$root/replies/PROJ-8.md" ] && rm "$root/replies/PROJ-8.md" &&
   printf 'chunk PROJ-7 2 0 0\n' > "$tmp/.cache/session-status/handoff-$z.kind" &&
   [ "$(printf 'chunk report' | as "$z" --report-file "$z")" = "$rf" ] && [ ! -e "$root/replies/PROJ-7.md" ] &&
+  printf 'subcoordinator PROJ-6 - 0 0\n' > "$tmp/.cache/session-status/handoff-$z.kind" &&
+  [ "$(printf 'sub report' | as "$z" --report-file "$z" PROJ-6)" = "$root/replies/PROJ-6-coordinator.md" ] && [ ! -e "$root/replies/PROJ-6.md" ] &&
+  rm "$root/replies/PROJ-6-coordinator.md" &&
   rm "$tmp/.cache/session-status/handoff-$z.kind" &&
   [ -z "$(find "$root/replies" -name '*.md.[0-9]*')" ] || { echo "--report-file"; cat "$rf"; exit 1; }
 [ "$(printf 'x' | as "$z" --report-file 0d0d0d0d-1111-3333-4444-555555555555 2>&1; echo $?)" = "$(printf 'session 0d0d0d0d has no name to file the report under: pass key, or name_session first\n2')" ] &&

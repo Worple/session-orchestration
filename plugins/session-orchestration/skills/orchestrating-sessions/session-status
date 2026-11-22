@@ -119,7 +119,9 @@
 #        session-status --coordinator   names of this account's live coordinator sessions (ran --start,
 #                       --changes, --watch or --owner, or opened the pane), newest first, excluding the caller (a
 #                       ready successor NAME-next before an old one still holding NAME), then
-#                       (features.accounts on) another account's by their live socket's uds: address; no tracker calls
+#                       (features.accounts on) another account's by their live socket's uds: address; no tracker calls.
+#                       A caller whose first prompt names KEY gets the live KEY-coordinator (its sub-coordinator,
+#                       first prompt `Coordinate KEY`) before them; a sub-coordinator is listed to no other caller
 #        session-status --address NAME|ID [--other]   the uds: address SendMessage reaches a live session at, any
 #                       listed account (--other: another one's only, by exact name, exit 4 when this one's matches,
 #                       3 whenever a listing failed); exit 1 no live socket, 2 none or several match, 3 a listing failed
@@ -176,7 +178,8 @@
 # a task, nor shows as a leftover: under Other sessions it reads `· superseded by NEWID`.
 # Transcripts that ran session-status (or a status-names command) with --start, --changes, --watch or --owner, or that
 # opened the pane (open_pane), are a coordinator's and never own a task; a plain run (a worker checking its own
-# task) doesn't count.
+# task) doesn't count. A sub-coordinator (first prompt `Coordinate KEY`, named KEY-coordinator: lib.sh sub_key) is the
+# exception: it owns KEY before any other session, and --coordinator lists it only to KEY's own sessions, first.
 # The default key pattern also matches UTF-8 or SHA-256; a project with real keys should answer key-pattern.
 set -uo pipefail
 [ "${1:-}" = --init ] && { shift; exec bash "$(dirname "$0")/../setting-up-coordination/session-init" "$@"; }
@@ -469,16 +472,20 @@ if [ "${1:-}" = --inbox-add ]; then
 fi
 # --report-file SESSION_ID [KEY] < REPORT: the reply tool's `report`, the status report at the top of <replies>/<KEY>.md
 # (the file --handover reads; worker.md, The replies file). No KEY: the task key context-watch.sh cached for that
-# session, else its name less a -prev-K. It replaces what precedes the first `## Handoff` and keeps that section on,
+# session, else its name less a -prev-K; a sub-coordinator's (`Coordinate KEY`), always KEY-coordinator. It replaces what precedes the first `## Handoff` and keeps that section on,
 # so a report never drops the handoff; a report with its own `## Handoff` replaces it. Exit 3: no replies folder.
 if [ "${1:-}" = --report-file ]; then
   rd=$(replies_path); [ -n "$rd" ] || { echo "$ROOT/CLAUDE.md names no replies folder" >&2; exit 3; }
   body=$(cat); [ -n "${body//[[:space:]]/}" ] && [ -n "${2:-}" ] || { echo "usage: session-status --report-file SESSION_ID < REPORT" >&2; exit 2; }
   ok='^[A-Za-z0-9][A-Za-z0-9._-]*$'
-  if [ -n "${3:-}" ]; then n=$3; [[ $n =~ $ok ]] || { echo "key \"$n\": letters, digits, . _ - only (a keyless task: its session name)" >&2; exit 2; }
+  kd= ck=; [[ $2 =~ ^[A-Za-z0-9_-]+$ ]] && read -r kd ck _ 2>/dev/null < "${XDG_CACHE_HOME:-$HOME/.cache}/session-status/handoff-$2.kind" || kd=
+  # a sub-coordinator (context-watch's kind) files under its name, KEY-coordinator, whatever key it passes: KEY.md is its plan
+  # shortcut: relies on .kind (written at its first prompt); classify here too if a sub ever reports before that
+  if [ "$kd" = subcoordinator ] && [[ $ck =~ $ok ]]; then n=$ck-coordinator
+  elif [ -n "${3:-}" ]; then n=$3; [[ $n =~ $ok ]] || { echo "key \"$n\": letters, digits, . _ - only (a keyless task: its session name)" >&2; exit 2; }
   else
     # a task's cached key only: a chunk's second field is its plan's key, and KEY.md is the plan
-    n=; [[ $2 =~ ^[A-Za-z0-9_-]+$ ]] && read -r kd n _ 2>/dev/null < "${XDG_CACHE_HOME:-$HOME/.cache}/session-status/handoff-$2.kind" && [ "$kd" = task ] || n=
+    n=; [ "$kd" != task ] || n=$ck
     [[ $n =~ $ok ]] || { n=$(list_sessions | awk -F'\t' -v s="$2" '$1 == s { print $2; exit }'); [[ $n =~ ^(.+)-prev-[0-9]+$ ]] && n=${BASH_REMATCH[1]}; }
     [[ $n =~ $ok ]] || { echo "session ${2:0:8} has no name to file the report under${n:+ (\"$n\")}: pass key, or name_session first" >&2; exit 2; }
   fi
@@ -1742,6 +1749,8 @@ if [ -n "$HANDOVER" ]; then
     [ "$(grep -c . <<<"$keys")" = 1 ] || { echo "\"$name\" (${id:0:8}) names several task keys ($(paste -sd' ' - <<<"$keys")): hand over by hand"; exit 2; }
     key=$keys
   fi
+  # a sub-coordinator (`Coordinate KEY`) hands over from KEY-coordinator.md (KEY.md is its plan) and stays a sub
+  hf=$key; sk=; [ -n "$n" ] || ! sk=$(sub_key "$first") || [ "$sk" != "$key" ] || hf=$key-coordinator
   pairs=$(ls "$(dirname "$f")"/*.jsonl 2>/dev/null | supersedes)
   succ=$(awk -v id="$id" '$1 == id {print substr($2, 1, 8)}' <<<"$pairs" | tail -1)
   [ -z "$succ" ] || { echo "\"$name\" (${id:0:8}) is superseded by $succ already: not handed over again"; exit 2; }
@@ -1751,7 +1760,7 @@ if [ -n "$HANDOVER" ]; then
     [ "$status" = waiting ] && { echo "\"$name\" is waiting on a prompt: not handed over; answer it first ($pre attach ${id:0:8})"; exit 3; }
     [ "$kind" = background ] || { echo "\"$name\" is interactive: close it in its terminal, then hand over"; exit 3; }
   fi
-  [ -n "$n" ] || [ -f "$rd/$key.md" ] || { echo "no $rdir/$key.md: ask \"$name\" for a status report first, or write one"; exit 2; }
+  [ -n "$n" ] || [ -f "$rd/$hf.md" ] || { echo "no $rdir/$hf.md: ask \"$name\" for a status report first, or write one"; exit 2; }
   if [ -n "$n" ]; then
     b=$rd/$key-build.md own="\`## c$n: handoff ${id:0:8}\`"
     ! grep -qE "^## c$n: done" "$b" 2>/dev/null || { echo "c$n is done (## c$n: done in $rdir/$key-build.md): nothing to hand over"; exit 2; }
@@ -1794,7 +1803,7 @@ if [ -n "$HANDOVER" ]; then
       "$key" "$key" "$n" "$id" "$n" "$rd" "$key" "$rd" "$key" "$n" "$next")
   else
     hist=; [ -z "$PENDING" ] || hist=$(bash "$(dirname "$SELF")/pending" history --find "$key" 2>/dev/null)
-    text="Work on $key: continue from $rdir/$key.md. ${next%.}. Supersedes: $id (transcript $f; read only the parts you need, never whole).${hist:+ The history of its handoff entry, if you need it: $hist (on demand, not up front).}"
+    text="$([ "$hf" = "$key" ] && echo Work on || echo Coordinate) $key: continue from $rdir/$hf.md. ${next%.}. Supersedes: $id (transcript $f; read only the parts you need, never whole).${hist:+ The history of its handoff entry, if you need it: $hist (on demand, not up front).}"
     # a retro run keeps its retro-SCOPE-DATE name, which `Work on retro` doesn't match: context-watch keys it by marker
     [ "${bn:-}" != retro ] || [ "$new" = retro ] || text=$text$'\nSession task: retro'
   fi
@@ -1849,7 +1858,7 @@ if [ -n "$ACT" ]; then
 fi
 
 # Owning session per key (transcripts from the last 30 days):
-#  1. exact: the key a session's first prompt starts with (first_key), else a "Session task: KEY" line in its own
+#  1. exact: the key a sub-coordinator coordinates (sub_key), then the key a session's first prompt starts with (first_key), else a "Session task: KEY" line in its own
 #     text or a message it received (not a tool input: a brief it sends names another session's task). A first
 #     prompt beats a marker however recent the marker (a misrouted session writing one can't take the task);
 #     among equals the newest session wins. "Session task: KEY review" makes it KEY's reviewer ($TMP/reviews),
@@ -1867,12 +1876,21 @@ CRE=$(coord_re "$names")
 # don't count here). Newest transcript first: this account's by name, then another account's (features.accounts on)
 # by the `uds:` address SendMessage reaches it at, which its name doesn't. One grep, not the scan cache below: a cold
 # cache would cost a session's report its whole scan.
+# Scope-aware: a caller whose first prompt names KEY (Session task, Chunk, Work on) gets the live KEY-coordinator, its
+# sub-coordinator, first; a sub-coordinator is never listed otherwise (its own replies go to the project's).
 if [ -n "$COORD" ]; then
+  me=${CLAUDE_CODE_SESSION_ID:-} mf=; [ -z "$me" ] || mf=$(first_prompt "$TRANSCRIPTS/$me.jsonl" 50)
+  # a sub itself: none (during its self-handover its successor holds the same name until the old one renames itself)
+  # shortcut: by name, so in that window a worker's send may reach the old sub; list by id if replies get lost there
+  if ck=$(chunk_of "$mf"); then ck=${ck% *}; elif sub_key "$mf" >/dev/null; then ck=; else ck=$(first_key "$mf"); fi
+  # under another account: its socket address, as below
+  [ -z "$ck" ] || awk -F'\t' -v n="$ck-coordinator" -v me="$me" '$2 == n && $1 != me {print $4 "\t" $2 "\t" $9; exit}' "$TMP/agents" |
+    while IFS=$'\t' read -r acct nm pid; do if [ "$acct" = claude ]; then echo "$nm"; else sock_addr "$pid" || :; fi; done
   tr '\n' '\0' < "$TMP/files" | xargs -0 grep -l -E "$CRE" > "$TMP/watchers"
   { IFS=$'\n' read -d '' -ra w < "$TMP/watchers"; [ ${#w[@]} = 0 ] || mtime_named "${w[@]}"; } | sort -rn | sed -E 's#.*/##; s#\.jsonl$##' |
     while read -r id; do
-      [ "$id" = "${CLAUDE_CODE_SESSION_ID:-}" ] ||
-        awk -F'\t' -v id="$id" '$1==id && $2 !~ /-prev-[0-9]+$/ {print $4 "\t" $2 "\t" $9 "\t" $1}' "$TMP/agents"
+      [ "$id" != "$me" ] && l=$(awk -F'\t' -v id="$id" '$1==id && $2 !~ /-prev-[0-9]+$/ {print $4 "\t" $2 "\t" $9 "\t" $1}' "$TMP/agents") &&
+        [ -n "$l" ] && ! sub_key "$(first_prompt "$TRANSCRIPTS/$id.jsonl" 50)" >/dev/null && echo "$l"
     done > "$TMP/coords"
   # A ready successor goes before an old one still holding NAME: that one is retiring, and a message to it costs a
   # forward and a turn of it. The successor is the id in handover/NAME.next (a Desktop one, under whatever name it is
@@ -1894,22 +1912,25 @@ fi
 #   w             a coordinator's (CRE)
 #   fk ID KEY     the key its first prompt starts with (first_key)
 #   rv KEY ID     a "Session task: KEY review" marker; rr ID once: a reviewer, never an owner
-#   own KEY 1|0 MTIME ID   a key it names by first prompt (1) or marker (0); a reviewer has none
+#   own KEY 2|1|0 MTIME ID   a key it coordinates (2: `Coordinate KEY`, before its chunks), names by first prompt (1)
+#                 or by marker (0); a reviewer has none
 #   sup OLD       a Supersedes: OLD in its first prompt (a short OLD is resolved per sweep, against the files then)
 #   men N KEY ID  KEY named N times in its own text and the prompts it received (not tool results: a listing or
 #                 grep hit isn't work)
 # ponytail: a continued session's first prompt is the compaction summary, so it relies on the marker.
 SCANV=1
 scan_one() {  # MTIME FILE
-  local f=$2 id first fk marks rev k
+  local f=$2 id first fk marks rev k sk
   id=$(basename "$f" .jsonl)
-  ! grep -qE "$CRE" "$f" || echo w
-  first=$(first_prompt "$f")
+  first=$(first_prompt "$f"); sk=$(sub_key "$first")
+  [ -n "$sk" ] || ! grep -qE "$CRE" "$f" || echo w   # a sub-coordinator owns its KEY: never a watcher here
   fk=$(first_key "$first")
   [ -z "$fk" ] || echo "fk $id $fk"
   marks=$(marks_of "$first" "$f")
   rev=$(grep -E ' review[.,;:!)]?$' <<<"$marks" | grep -oE "$KEYRE")
-  if [ -n "$rev" ]; then
+  # a sub owns its KEY only: a `Session task: OTHER` it quotes or is sent is a worker's, not its
+  if [ -n "$sk" ]; then echo "own $sk 2 $1 $id"
+  elif [ -n "$rev" ]; then
     for k in $rev; do echo "rv $k $id"; done; echo "rr $id"
   else
     { [ -z "$fk" ] || echo "$fk"; grep -oE "$KEYRE" <<<"$marks"; } | sort -u | while read -r k; do
@@ -1925,7 +1946,7 @@ scan_one() {  # MTIME FILE
 }
 # One cache per salt (this format, the code and patterns that make the tags, the transcripts folder), so sweeps of two
 # plugin versions or accounts never empty each other's. Others idle a day are dropped.
-salt=$(printf '%s\n' "$SCANV" "$KEYRE" "$CRE" "$SUPRE" "$TRANSCRIPTS" "$(declare -f scan_one first_prompt first_key marks_of)" |
+salt=$(printf '%s\n' "$SCANV" "$KEYRE" "$CRE" "$SUPRE" "$TRANSCRIPTS" "$(declare -f scan_one first_prompt first_key sub_key marks_of)" |
   cksum | cut -d' ' -f1)
 SCAN=~/.cache/session-status/$ENC.scan/$salt; mkdir -p "$SCAN"
 find "${SCAN%/*}" -mindepth 1 -maxdepth 1 -type d ! -name "$salt" -mtime +1 -exec rm -rf {} + 2>/dev/null || :
@@ -2092,7 +2113,7 @@ if [ -n "$OWNER" ]; then
     echo "$k: $(session_for "$k")"
     # A superseded one last: the owner (owners.exact's pick) prints first.
     { awk -v k="$k" -v ssf="$TMP/superseded.ids" 'BEGIN { while ((getline l < ssf) > 0) s[l] }
-        $1==k {print ($4 in s), $4, ($2 ? "first-prompt" : "marker")}' "$TMP/owners.all" | sort -s -k1,1n | cut -d' ' -f2-
+        $1==k {print ($4 in s), $4, ($2 == 2 ? "subcoordinator" : $2 ? "first-prompt" : "marker")}' "$TMP/owners.all" | sort -s -k1,1n | cut -d' ' -f2-
       awk -v k="$k" '$1==k {print $2, "review"}' "$TMP/reviews"
       awk -v k="$k" '$1==k && n++ < 3 {print $3, "maybe:" $2 "-mentions"}' "$TMP/guess.all"
     } | awk '!s[$1]++' | while read -r id rule; do

@@ -1155,6 +1155,24 @@ test('usage names: fixed words lib.sh usage accepts', () => {
   expect(names.every(n => /^[a-z0-9-]{1,40}$/.test(n))).toBe(true)
 })
 
+test('open_pane refuses in a sub-coordinator (context-watch\'s .kind says subcoordinator)', async ($, on) => {
+  mock.env(on, { HOME: '/h' })
+  on('session.id', async () => ({ value: 'sess-s' }))
+  const read: string[] = []
+  on('fs.read', async (_, e) => {
+    read.push(e.path)
+    return { value: 'subcoordinator PROJ-123 - 145000 170000 \n' }
+  })
+  let opened = 0
+  on('ui.open', async () => {
+    opened++
+    return { value: { isPlaced: true } }
+  })
+  const r = await $.tool.call({ tool: 'mcp__session-orchestration__open_pane' })
+  expect(r.deny).toBe('open_pane: a sub-coordinator has no pane: queue asks with ask_approval; the parent\'s pane shows them.')
+  expect([read, opened]).toEqual([['/h/.cache/session-status/handoff-sess-s.kind'], 0])
+})
+
 test('a message from another session stamps .msg for the reply card; an agent\'s does not', async ($, on) => {
   mock.env(on, { HOME: '/h' })
   on('session.id', async () => ({ value: 'sess-1' }))

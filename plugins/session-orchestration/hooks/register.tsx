@@ -1703,6 +1703,11 @@ export const register: Register = on => {
   // open_pane is the coordinator's first call, so it also gives the session its stable name, `<project>-coordinator`
   // (the root folder's name), for briefs to name across restarts (workers still resolve it at send time).
   on('tool.call', { tool: 'mcp__session-orchestration__open_pane' }, async $ => {
+    // A sub-coordinator (first prompt `Coordinate KEY`: context-watch.sh's kind) runs one task under the project's
+    // coordinator, whose pane shows its asks: a pane of its own would split them.
+    // shortcut: relies on .kind, written seconds after the first prompt; read the transcript's first line if a sub ever opens one that early
+    const kind = await $.session.id().then(async id => String(await $.fs.read(`${await stampDir($)}/handoff-${id}.kind`)), () => '').catch(() => '')
+    if (kind.startsWith('subcoordinator ')) return { deny: 'open_pane: a sub-coordinator has no pane: queue asks with ask_approval; the parent\'s pane shows them.' }
     const { isPlaced } = await open($)
     root = undefined // a bootstrap may have just moved the root (an own adapter under a parent's)
     const init = await initCheck($)

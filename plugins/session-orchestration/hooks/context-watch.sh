@@ -3,7 +3,8 @@
 # compacts. ctx = input + cache read + cache write of the last assistant line with usage in the transcript's tail
 # (its last 256K, else its last 300 lines).
 # - Kind, from the first user prompt: a `Chunk: KEY/N` line (lib.sh chunk_of) is a chunk, `Act as a coordinator` a
-#   coordinator, `Session task: KEY review` a review (no messages), else a task (its `Session task: KEY` line names
+#   coordinator, `Coordinate KEY` a sub-coordinator (lib.sh sub_key: KEY's own coordinator; handoff.at.coordinator,
+#   the self-handover with its handoff in KEY-coordinator.md; never turned coordinator), `Session task: KEY review` a review (no messages), else a task (its `Session task: KEY` line names
 #   it, else a `Work on KEY` start (lib.sh first_key), or a bare `KEY:` one in a coordinated project (an adapter or
 #   key_pattern), else a `Work on NAME` start naming its own -n name (a tracker-less project: keyed by NAME); a session with none isn't coordinated: no messages, until its name_session call finds a later
 #   `Session task: KEY` line in its tail). A task
@@ -66,6 +67,9 @@ else
   a=$(adapter_path . 2>/dev/null)
   if [ -z "$first" ]; then kind=task
   elif c=$(chunk_of "$first"); then kind=chunk; key=${c% *}; n=${c#* }
+  # the adapter's key pattern only for a `Coordinate` first line: it costs a process, and classifying races the 5s kill
+  elif grep -m 1 . <<<"$first" | grep -qE '^[[:space:]]*Coordinate ' && KEYRE=$(key_re "$a") && sk=$(sub_key "$first"); then
+    kind=subcoordinator key=$sk
   elif grep -q '^Act as a coordinator' <<<"$first"; then kind=coordinator
   elif grep -qE '^Session task: [^ ]+ review([.,;:!)]|$)' <<<"$first"; then kind=review
   else kind=task
@@ -85,7 +89,7 @@ fi
 thresholds() {   # at, hard and note for $kind, cached
   declare -F config >/dev/null || { cd "${cwd:-.}" 2>/dev/null; . "$here/../lib.sh"; }
   [ -n "$coord_memo" ] || coord_memo=$(coord_json 2>/dev/null)   # one merge for every config read, not one each
-  at=$(config "handoff.at.$kind" 2>/dev/null); after=$(config handoff.hard_after 2>/dev/null)
+  at=$(config "handoff.at.${kind#sub}" 2>/dev/null); after=$(config handoff.hard_after 2>/dev/null)
   room=$(config handoff.stop_room 2>/dev/null); expect=$(config compact.window 2>/dev/null)
   read -r w from < <(compact_window "${CLAUDE_PROJECT_DIR:-$cwd}")   # project settings live at its root, not a subfolder
   hard=$(( at + after )); small=
@@ -151,6 +155,7 @@ texts() {   # where the handoff goes, the -prev-K rename, whom to tell, and (chu
   case $kind in
     chunk) where="\`## c$n: handoff ${sid:0:8}\` (your session id's first 8 characters) appended to $key-build.md in the replies folder"
            tell=$hs ;;
+    subcoordinator) where="\`## Handoff\` in $key-coordinator.md in the replies folder, with the status report at its top brought up to date"; tell=$hs ;;
     task) where="\`## Handoff\` in your replies file, with the status report at its top brought up to date (older handoffs and drafts move to $key-archive.md: worker.md, Replying)"; tell=$hs ;;
     *) where="coordinator-handover.md in the replies folder, the handover file: overwrite it with the state in no file, as ${here%/hooks}/skills/orchestrating-sessions/handover.md says"
        tell=" Then start your successor with \`$ss --successor\` and do what it prints (that file has the steps)." ;;

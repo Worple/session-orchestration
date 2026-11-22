@@ -1185,11 +1185,13 @@ def doc_part(path):
 
 
 def kind_of(first, name, coord):
-    """context-watch.sh's session kinds from the first prompt (coordinator, chunk, review, task), with retro and other
+    """context-watch.sh's session kinds from the first prompt (coordinator, subcoordinator, chunk, review, task), with retro and other
     told apart; a session with neither a task nor retro that opened the pane or ran the status command with --start,
     --changes, --watch or --owner (lib.sh's coord_re) is a coordinator (a task that tests session-status stays a task)."""
     if re.search(r"^Act as a coordinator", first, re.M):
         return "coordinator"
+    if re.match(r"\s*Coordinate +[A-Z][A-Z0-9]*-\d+([^0-9]|$)", first):
+        return "subcoordinator"
     if re.search(r"^Chunk: [^/\n]+/[A-Za-z0-9]+", first, re.M):
         return "chunk"
     if re.search(r"^Session task: \S+ review([.,;:!)]|$)", first, re.M):

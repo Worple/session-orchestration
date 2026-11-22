@@ -595,10 +595,15 @@ key_re() {
   [ -n "$r" ] || [ -z "${1:-}" ] || r=$("$1" key-pattern 2>/dev/null) || r=
   echo "(${r:-[A-Z][A-Z0-9]+-[0-9]+})"
 }
-# first_key FIRST: the key a first prompt names: only at its start (`Work on KEY`, `Session task: KEY`, `KEY:`), not
-# one it mentions further on (history, an example key in docs work). Needs KEYRE (key_re).
+# first_key FIRST: the key a first prompt names: only at its start (`Work on KEY`, `Session task: KEY`, `Coordinate
+# KEY`, `KEY:`), not one it mentions further on (history, an example key in docs work). Needs KEYRE (key_re).
 first_key() {
-  grep -m 1 . <<<"$1" | grep -oE "^[[:space:]]*(([Ww]ork on|Session task:) +$KEYRE([^0-9]|$)|$KEYRE:)" | grep -oE "$KEYRE" | head -1
+  grep -m 1 . <<<"$1" | grep -oE "^[[:space:]]*(([Ww]ork on|Session task:|Coordinate) +$KEYRE([^0-9]|$)|$KEYRE:)" | grep -oE "$KEYRE" | head -1
+}
+# sub_key FIRST: KEY when FIRST starts `Coordinate KEY` (a sub-coordinator, KEY-coordinator, run by the project's
+# coordinator for one big task: it owns KEY although it runs the coordinator commands); fails otherwise. Needs KEYRE.
+sub_key() {
+  grep -m 1 . <<<"$1" | grep -oE "^[[:space:]]*Coordinate +$KEYRE([^0-9]|$)" | sed -E 's/^[[:space:]]*Coordinate +//' | grep -oE "^$KEYRE"
 }
 # first_prompt TRANSCRIPT [N]: its first prompt (within its first N lines: the hook passes 50), a string or text
 # blocks, skipping isMeta lines and a compaction summary; "" when none. The hook and session-status.
