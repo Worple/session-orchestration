@@ -22,7 +22,8 @@ If the user's default mode is plan, add `--permission-mode default` on `--resume
 ## Follow-ups for later
 
 **`session-status --send-when-idle <id> '<text>'`**, run in the background (Bash `run_in_background`), for anything
-queued for later. `notify_when_idle` covers only the waiting, and only for a live session. It doesn't cover a
+queued for later. The watcher's `Idle:` line (or `notify_when_idle`, for a session it doesn't cover) covers only the
+waiting, and only for a live session. It doesn't cover a
 retired one, or *how* to deliver: a `--resume` of a session that is still running starts a copy under a new id. The
 helper waits until the session isn't busy, then:
 - **live:** it prints `send: SendMessage to "<name>" now` and exits 0. You send the text with SendMessage; a script

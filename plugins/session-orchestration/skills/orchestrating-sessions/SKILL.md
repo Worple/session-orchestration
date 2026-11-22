@@ -88,16 +88,15 @@ Waking a session makes it re-read its whole context, often hundreds of thousands
   ([resuming.md](resuming.md#permission-prompts-and-trust)). Not a chat line alone.
 - One ask per message to a session. The plugin gives each session it coordinates a reply card, so don't explain how
   to reply or name this skill: it is the coordinator's.
-- When giving work, set `notify_when_idle: true`. Starting a session (`claude --bg`, `--handover`) is giving work
-  too: right after, SendMessage the id it printed `Coordinator here; don't reply to this.` with `notify_when_idle:
-  true`, since `--watch` sees only sessions that own a status row. One notice arrives when the session goes idle,
-  which may be a wait (CI, an approval), not the finish: check its status. Never poll `ListAgents`, and never send
-  "are you done?".
+- The watcher reports a project background session that goes idle without replying or waiting on a background task
+  (`Idle: NAME (ID8): its last line`, from the release after idle notices); it may be a wait on an approval, not the
+  finish: check its status. Set `notify_when_idle: true` only for a session the watcher doesn't cover: an interactive
+  one, or one outside the project folder. Never poll `ListAgents`, and never send "are you done?".
 - Never pass large content between sessions through your own context. Point to a file or a branch.
 - Never ask a session to do something that was denied or blocked in your own session.
 - A successful send isn't proof of delivery. A session in a different permission mode may hold your message for its
-  user's approval and let it expire; a `[Cross-session delivery notice]` tells you when that happened. An idle notice
-  but no reply: ask the user to check that session. Don't read silence as progress.
+  user's approval and let it expire; a `[Cross-session delivery notice]` tells you when that happened. The watcher's
+  `Idle:` line (or a `notify_when_idle` notice) but no reply: ask the user to check that session. Don't read silence as progress.
 
 ## Handoff file
 
@@ -134,7 +133,8 @@ Friction is feedback, not memory ([feedback.md](feedback.md)). Before you append
 
 Arm the status command with `--watch` (`session-status --watch [args]`, or the project's own), as Bash
 `run_in_background: true` with a long `timeout` (e.g. `7200000`). It wakes you only on a change that lasted two
-polls, a failure that lasted three, or the timeout: it retries Jira/Bitbucket/jq blips and ignores working↔idle
+polls, a failure that lasted three, an `Idle:` line (checked every minute from the session files, no tracker call)
+or the timeout: it retries Jira/Bitbucket/jq blips and ignores working↔idle
 flips itself, so never wrap it in a loop or filter. Report what changed, then re-arm it. One watcher at a time: skip
 arming if one already runs. Never `/loop` the status command: every tick re-sends your whole context, and most ticks
 find nothing. A `PR events` section in its output: [sessions.md](sessions.md), PR events.
@@ -176,7 +176,7 @@ without asking the user: they signed in for it.
 - **Never `cd` in your shell; use absolute paths.** The Bash tool keeps a `cd` across calls, and `claude --bg`
   starts the new session in that folder, outside the project's settings.
 - **In Claude Code Desktop too, a task starts with `claude --bg`, never as a sidebar session** (`start_session`: a
-  sidebar session, or a New task card for the user to start): the status, idle notices, `--resume-ended` and
+  sidebar session, or a New task card for the user to start): the status, the watcher's `Idle:` lines, `--resume-ended` and
   `--stop` work on `claude --bg` sessions, and a sidebar session gets none of them, so you'd lose sight of it. The
   one sidebar session you start is your successor ([handover.md](handover.md)); a hook refuses any other. No `claude` on PATH: hand the user its install (README). The exception is the user's: with config `start.sidebar` `true` (person key, never yours to set) a task may start as a sidebar session when the user asks for one; the status doesn't list it, so you follow it through the user and its replies, and your handoff file names each one (title and what it works on) for your successor.
 - **Read for coordination, never to do or pre-empt the task.** You may read a task's content (tracker comments, a
