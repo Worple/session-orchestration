@@ -341,6 +341,25 @@ if [ "$mode" = check ]; then
       k != "" { exit }
       END { if (v["s"] == "" || v["r"] == "") print "  " n ": read " d " now"; else print "  " n ": " v["s"] " Read " d " when " v["r"] }' "$2"
   }
+  # remote_warn: with features.remote on, a line per Claude Code setting that keeps a coordinator's other computers
+  # from reaching it (features/remote.md, Settings), from the settings files that apply to this root. It names the
+  # setting and the file, and never edits either: they are the user's (managed ones their organization's). Files in
+  # Claude Code's precedence order: the first that sets a key decides it.
+  remote_warn() {
+    local k f v
+    for k in disableRemoteControl crossSessionInbound; do
+      for f in "/Library/Application Support/ClaudeCode/managed-settings.json" /etc/claude-code/managed-settings.json \
+               "$root/.claude/settings.local.json" "$root/.claude/settings.json" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"; do
+        v=$(jq -c --arg k "$k" '.[$k] | select(. != null)' "$f" 2>/dev/null); [ -n "$v" ] || continue
+        case $k:$v in
+          disableRemoteControl:true) echo "features.remote: disableRemoteControl is true in $(tilde "$f"): coordinators start without Remote Control, so your other computers can't reach them" ;;
+          crossSessionInbound:'"accept"'|disableRemoteControl:*) ;;
+          *) echo "features.remote: crossSessionInbound is $v in $(tilde "$f"): a message from your other computers is held or dropped, not delivered (accept, or unset, delivers it)" ;;
+        esac
+        break
+      done
+    done
+  }
   case $state in
     configured) w=; [ -z "$parent" ] || w="; its own adapter wins over the one in $parent"
                 echo "configured: $root (${name}-coordinator)$w"
@@ -350,6 +369,8 @@ if [ "$mode" = check ]; then
                 st=$(config start.mode 2>>"$wf") sa=$(config start.kinds.feedback_apply 2>>"$wf") sb=$(config start.sidebar 2>>"$wf")
                 a=$(config features.accounts 2>>"$wf") r=$(config features.review_inbox 2>>"$wf")
                 te=$(config terminal 2>>"$wf") m=$(config messages 2>>"$wf") no=$(config features.notify 2>>"$wf") rt=$(config features.retro 2>>"$wf")
+                rm_=$(config features.remote 2>>"$wf")
+                [ "$rm_" != true ] || remote_warn >>"$wf"
                 # The modules in use, loaded as they will be: a syntax error, a missing function or a shadowed
                 # plugin module shows here.
                 [ "$te" = plain ] || ( load_terminal ) 2>>"$wf"
@@ -373,6 +394,7 @@ if [ "$mode" = check ]; then
                 [ "$r" != true ] || { f=${f:+$f,}review_inbox; docs+=(review_inbox "$LIB_DIR/features/review-inbox.md"); }
                 [ "$no" = 0 ] || { f=${f:+$f,}notify; docs+=(notify "$LIB_DIR/features/notify.md"); }
                 [ "$rt" != true ] || { f=${f:+$f,}retro; docs+=(retro "$LIB_DIR/features/retro.md"); }
+                [ "$rm_" != true ] || { f=${f:+$f,}remote; docs+=(remote "$LIB_DIR/features/remote.md"); }
                 # feedback.repo_dir's coordinator owns the plugin's feedback cases
                 [ "$(plugin_root)" != "$root" ] || { f=${f:+$f,}plugin_coordinator; docs+=(plugin_coordinator "$LIB_DIR/features/plugin-coordinator.md"); }
                 echo "active: tracker=$t host=$h delegate=$d pr_create=$pc start=$st terminal=$te messages=$m features=${f:-none}"

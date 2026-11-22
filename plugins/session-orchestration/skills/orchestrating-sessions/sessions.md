@@ -49,6 +49,11 @@ turn it on) and refuses a target marked `no inbox` (ask the user to route that o
 (`sent to NAME: <matter>`) and resolve it when its answer reaches your inbox. None fits, or two do: ask the user which.
 Never start, message or resume that project's sessions yourself, and never pass an approval along.
 
+When the user added any, a `Remote` block follows: their coordinators on their other computers
+(`NAME · another computer (Remote Control) · PURPOSE`, added with `session-status --remote add`). SendMessage one by
+NAME while your session is connected to Remote Control; not connected, it gets no reply address. No inbox reaches
+another computer ([features/remote.md](../../features/remote.md)).
+
 Each coordinator registers its root at `--start`; the line is its config `coordinator.purpose`, and `--start` asks for
 it under `## Purpose` while it is unset (ask the user, then `session-status --purpose 'LINE'`). What is shared: nothing.
 The registry is the user's own (`coordinators.tsv` in the state folder) and the purpose sits in each project's

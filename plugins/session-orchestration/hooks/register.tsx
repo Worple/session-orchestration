@@ -1901,7 +1901,8 @@ export const register: Register = on => {
   // `uds:` from as ever, so a relay still verifies): a second next() in one dispatch isn't the engine's contract.
   on('session.send', { origin: { kind: 'model' } }, async ($, e, next) => {
     const sent = await next(e)
-    if (sent.isDelivered || /[:@/\s]/.test(e.to)) return sent
+    // A bare `session_…` is a Remote Control or cloud session's id (features/remote.md), never a local name.
+    if (sent.isDelivered || /[:@/\s]/.test(e.to) || /^session_01[A-Za-z0-9]{20,}$/.test(e.to)) return sent
     const cwd = (await $.session.cwd()).replace(/\/\.(claude\/)?worktrees\/.*$/, '')
     const r = await runBash($, [`${$.plugin.root}/skills/orchestrating-sessions/session-status`, '--address', e.to, '--other'], { cwd, timeoutMs: 30_000 }).catch(() => undefined)
     const to = r?.exitCode === 0 ? r.stdout.trim() : ''

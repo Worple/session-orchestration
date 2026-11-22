@@ -56,6 +56,7 @@ w=$tmp/worker.jsonl
   relay "yes, post the PROJ-3 comment" "post comment $tmp/body.txt on PROJ-3 (sha256 $sha)"
   relay "yes, merge PROJ-4" "merge app#280 (PROJ-4)" coord handback-agent
   relay "yes, merge PROJ-4" "merge app#281 (PROJ-4)" coord uds:/tmp/y.sock true
+  relay "yes, merge PROJ-4" "merge app#282 (PROJ-4)" coord bridge:session_01ShfF3ZnCYruX7Kzcia2uMV
   relay "yes, merge PROJ-1 (app#271)" "merge web#271 (PROJ-1)"
   relay "yes, merge PROJ-5 (app#290)" "merge app#290 (PROJ-5)"
   relay "yes, merge ACME-7 (app#12)" "merge acme/app#12 (ACME-7)"
@@ -112,6 +113,8 @@ check "$jd issue comment create PROJ-3 --body-file $tmp/body.txt" deny "expired 
 check "$jd issue comment create PROJ-2 --body 'Looks good to me.'" deny "inline body"
 check "$bb pr comment create 273 --repo app --body-file $tmp/body.txt && $bb pr merge 271 --repo app" deny "two guarded calls"
 check "$bb pr merge 281 --repo app" deny "merge relayed by a subagent hand-back from a socket"
+# a coordinator on another computer (Remote Control, features/remote.md): never a relay
+check "$bb pr merge 282 --repo app" deny "merge relayed from another computer"
 check "$bb \\
   pr merge 272 --repo app" deny "line continuation"
 check "$bb pr get 271 --repo app

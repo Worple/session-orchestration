@@ -8,7 +8,8 @@
 #                                            (excluded from git until shared mode commits it; read from the team
 #                                            repo's when the person file names one, see shared_dir)
 #   .claude/coordination.local.json          person keys: approvals.delegate, approvals.pr_create, features.accounts,
-#                                            features.accounts_weekly_switch, features.notify, features.retro, retro.*, start.*,
+#                                            features.accounts_weekly_switch, features.notify, features.retro, features.remote,
+#                                            retro.*, start.*,
 #                                            terminal, messages
 #                                            (and its module's block, e.g. msgraph), trusted, team, feedback.mode,
 #                                            feedback.repo_dir, feedback.project_dir, telemetry, handoff.*, compact.window,
@@ -69,7 +70,7 @@ user_config() { echo "${XDG_CONFIG_HOME:-$HOME/.config}/session-orchestration/co
 # person_keys_drop [MODULE]: the jq filter that drops the person keys (and MODULE's messages block) from a repo file;
 # coord_json reads the repo file through it, and --shared refuses a team file it would change.
 person_keys_drop() {
-  echo "del(.approvals, .terminal, .messages, .msgraph, .trusted, .team, .feedback, .telemetry, .handoff, .compact, .pending, .history, .fable, .start, .retro, .docs_watch, .pane, .coordinator$( [[ ${1:-} =~ ^[A-Za-z0-9_-]+$ ]] && echo ", .[\"$1\"]")) | if .features | type == \"object\" then del(.features.accounts, .features.accounts_weekly_switch, .features.notify, .features.retro, .features.docs_watch) else . end"
+  echo "del(.approvals, .terminal, .messages, .msgraph, .trusted, .team, .feedback, .telemetry, .handoff, .compact, .pending, .history, .fable, .start, .retro, .docs_watch, .pane, .coordinator$( [[ ${1:-} =~ ^[A-Za-z0-9_-]+$ ]] && echo ", .[\"$1\"]")) | if .features | type == \"object\" then del(.features.accounts, .features.accounts_weekly_switch, .features.notify, .features.retro, .features.remote, .features.docs_watch) else . end"
 }
 
 coord_memo=   # never inherited: valid only for the cwd its caller built it in
@@ -194,9 +195,8 @@ coord_purpose() {
     jq -r '.coordinator.purpose | strings | split("\n")[0] // empty | .[0:200] | select(length > 0)' "$f" 2>/dev/null )
 }
 # purpose_set TEXT: writes coordinator.purpose to this project's person file (session-status --purpose).
-# Characters are counted by jq (code points), the same on GNU and BSD and in any locale.
 purpose_set() {
-  local t; t=$(jq -rn --arg v "${1:-}" '$v | gsub("[[:cntrl:]]"; " ") | gsub("^ +| +$"; "") | select(length > 0 and length <= 200)')
+  local t; t=$(one_line "${1:-}")
   [ -n "$t" ] || { echo "usage: session-status --purpose 'ONE LINE, at most 200 characters'" >&2; return 2; }
   person_set purpose '.coordinator.purpose = $v' --arg v "$t"
 }
@@ -204,16 +204,29 @@ purpose_set() {
 # dir and time of its coordinator's last --start). In the state dir, per person, never committed: it names the
 # person's projects, so only their own sessions read it (session-status --coordinators).
 coord_registry() { echo "${XDG_STATE_HOME:-$HOME/.local/state}/session-orchestration/coordinators.tsv"; }
-# coord_register ROOT: ROOT's line, added or brought up to date, under a flock on the registry's .flock file (two
-# coordinators starting at once each keep their line), in a subshell so fd 9 closes with it.
-coord_register() {
-  ( f=$(coord_registry); mkdir -p "${f%/*}" && exec 9>>"$f.flock" || exit 1
+# tsv_put FILE KEY [LINE]: FILE's line whose first field is KEY replaced by LINE (no LINE: dropped), under a flock on
+# FILE.flock (two writers at once each keep their line), in a subshell so fd 9 closes with it.
+tsv_put() {
+  ( f=$1; mkdir -p "${f%/*}" && exec 9>>"$f.flock" || exit 1
     perl -MFcntl=:flock -e 'alarm 10; open(my $l, ">>&=", 9) or exit 1; flock($l, LOCK_EX) or exit 1' ||
       echo "couldn't lock $f; going on unlocked" >&2
     t=$(mktemp "$f.XXXXXX") || exit 1
-    { awk -F'\t' -v r="$1" '$1 != r' "$f" 2>/dev/null
-      printf '%s\t%s\t%s\n' "$1" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" "$(date +%s)"; } > "$t" && mv "$t" "$f" || { rm -f "$t"; exit 1; } )
+    { K=$2 awk -F'\t' '$1 != ENVIRON["K"]' "$f" 2>/dev/null   # not -v: it would read the key's backslashes as escapes
+      [ -z "${3:-}" ] || printf '%s\n' "$3"; } > "$t" && mv "$t" "$f" || { rm -f "$t"; exit 1; } )
 }
+# coord_register ROOT: ROOT's line, added or brought up to date.
+coord_register() { tsv_put "$(coord_registry)" "$1" "$(printf '%s\t%s\t%s' "$1" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" "$(date +%s)")"; }
+# The person's remote coordinators (features/remote.md): NAME<TAB>KIND<TAB>PURPOSE<TAB>EPOCH, KIND `rc` (one of their
+# coordinators on another computer, same claude.ai account, reached by SendMessage over Remote Control). Beside the
+# registry, never committed (session-status --remote, --coordinators).
+remote_registry() { echo "${XDG_STATE_HOME:-$HOME/.local/state}/session-orchestration/remote.tsv"; }
+# one_line TEXT: TEXT as one line of at most 200 characters (control characters as spaces, trimmed), else nothing.
+# Characters are counted by jq (code points), the same on GNU and BSD and in any locale.
+one_line() { jq -rn --arg v "${1:-}" '$v | gsub("[[:cntrl:]]"; " ") | gsub("^ +| +$"; "") | select(length > 0 and length <= 200)'; }
+
+# remote_flag ROOT: ` --remote-control` when ROOT's config features.remote is on (features/remote.md), else nothing. The
+# flag goes before -n: it takes an optional name, and the session's own name (-n) titles it on claude.ai.
+remote_flag() { [ "$(cd "$1" 2>/dev/null && config features.remote 2>/dev/null)" != true ] || echo ' --remote-control'; }
 
 # coord_start ROOT: opens ROOT's coordinator in a terminal tab (config terminal), named already so others find it
 # before open_pane names it; prints what happened. Exit 1: nothing started (the command to run is printed).
@@ -225,8 +238,9 @@ coord_start() {
   me=$(cd "$1" 2>/dev/null && config plan.models.coordinator 2>/dev/null)
   local a   # config plan.advisor.coordinator, where it pairs (as session-status --kind)
   a=$(cd "$1" 2>/dev/null && a=$(config plan.advisor.coordinator 2>/dev/null) && advisor_ok "${me%%/*}" "$a" && echo "$a")
+  local rc_; rc_=$(remote_flag "$1")
   # %q: a [1m] model would glob in the shell that runs cmd
-  cmd="${SESSION_STATUS_CLAUDE:-claude}${me:+ --model $(printf %q "${me%%/*}") --effort ${me#*/}}${a:+ --advisor $a} -n $n 'Act as a coordinator'"
+  cmd="${SESSION_STATUS_CLAUDE:-claude}${me:+ --model $(printf %q "${me%%/*}") --effort ${me#*/}}${a:+ --advisor $a}$rc_ -n $n 'Act as a coordinator'"
   load_terminal; out=$(open_view "$n" "$1" "$cmd" 2>&1); rc=$?
   case $rc in
     0) [ "${out#reused}" = "$out" ] || { echo "a tab titled \"$n\" is open already ($out), so nothing started: close it, or run $cmd there"; return 1; }
@@ -272,6 +286,8 @@ detect_host() {
 #                       account under it (features/accounts.md, Weekly limits; person only)   default false
 #   features.review_inbox  true | false: PR findings go to the review inbox page (features/review-inbox.md);
 #                       Bitbucket or Forgejo (TODO: GitHub support)     default false
+#   features.remote     true | false: coordinators start with Remote Control, so the person's coordinators on their
+#                       other computers reach them (features/remote.md; person only)   default false
 #   features.notify     integer minutes, 0 = off: one local macOS notification when an ask has waited unseen this
 #                       long (features/notify.md; person only)          default 0
 #   start.mode          read_only | propose | at_once: when the coordinator starts a session for new work without the
@@ -424,21 +440,21 @@ config() {
   local key=${1:-} v ok=
   case $key in
     tracker|host|key_pattern|approvals.delegate|approvals.pr_create|features.accounts|features.accounts_weekly_switch|features.review_inbox|features.notify|start.mode|start.kinds.feedback_apply|start.sidebar|terminal|messages|feedback.mode|feedback.repo_dir|feedback.project_dir|telemetry|pending.file|history.dirs|fable.accounts) ;;
-    features.retro|retro.scope|retro.schedule|retro.account|retro.sections) ;;
+    features.retro|features.remote|retro.scope|retro.schedule|retro.account|retro.sections) ;;
     features.docs_watch|docs_watch.files|docs_watch.pattern) ;;
     plan.enabled|plan.max_parallel|plan.models.design|plan.models.build|plan.models.mechanical|plan.models.review|plan.models.release|plan.models.scan|plan.models.coordinator|plan.models.retro|plan.models.research) ;;
     plan.advisor.design|plan.advisor.build|plan.advisor.mechanical|plan.advisor.review|plan.advisor.release|plan.advisor.scan|plan.advisor.coordinator|plan.advisor.retro|plan.advisor.research) ;;
     handoff.at.chunk|handoff.at.task|handoff.at.coordinator|handoff.hard_after|handoff.stop_room|compact.window) ;;
     pane.sections) pane_sections; return 0 ;;
     coordinator.purpose) coord_purpose; return 0 ;;
-    *) echo "unknown config key: ${key:-(none)} (one of tracker host key_pattern approvals.delegate approvals.pr_create features.accounts features.accounts_weekly_switch features.review_inbox features.notify start.mode start.kinds.feedback_apply start.sidebar features.retro retro.scope retro.schedule retro.account retro.sections features.docs_watch docs_watch.files docs_watch.pattern terminal messages feedback.mode feedback.repo_dir feedback.project_dir telemetry pending.file history.dirs fable.accounts coordinator.purpose plan.enabled plan.max_parallel plan.models.{design,build,mechanical,review,release,scan,coordinator,retro,research} plan.advisor.{design,build,mechanical,review,release,scan,coordinator,retro,research} handoff.at.{chunk,task,coordinator} handoff.hard_after handoff.stop_room compact.window pane.sections)" >&2; return 2 ;;
+    *) echo "unknown config key: ${key:-(none)} (one of tracker host key_pattern approvals.delegate approvals.pr_create features.accounts features.accounts_weekly_switch features.review_inbox features.notify start.mode start.kinds.feedback_apply start.sidebar features.retro features.remote retro.scope retro.schedule retro.account retro.sections features.docs_watch docs_watch.files docs_watch.pattern terminal messages feedback.mode feedback.repo_dir feedback.project_dir telemetry pending.file history.dirs fable.accounts coordinator.purpose plan.enabled plan.max_parallel plan.models.{design,build,mechanical,review,release,scan,coordinator,retro,research} plan.advisor.{design,build,mechanical,review,release,scan,coordinator,retro,research} handoff.at.{chunk,task,coordinator} handoff.hard_after handoff.stop_room compact.window pane.sections)" >&2; return 2 ;;
   esac
   v=$(coord_json | jq -r --arg k "$key" 'getpath($k | split(".")) | if . == null then empty else tostring end')
   [ -n "$v" ] && case $key in
     tracker) case $v in none|github|jira) ok=1 ;; esac ;;
     host) case $v in github|bitbucket|forgejo|none) ok=1 ;; esac ;;
     key_pattern|docs_watch.pattern) { grep -qE -- "$v" </dev/null; [ $? -le 1 ]; } 2>/dev/null && ok=1 ;;
-    approvals.delegate|approvals.pr_create|features.accounts|features.accounts_weekly_switch|features.retro|features.docs_watch|plan.enabled|start.sidebar) case $v in true|false) ok=1 ;; esac ;;
+    approvals.delegate|approvals.pr_create|features.accounts|features.accounts_weekly_switch|features.retro|features.remote|features.docs_watch|plan.enabled|start.sidebar) case $v in true|false) ok=1 ;; esac ;;
     retro.scope) case $v in project) ok=1 ;; plugin|both) local pr; ok=1
       # plugin scope has one home: feedback.repo_dir's root when that is set, so all-project numbers are measured once
       pr=$(plugin_root) && [ "$pr" != "$(find_root)" ] &&

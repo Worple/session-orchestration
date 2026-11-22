@@ -13,8 +13,8 @@ the question box that a session will still need: ask it again on the pane first.
 coordinator's Start reads those, and each restated rule is re-sent on its every wake. Then start your successor:
 
 1. `session-status --successor` (`--account DIR` for the weekly-limit move): it opens a tab running an interactive
-   `claude --model M --effort E -n NAME-next 'Act as a coordinator. You succeed …'`, on the model and effort you run on
-   (else config `plan.models.coordinator` for the account it starts under: `fable/medium` where `fable.accounts` lists it). It refuses while your handover note is missing or older than your start: write it (again, if your Write failed), then run it again. Nothing opened: hand the user the command it prints
+   `claude --model M --effort E [--remote-control] -n NAME-next 'Act as a coordinator. You succeed …'`, on the model and effort you run on
+   (else config `plan.models.coordinator` for the account it starts under: `fable/medium` where `fable.accounts` lists it; `--remote-control` with features.remote on, ../../features/remote.md). It refuses while your handover note is missing or older than your start: write it (again, if your Write failed), then run it again. Nothing opened: hand the user the command it prints
    (`hand_command`, key `coordinator`). In Claude Code Desktop it prints a `start_session` call instead, so the
    successor is an app session in the sidebar: make it, and leave your pin and your archiving to it (archiving
    yourself takes it with you). Then arm `--await ready` (Bash, background) and end your turn. From here act

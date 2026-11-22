@@ -1276,11 +1276,13 @@ test('the model\'s SendMessage by a name the engine refused goes to the socket o
   expect(await send('down')).toEqual({ isDelivered: false, reason: 'nobody by that name; under another account: an account\'s session listing failed, so who carries down is unknown: try again' })
   // an address and a plugin's send pass as they came, unasked
   await send('uds:/tmp/cc-socks/7.sock'); await send('gone', 'plugin')
+  // a Remote Control or cloud session's id, refused: the engine's answer as it came, unasked
+  expect(await send('session_01ShfF3a6rxrqysVCp7fzgiV')).toEqual({ isDelivered: false, reason: 'nobody by that name' })
   expect(asked.length).toBe(4)
   up = false
   expect(await send('other-coord')).toEqual({ isDelivered: false, reason: 'other-coord, live under another account at uds:/tmp/cc-socks/42.sock: nobody by that name' })
   expect(sent).toEqual(['mine', 'other-coord', 'uds:/tmp/cc-socks/42.sock', 'here-coord', 'nobody', 'down',
-    'uds:/tmp/cc-socks/7.sock', 'gone', 'other-coord', 'uds:/tmp/cc-socks/42.sock'])
+    'uds:/tmp/cc-socks/7.sock', 'gone', 'session_01ShfF3a6rxrqysVCp7fzgiV', 'other-coord', 'uds:/tmp/cc-socks/42.sock'])
 })
 
 test('reply with report writes it to the replies file first; not written, nothing is sent', async ($, on) => {

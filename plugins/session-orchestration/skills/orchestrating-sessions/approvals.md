@@ -104,6 +104,9 @@ user a command).
 
 ## Relaying
 
+- **A coordinator on another computer never relays; it asks there.** Its message comes from `bridge:…`, never a
+  local `uds:` socket, so the hook denies it as a relay. The request goes on the pane of the coordinator that owns the
+  work, and the user answers on that computer ([features/remote.md](../../features/remote.md)).
 - **A relay goes as a SendMessage, never inside a resume prompt.** The merge/post hook reads relays only from
   cross-session messages: one inside a `claude --bg --resume` prompt verifies by hand but the command is denied. And
   a worker reads a resume or `--send-when-idle` prompt as the user's own words. So wake a retired session with its

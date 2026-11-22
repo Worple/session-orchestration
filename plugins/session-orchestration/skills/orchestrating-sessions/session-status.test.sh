@@ -128,6 +128,9 @@ rc=0; out=$(of sub --start) || rc=$?
 # coord_start's model: config plan.models.coordinator
 echo '{"plan": {"models": {"coordinator": "sonnet/high"}}}' > "$root/sub/.claude/coordination.local.json"
 [[ $(of sub --start) == *"claude --model sonnet --effort high -n sub-coordinator"* ]] || { echo "--coordinator-of --start, plan.models.coordinator"; exit 1; }
+# features.remote: the coordinator starts with Remote Control, the flag before its -n
+echo '{"features": {"remote": true}}' > "$root/sub/.claude/coordination.local.json"
+[[ $(of sub --start) == *"claude --model opus --effort medium --remote-control -n sub-coordinator 'Act as a coordinator'" ]] || { echo "--coordinator-of --start, features.remote: $(of sub --start)"; exit 1; }
 echo '{}' > "$root/sub/.claude/coordination.local.json"
 rc=0; out=$(of plain) || rc=$?
 [ "$rc" = 4 ] && [[ $out == *"has no coordinator of its own"* ]] || { echo "--coordinator-of, covered: rc=$rc $out"; exit 1; }
@@ -182,6 +185,17 @@ mv "$tmp/xb-replies/coordinator-inbox.md" "$tmp/xb-replies/x"; printf '\n## 1 ·
 # --coordinators: none until a coordinator's --start registers its root; --start asks for a purpose while it's unset,
 # --purpose writes it; a registered root no longer set up is skipped; the live one (or its -next successor) shows running, under any account; one with no replies folder, no inbox.
 [[ $(run --coordinators) == "(none registered yet"* ]] || { echo "--coordinators, empty: $(run --coordinators)"; exit 1; }
+# --remote add/remove: the person's coordinators on other computers, listed under Remote even with no local one
+for a in "add" "add x" "add x --purpose" "add x --porpose y" "add 'a b' --purpose y" "add x --purpose ''" "remove" "remove x y" "list x"; do
+  rc=0; eval "run --remote $a" >/dev/null 2>&1 || rc=$?; [ "$rc" = 2 ] || { echo "--remote $a: rc=$rc"; exit 1; }
+done
+rc=0; run --remote remove nobody 2>/dev/null || rc=$?; [ "$rc" = 2 ] || { echo "--remote remove, absent: rc=$rc"; exit 1; }
+[ "$(run --remote add lap-coordinator --purpose "$(printf 'the\tlaptop')")" = "added lap-coordinator · the laptop" ] &&
+  run --remote add lap-coordinator --purpose 'the laptop, again' >/dev/null &&
+  [ "$(grep -c . "$tmp/state/session-orchestration/remote.tsv")" = 1 ] || { echo "--remote add: $(cat "$tmp/state/session-orchestration/remote.tsv")"; exit 1; }
+out=$(run --coordinators) && [[ $out == "(none registered yet"*$'\n\nRemote (your coordinators on other computers'*$'\n  lap-coordinator · another computer (Remote Control) · the laptop, again' ]] ||
+  { echo "--coordinators, Remote only: $out"; exit 1; }
+[ "$(run --remote remove lap-coordinator)" = "removed lap-coordinator" ] && [[ $(run --coordinators) != *Remote* ]] || { echo "--remote remove: $(run --coordinators)"; exit 1; }
 out=$(run --start) && [[ $out == *$'\n## Purpose\n(none: '* ]] || { echo "--start, no purpose: $out"; exit 1; }
 rc=0; run --purpose '' 2>/dev/null || rc=$?; [ "$rc" = 2 ] || { echo "--purpose '': rc=$rc"; exit 1; }
 run --purpose "$(printf 'this machine\x27s\tsetup')" && [ "$(run --config coordinator.purpose)" = "this machine's setup" ] &&
@@ -201,6 +215,12 @@ rm -rf "$pt/.cache/session-status/handover"
 # An empty purpose is no purpose (not jq's `null`).
 echo '{"coordinator": {"purpose": ""}}' > "$pb/.claude/coordination.local.json"
 [[ $(co x) == *" · not running · (no purpose set"* ]] || { echo "--coordinators, empty purpose: $(co x)"; exit 1; }
+# The Remote block follows the local list.
+run --remote add lap-coordinator --purpose 'the laptop' >/dev/null
+rc=0; out=$(run --remote add b-coordinator --purpose 'the same project, there' 2>&1) || rc=$?
+[ "$rc" = 2 ] && [[ $out == "--remote add: b-coordinator is also this computer's coordinator of "*"/xb/b, so "* ]] || { echo "--remote add, a local coordinator's name: rc=$rc $out"; exit 1; }
+out=$(run --coordinators) && [[ $out == "proj-coordinator · "*$'\n\nRemote ('*$'\n  lap-coordinator · another computer (Remote Control) · the laptop' ]] || { echo "--coordinators, with Remote: $out"; exit 1; }
+run --remote remove lap-coordinator >/dev/null
 rm -rf "$tmp/xa" "$tmp/xb" "$tmp/xc" "$tmp/xd" "$tmp/xb-replies"
 run --changes >/dev/null; (sleep 2; touch "$root/wt/dirty2") & toucher=$!; trap 'kill $toucher 2>/dev/null || true; rm -rf "$tmp"' EXIT
 [ "$(run --watch --every x)" = "--every needs a positive number of seconds" ] && [ "$(run --watch --every 1)" = "$(printf 'was: %s\nnow: %s' "$(run ABC-12 | sed 's/dirty:2/dirty:1/')" "$(run ABC-12)")" ] ||
@@ -1304,6 +1324,14 @@ out=$(CLAUDE_CODE_ENTRYPOINT=claude-desktop-3p as "$o" --successor) && rc=0 || r
   ! grep -q 'claude --model' <<<"$out" || { echo "--successor from Desktop: $rc $out"; exit 1; }
 out=$(CLAUDE_CODE_ENTRYPOINT=claude-desktop-3p as "$o" --successor --account "$tmp/cfg") && rc=0 || rc=$?
 [ "$rc" = 2 ] && grep -q "^This is Claude Code Desktop: tell the user to run it in the session's Terminal" <<<"$out" || { echo "--successor --account from Desktop: $rc $out"; exit 1; }
+# features.remote: the terminal successor starts with Remote Control; a Desktop one is told to turn it on there.
+rm -f "$cf.bak"; [ ! -f "$cf" ] || mv "$cf" "$cf.bak"; echo '{"features": {"remote": true}}' > "$cf"
+out=$(as "$o" --successor) && rc=0 || rc=$?
+[ "$rc" = 2 ] && grep -qF "claude --model opus --effort medium --remote-control -n p-coordinator-next" <<<"$out" || { echo "--successor, features.remote: $rc $out"; exit 1; }
+out=$(CLAUDE_CODE_ENTRYPOINT=claude-desktop-3p as "$o" --successor) && rc=0 || rc=$?
+[ "$rc" = 2 ] && grep -q '^features.remote is on, .*(/remote-control)' <<<"$out" || { echo "--successor from Desktop, features.remote: $rc $out"; exit 1; }
+rm "$cf"; [ ! -f "$cf.bak" ] || mv "$cf.bak" "$cf"
+[[ $(as "$o" --successor) != *--remote-control* ]] || { echo "--successor, features.remote off"; exit 1; }
 # Its title not taken as the name: the successor recorded its id (--started), so it counts as NAME-next.
 setacct cfg "$(sess "$o" p-coordinator idle 1 interactive),$(sess "$x" 'New session' idle 1 interactive)"
 [ "$(as "$x" --name-check p-coordinator)" = "held other $o" ] && as "$x" --successor --started p-coordinator | grep -q '^recorded:' &&
@@ -1720,6 +1748,20 @@ mkdir -p "$a/.claude/hooks" && printf '#!/bin/bash\ncd docs && git add -A && git
   echo '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/commit.sh"}]}]}}' > "$a/.claude/settings.local.json" &&
   init "$a" --check | grep -q '^\[m3 ask\] project Stop hook commits a folder (.*commit.sh): run setup' && rm -r "$a/.claude/hooks" "$a/.claude/settings.local.json" &&
   ! init "$a" --check | grep -q 'Stop hook commits' || { echo "commit-hook detection failed"; exit 1; }
+# features.remote: --check lists it and warns on a setting that keeps the other computers out; none with it off.
+cp "$a/.claude/coordination.local.json" "$tmp/cl.bak" && jq '.features.remote = true' "$tmp/cl.bak" > "$a/.claude/coordination.local.json"
+echo '{"disableRemoteControl": true, "crossSessionInbound": "hold"}' > "$a/.claude/settings.local.json"
+out=$(init "$a" --check 2>&1 || true)
+grep -q '^active: .* features=remote$' <<<"$out" && grep -q '^features.remote: disableRemoteControl is true in .*settings.local.json' <<<"$out" &&
+  grep -q '^features.remote: crossSessionInbound is "hold" in .*settings.local.json' <<<"$out" || { echo "remote_warn: $out"; exit 1; }
+# The file that sets a key first in Claude Code's precedence decides it: local's accept and false beat the project's.
+echo '{"crossSessionInbound": "accept", "disableRemoteControl": false}' > "$a/.claude/settings.local.json"
+echo '{"crossSessionInbound": "refuse", "disableRemoteControl": true}' > "$a/.claude/settings.json"
+[[ $(init "$a" --check 2>&1 || true) != *'features.remote:'* ]] || { echo "remote_warn, accept: $(init "$a" --check 2>&1)"; exit 1; }
+rm "$a/.claude/settings.json"
+echo '{"disableRemoteControl": true}' > "$a/.claude/settings.local.json"; mv "$tmp/cl.bak" "$a/.claude/coordination.local.json"
+out=$(init "$a" --check 2>&1 || true); [[ $out != *'features.remote:'* && $out != *features=*remote* ]] || { echo "remote_warn, key off: $out"; exit 1; }
+rm "$a/.claude/settings.local.json"
 # No claude CLI on PATH (Claude Code Desktop alone): --check and the proposal name the install, and the status says
 # so instead of "try again". PATH: this bash, jq and git, then the system's (where no claude is).
 mkdir -p "$tmp/noclaude" && ln -sf "$BASH" "$tmp/noclaude/bash" && ln -sf "$(command -v jq)" "$tmp/noclaude/jq" && ln -sf "$(command -v git)" "$tmp/noclaude/git"
@@ -1852,6 +1894,13 @@ echo '{"features":{"notify":"soon"}}' > "$a/.claude/coordination.local.json"
 [ "$(cfg "$a" features.notify 2>&1)" = "$(printf 'warning: config features.notify=soon is not valid: using the default\n0')" ] || { echo "notify bad value: $(cfg "$a" features.notify 2>&1)"; exit 1; }
 echo '{"features":{"notify":5}}' > "$b/.claude/coordination/coordination.json"
 [ "$(cfg "$b" features.notify)" = 0 ] || { echo "config: the repo file set features.notify"; exit 1; }
+# remote: off by default, on from the person's file, a bad value warns, and the repo file can't turn it on.
+echo '{"features":{"remote":true}}' > "$a/.claude/coordination.local.json"
+[ "$(cfg "$a" features.remote)" = true ] || { echo "config features.remote: $(cfg "$a" features.remote)"; exit 1; }
+echo '{"features":{"remote":"yes"}}' > "$a/.claude/coordination.local.json"
+[ "$(cfg "$a" features.remote 2>&1)" = "$(printf 'warning: config features.remote=yes is not valid: using the default\nfalse')" ] || { echo "remote bad value: $(cfg "$a" features.remote 2>&1)"; exit 1; }
+echo '{"features":{"remote":true}}' > "$b/.claude/coordination/coordination.json"
+[ "$(cfg "$b" features.remote)" = false ] || { echo "config: the repo file set features.remote"; exit 1; }
 # retro: features.retro and the retro block, each with its default; set in the person's file, with its doc line; a bad
 # value warns and falls back; plugin scope only from feedback.repo_dir's root; the repo file can set none of them.
 echo '{}' > "$a/.claude/coordination.local.json"
