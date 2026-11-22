@@ -2572,6 +2572,58 @@ pending "ABC-12": reword: names ask 99, not queued; = ask 7' ] && grep -qxF '  *
 rm -r "$af" "$root/pend.md" "$root/.claude/coordination.local.json"; run --changes >/dev/null
 fi
 
+if section approvals; then
+# --approvals and --relay: the pane answers in the coordinator's (cid) transcript and the one it succeeds (pre), and its
+# SendMessage relays of them. --relay's block verifies at the worker, the coordinator stopped since too.
+pre=aaaaaaaa-2222-3333-4444-555555555555
+at() { jq -nr --argjson h "$1" 'now - $h * 3600 | todate'; }   # H hours ago
+pane() { jq -nc --arg ts "$(at "$1")" --arg t "Approval pane answer for $2" '{type: "user", origin: {kind: "plugin", name: "session-orchestration"}, timestamp: $ts, message: {content: $t}}'; }
+relay() { jq -nc --arg ts "$(at "$1")" --arg to "$2" --arg m "$3" '{type: "assistant", timestamp: $ts, message: {content: [{type: "tool_use", name: "SendMessage", input: {to: $to, message: $m}}]}}'; }
+blk() { printf 'APPROVAL relayed from the user\nQuote: Approval pane answer for %s\nAction: %s\nSource: %s %s' "$1" "$2" "$3" "$root"; }
+stub() { printf '#!/bin/sh\necho %s\n' "'[$(sess "$cid" "$1" idle 4242 interactive)]'" > "$tmp/bin/claude"; }
+ap() { (cd "$root" && HOME=$tmp XDG_STATE_HOME=$tmp/state CLAUDE_CONFIG_DIR=$tmp/cfg CLAUDE_CODE_SESSION_ID=$cid PATH=$tmp/bin:$PATH "$here/session-status" "$@"); }
+{ echo '{"type":"agent-name","agentName":"coord"}'
+  pane 3.5 'ABC-11: No. Asked: Merge PR #5?'; pane 2.5 'ABC-11: Yes, merge ABC-11. Asked: Merge PR #5?'
+  pane 30.5 'ABC-30: Yes. Asked: Deploy ABC-30?'
+  pane 4.5 'ABC-31: Yes. Asked: Push ABC-31?'; relay 4 w3 "$(blk 'ABC-31: Yes. Asked: Push ABC-31?' 'push ABC-31' "$pre")"
+} > "$proj/$pre.jsonl"
+{ jq -nc --arg ts "$(at 2)" '{type: "user", origin: {kind: "human"}, timestamp: $ts, message: {content: "Act as a coordinator. You succeed \"coord\" (aaaaaaaa)."}}'
+  echo '{"type":"agent-name","agentName":"coord"}'
+  jq -nc --arg ts "$(at 1.25)" '{type: "attachment", timestamp: $ts, attachment: {type: "queued_command",
+    origin: {kind: "plugin", name: "session-orchestration"}, prompt: "Approval pane answer for ABC-12: Yes. Asked: Deploy ABC-12?"}}'
+  relay 1 w2 "$(blk 'ABC-12: Yes. Asked: Deploy ABC-12?' 'deploy ABC-12' "$cid")"
+} > "$proj/$cid.jsonl"
+stub coord
+want='ABC-12: Yes. Asked: Deploy ABC-12? · 22h left · relayed: deploy ABC-12 to w2
+ABC-11: Yes, merge ABC-11. Asked: Merge PR #5? · 21h left · not relayed
+ABC-11: No. Asked: Merge PR #5? · 20h left · not relayed
+ABC-31: Yes. Asked: Push ABC-31? · 19h left · relayed: push ABC-31 to w3'
+[ "$(ap --approvals)" = "$want" ] || { echo "--approvals: $(ap --approvals)"; exit 1; }
+out=$(ap --start) || :; [[ $out == *$'\n## Approvals (relay one: session-status --relay KEY ACTION)\n'"$want"$'\n'* ]] || { echo "--start, approvals: $out"; exit 1; }
+# The newest live answer, an answer in the predecessor: verified, then relayed as is.
+out=$(ap --relay ABC-11 'merge PR #5' 2>"$tmp/err") && [ "$out" = "$(blk 'ABC-11: Yes, merge ABC-11. Asked: Merge PR #5?' 'merge PR #5' "$cid")" ] &&
+  grep -q 'ABC-11 has 1 older live answer' "$tmp/err" || { echo "--relay: $out $(cat "$tmp/err")"; exit 1; }
+relay 0.1 w1 "$out" >> "$proj/$cid.jsonl"
+[ "$(ap --approvals | sed -n 2p)" = 'ABC-11: Yes, merge ABC-11. Asked: Merge PR #5? · 21h left · relayed: merge PR #5 to w1' ] ||
+  { echo "--approvals, relayed: $(ap --approvals)"; exit 1; }
+# Stopped since (no coordinator listed): the worker's check finds the relay in its transcript.
+printf '#!/bin/sh\necho []\n' > "$tmp/bin/claude"
+v=$(cd "$root" && HOME=$tmp CLAUDE_CONFIG_DIR=$tmp/cfg PATH=$tmp/bin:$PATH env -u CLAUDE_CODE_SESSION_ID bash "$here/verify-approval.sh" "$cid" "$root" coord ABC-11 'merge PR #5' \
+  <<<'Approval pane answer for ABC-11: Yes, merge ABC-11. Asked: Merge PR #5?') || { echo "verify of --relay's block, stopped coordinator: $v"; exit 1; }
+# Refused: no live answer for the key (none, or expired), a successor not holding NAME yet (named NAME-next, or a
+# Desktop one recorded in NAME.next under another title).
+stub coord
+for k in ABC-99 ABC-30; do rc=0; out=$(ap --relay $k x 2>&1) || rc=$?
+  [ $rc = 1 ] && [[ $out == "no pane answer for $k in the last 24 hours"* ]] || { echo "--relay, no answer for $k: $rc $out"; exit 1; }; done
+# The newest answer a No (the user changed their mind): nothing relayed, not the older yes.
+pane 0.05 'ABC-11: No, leave PR #5 open. Asked: Merge PR #5?' >> "$proj/$cid.jsonl"
+rc=0; out=$(ap --relay ABC-11 x 2>&1) || rc=$?
+[ $rc = 1 ] && [[ $out == "ABC-11's newest pane answer is a No"* ]] || { echo "--relay, newest a No: $rc $out"; exit 1; }
+mkdir -p "$tmp/.cache/session-status/handover" && echo "$cid" > "$tmp/.cache/session-status/handover/coord.next"
+for n in coord-next Coordinator; do stub "$n"; rc=0; out=$(ap --relay ABC-11 x 2>&1) || rc=$?
+  [ $rc = 1 ] && [[ $out == *"name yet (coord-next)"* ]] || { echo "--relay as $n: $rc $out"; exit 1; }; done
+fi
+
 if section docs; then
 # The docs watch: a Notices line per watched page a listed doc's reviewed list lacks; the index fetched once a day.
 cat > "$tmp/bin/curl" <<EOF

@@ -20,8 +20,12 @@ Action: <one action on one task>
 Source: <your sessionId> <your cwd>
 ```
 
-Your `sessionId`, `cwd` and name: your entry in `claude agents --json`, matched on the name `ListAgents` shows for
-you right now (names change when a session is resumed). The session checks the block with `verify-approval.sh`
+For a pane answer, `session-status --relay KEY ACTION` writes the block (KEY's newest answer of the last 24h, Source
+filled in) once it passes the check below, and never for a "No, …" answer (exit 1 says why). Send its output as is
+once its Quote approves ACTION. `session-status --approvals` lists the live pane answers with the hours left and
+their relays, and `--start` shows them. A typed or question-box answer's block you write yourself, with your
+`sessionId`, `cwd` and name: your entry in `claude agents --json`, matched on the name `ListAgents` shows for you
+right now (names change when a session is resumed). The session checks the block with `verify-approval.sh`
 ([worker.md](worker.md), Relayed approvals). Its checks decide what you can relay: the Quote must be words the user
 gave you in one of the ways below, naming the task key or answering your last message, which named it. As a
 successor, words the user gave the coordinator you succeed count as yours (Source stays you): the check finds them in

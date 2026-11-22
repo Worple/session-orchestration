@@ -736,6 +736,27 @@ tilde() { local t='~'; printf '%s' "${1/#$HOME/$t}"; }
 activity_of() { tail -n 2000 "$1" | jq -rRn -f "$LIB_DIR/skills/orchestrating-sessions/session-activity.jq" 2>/dev/null; }
 last_text() { activity_of "$1" | cut -f3; }
 
+# chain_transcripts TRANSCRIPT MINS: TRANSCRIPT, then each coordinator it succeeds, back along the typed first prompt's
+# `You succeed "NAME" (ID8)` (session-status --successor), one path a line. A predecessor counts while it was written
+# to within MINS minutes, never ran a bg turn and went by NAME; the walk stops at the first that doesn't.
+chain_transcripts() {
+  local t=$1 mins=$2 first name p i
+  echo "$t"
+  for i in $(seq 50); do   # a bound against a cycle of prompts
+    first=$(jq -rn 'first(inputs | select(.type == "user")) | select(.origin.kind == "human") | .message.content
+          | if type == "string" then . else ([.[]? | .text? // empty] | join(" ")) end' "$t" 2>/dev/null |
+        grep -oE 'You succeed "[^"]*" \([0-9a-f]{8}\)' | head -1)
+    [ -n "$first" ] || return 0
+    name=${first#You succeed \"}; name=${name%\" (*}; p=${first##*(}; p=${p%)}
+    set -- "$(dirname "$t")/$p"*.jsonl; [ $# = 1 ] && [ -f "$1" ] && [ "$1" != "$t" ] || return 0
+    t=$1; [ -n "$(find "$t" -mmin "-$mins")" ] || return 0
+    [ "$(jq -rn --arg n "$name" 'reduce inputs as $e ({bg: false, named: false};
+        if $e.sessionKind == "bg" then .bg = true elif $e.type == "agent-name" and $e.agentName == $n then .named = true else . end)
+        | if (.bg | not) and .named then "ok" else "no" end' "$t" 2>/dev/null)" = ok ] || return 0
+    echo "$t"
+  done
+}
+
 # mtime FILE…: each file's modification time (epoch s). mtime_named FILE…: "EPOCH PATH" per file. stat_sig FILE…:
 # "EPOCH SIZE INODE PATH" per file (a rewrite in the same second still changes its size or inode).
 if stat -c %Y / >/dev/null 2>&1; then

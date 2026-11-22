@@ -126,22 +126,11 @@ matches() { jq -r -n --arg q "$q" --arg key "$key" --argjson ref "$ref" --argjso
        else empty end)] | last // empty' "$1"; }
 # A successor coordinator (its typed first prompt `You succeed "NAME" (ID8)`, from session-status --successor) relays
 # what the user told the coordinator it took over from: that one's transcript counts too, back along the chain, while
-# it was written to within the quote's age window. Each must have been interactive (no bg turn) and gone by NAME.
-r=$(matches "$f"); t=$f
-mins=$(( ($(date +%s) - ref + max_age_h * 3600) / 60 + 1 ))
-for _ in $(seq 50); do   # a bound against a cycle of prompts
-  [ -z "$r" ] || break
-  first=$(jq -rn 'first(inputs | select(.type == "user")) | select(.origin.kind == "human") | .message.content
-        | if type == "string" then . else ([.[]? | .text? // empty] | join(" ")) end' "$t" 2>/dev/null |
-      grep -oE 'You succeed "[^"]*" \([0-9a-f]{8}\)' | head -1) || break
-  name=${first#You succeed \"}; name=${name%\" (*}; p=${first##*(}; p=${p%)}
-  set -- "$(dirname "$t")/$p"*.jsonl; [ $# = 1 ] && [ -f "$1" ] && [ "$1" != "$t" ] || break
-  t=$1; [ -n "$(find "$t" -mmin "-$mins")" ] || break
-  [ "$(jq -rn --arg n "$name" 'reduce inputs as $e ({bg: false, named: false};
-      if $e.sessionKind == "bg" then .bg = true elif $e.type == "agent-name" and $e.agentName == $n then .named = true else . end)
-      | if (.bg | not) and .named then "ok" else "no" end' "$t" 2>/dev/null)" = ok ] || break
-  r=$(matches "$t")
-done
+# it was written to within the quote's age window. Each must have been interactive (no bg turn) and gone by NAME
+# (lib.sh chain_transcripts).
+r=
+while IFS= read -r t; do r=$(matches "$t"); [ -z "$r" ] || break
+done < <(chain_transcripts "$f" $(( ($(date +%s) - ref + max_age_h * 3600) / 60 + 1 )))
 [ -n "$r" ] || reject "no recent message typed by the user, question-box answer or pane click matches the whole quote and names $key in it or in the message it answers"
 echo "$r"
 # A command this session also handed the user for this task (hand_command) is still runnable from the pane: doing the
