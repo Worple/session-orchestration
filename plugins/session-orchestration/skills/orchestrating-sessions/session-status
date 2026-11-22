@@ -87,8 +87,10 @@
 #        session-status --stale [args]   the sweep's "Stale" section alone: queued asks and handoff entries whose facts
 #                       moved on, sessions asking the user with no ask queued (stale.jq has the signals); flags only
 #        session-status --watch [--every SECS] [args]   block until --changes reports something at two polls in a
-#                       row (or fails 3 in a row), print it and exit; checks every SECS (default 1800). Run it in
-#                       the background, re-arm; no loop around it.
+#                       row (or fails 3 in a row), print it and exit; checks every SECS (default 1800). Every
+#                       SESSION_STATUS_TICK_S (60) it also prints "Idle: NAME (ID8): its last line" for each of the
+#                       project's background sessions whose turn ended without a reply or a background task to wait
+#                       on, and exits. Run it in the background, re-arm; no loop around it.
 #        session-status --pending       the adapter's `pending` text only
 #        session-status --pending-done LABEL [--] REASON   archive a handoff entry (config pending.file; `pending`)
 #        session-status --pending-history LABEL [--last N] | --find KEY | --scan | --seed   an entry's history
@@ -893,17 +895,54 @@ fetch_quick() {
     git -c http.lowSpeedLimit=1 -c http.lowSpeedTime=30 -C "$1" fetch -q origin </dev/null 2>/dev/null
 }
 
+# idle_check: the project's background sessions (cwd ROOT or under it) idle for a TICK, from each account's session
+# files (no adapter, no `claude`): session-idle.jq reads each one's transcript since it started, and one that neither
+# replied nor waits on a background task it started prints "Idle: NAME (ID8): its last line". Any printed: one wake,
+# exit 0. Skipped: a dead pid, the caller, this project's coordinators (CNRE, -prev-N). $ENC.idle holds the
+# ID<TAB>statusUpdatedAt of every session checked and still idle, so a turn is classified once.
+idle_check() {
+  local seen=~/.cache/session-status/$ENC.idle tick=${SESSION_STATUS_TICK_S:-60} dir pid id upd started name t how
+  local keep= out=() line
+  while IFS=$'\t' read -r dir _; do
+    [ -d "$dir/sessions" ] || continue
+    while IFS=$'\t' read -r pid id upd started name; do
+      kill -0 "$pid" 2>/dev/null && [ "$id" != "${CLAUDE_CODE_SESSION_ID:-}" ] || continue
+      [[ ! $name =~ ^($CNRE)$ && ! $name =~ -prev-[0-9]+$ ]] || continue
+      line=$id$'\t'$upd
+      if ! grep -qxF "$line" "$seen" 2>/dev/null; then
+        t=("$dir"/projects/*/"$id".jsonl); [ -f "${t[0]}" ] || continue   # no transcript yet: next tick
+        how=$(jq -rRn --argjson since "$started" -f "$(dirname "$SELF")/session-idle.jq" < "${t[0]}" 2>/dev/null) || continue
+        [ "$how" != idle ] || out+=("Idle: $name (${id:0:8}): $(last_text "${t[0]}")")
+      fi
+      keep+=$line$'\n'
+    # a jq per file: one caught mid-write mustn't hide the rest. No empty field: tabs are IFS whitespace.
+    done < <(for f in "$dir"/sessions/*.json; do jq -r --arg root "$ROOT" --argjson tick "$tick" 'select(.kind == "bg"
+        and .status == "idle" and .pid != null and now * 1000 - .statusUpdatedAt >= $tick * 1000
+        and (.cwd == $root or (.cwd | startswith($root + "/"))))
+      | [.pid, .sessionId, .statusUpdatedAt, .startedAt // 0, .name // "unnamed"] | @tsv' "$f" 2>/dev/null; done)
+  done < <(list_accounts)
+  [ -n "$keep" ] || [ -f "$seen" ] && { mkdir -p ~/.cache/session-status; printf '%s' "$keep" > "$seen"; }
+  [ ${#out[@]} -gt 0 ] || return 0
+  usage wake wake "${#out[@]}"; printf '%s\n' "${out[@]}"; exit 0
+}
+# nap SECS: sleep SECS in pieces of at most SESSION_STATUS_TICK_S, running idle_check after each.
+nap() {
+  local left=$1 tick=${SESSION_STATUS_TICK_S:-60} s
+  while [ "$left" -gt 0 ]; do s=$((left < tick ? left : tick)); sleep "$s"; left=$((left - s)); idle_check; done
+}
+
 # --watch: a change must show at two polls in a row (CONFIRM_S apart) to count, so a flicker (a Bitbucket blip, a
 # state flip) wakes no one; the first poll peeks (SESSION_STATUS_PEEK: --changes keeps its state), the second commits.
 # A failed poll (Jira or Bitbucket timing out, a jq error) logs one line to stderr and is retried at the next tick
 # (SECS; CONFIRM_S while confirming a change). WATCH_TRIES (3) failures in a row end the wait with "gave up after N"
-# and the last error. stderr passes through.
+# and the last error. stderr passes through. Every sleep is a nap: idle_check runs each SESSION_STATUS_TICK_S (60).
 if [ "${1:-}" = --watch ]; then
   shift; every=1800; [ "${1:-}" = --every ] && { every=${2:-}; shift; shift; }
   case $every in ''|*[!0-9]*|0) echo "--every needs a positive number of seconds"; exit 2 ;; esac
   confirm=${SESSION_STATUS_CONFIRM_S:-120}; [ "$confirm" -le "$every" ] || confirm=$every
   tries=${SESSION_STATUS_WATCH_TRIES:-3}
   case $tries in ''|*[!0-9]*|0) echo "SESSION_STATUS_WATCH_TRIES needs a positive number"; exit 2 ;; esac
+  case ${SESSION_STATUS_TICK_S:-60} in *[!0-9]*|0*) echo "SESSION_STATUS_TICK_S needs a positive number of seconds"; exit 2 ;; esac
   fails=0 seen=
   while :; do
     if [ -n "$seen" ]; then out=$(SESSION_STATUS_FORWARD=1 "$SELF" --changes "$@"); else out=$(SESSION_STATUS_PEEK=1 "$SELF" --changes "$@"); fi; rc=$?
@@ -913,12 +952,12 @@ if [ "${1:-}" = --watch ]; then
       [ "$fails" -lt "$tries" ] || { usage gave-up wake "$rc"; echo "session-status --watch: gave up after $fails failed polls in a row; last error:"; echo "$out"; exit "$rc"; }
       usage poll-failed wake "$rc"
       echo "session-status --watch: poll failed ($fails/$tries), retrying in ${wait}s: $(paste -sd' ' - <<<"$out" | tr -s ' ' | cut -c1-200)" >&2
-      sleep "$wait"; continue
+      nap "$wait"; continue
     fi
     fails=0
-    if [ "$out" = "no changes" ]; then seen=; sleep "$every"
+    if [ "$out" = "no changes" ]; then seen=; nap "$every"
     elif [ -n "$seen" ]; then usage wake wake "$(grep -c . <<<"$out")"; echo "$out"; exit 0
-    else seen=1; sleep "$confirm"
+    else seen=1; nap "$confirm"
     fi
   done
 fi

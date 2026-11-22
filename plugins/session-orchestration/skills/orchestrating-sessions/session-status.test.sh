@@ -2753,6 +2753,34 @@ bg='{"run_in_background":true,"command":"sleep 9"}'
 { turn 1 'Work on ABC-12'; use 2 t1 mcp__session-orchestration__reply; res 3 t1 'failed' true; done_ 4; } | check idle 'a failed reply'
 { turn 1 'Work on ABC-12'; use 2 t1 SendMessage; res 3 t1 sent; notes 4 "$(nb t0)"; echo '{"type":"user","isCompactSummary":true,"message":{"content":"Summary"}}'
   echo '{"type":"user","message":{"content":"<command-name>/reload-plugins</command-name>"}}'; done_ 5; } | check replied 'a reply, then a notification, a summary and /reload-plugins'
+# --watch's idle tick: the session files ($tmp/cfg/sessions), each one's transcript in $proj; a live pid (sleep), a
+# dead one. Only a project background session idle for a tick, whose turn neither replied nor waits, is printed.
+sleep 300 & live=$!; trap 'kill $live 2>/dev/null || true; rm -rf "$tmp"' EXIT
+sleep 0 & dead=$!; wait "$dead" || true
+uid() { echo "$1$1$1$1$1$1$1$1-0000-0000-0000-000000000000"; }
+old=$(( $(date +%s) * 1000 - 600000 )) fresh=$(( $(date +%s) * 1000 + 3600000 )); mkdir -p "$tmp/cfg/sessions"
+# sf N LETTER NAME KIND STATUS [PID] [UPDATED_MS] [CWD]: session file N.json for $(uid LETTER), its turn idle
+sf() { jq -nc --arg id "$(uid "$2")" --arg n "$3" --arg k "$4" --arg s "$5" --argjson pid "${6:-$live}" --argjson upd "${7:-$old}" \
+    --arg cwd "${8:-$root}" --argjson st "$since" \
+    '{pid: $pid, sessionId: $id, cwd: $cwd, startedAt: $st, kind: $k, status: $s, statusUpdatedAt: $upd, name: $n}' > "$tmp/cfg/sessions/$1.json"
+  { turn 1 'Work on ABC-12'; done_ 2; } > "$proj/$(uid "$2").jsonl"; }
+sf 01 a alpha bg idle; sf 02 b beta bg idle "" "" "$root/wt"
+sf 03 c replied bg idle; { turn 1 'Work on ABC-12'; use 2 t1 SendMessage; res 3 t1 sent; done_ 4; } > "$proj/$(uid c).jsonl"
+sf 04 d waiting bg idle; { turn 1 'Work on ABC-12'; use 2 t1 Bash "$bg"; res 3 t1 'Command running in background with ID: b1'; done_ 4; } > "$proj/$(uid d).jsonl"
+sf 05 e busy bg busy; sf 06 f shell bg shell; sf 07 g inter interactive idle; sf 08 h dead bg idle "$dead"
+sf 09 i other bg idle "" "" "$root-other"; sf 10 j "$(basename "$root")-coordinator" bg idle; sf 11 k task-prev-1 bg idle
+sf 12 l caller bg idle; sf 13 m fresh bg idle "" "$fresh"
+run --changes >/dev/null; out=$(CLAUDE_CODE_SESSION_ID=$(uid l) SESSION_STATUS_TICK_S=1 run --watch --every 30) ||
+  { echo "idle tick, exit $?: $out"; exit 1; }
+[ "$out" = "$(printf 'Idle: alpha (aaaaaaaa): Done.\nIdle: beta (bbbbbbbb): Done.')" ] || { echo "idle tick printed: $out"; exit 1; }
+[ "$(cut -f1 "$tmp/.cache/session-status/"*.idle)" = "$(printf '%s\n' "$(uid a)" "$(uid b)" "$(uid c)" "$(uid d)")" ] ||
+  { echo "idle tick recorded: $(cat "$tmp/.cache/session-status/"*.idle)"; exit 1; }
+# A second tick prints only the new idle session: a turn already reported isn't printed again.
+sf 14 n new bg idle; run --changes >/dev/null
+out=$(CLAUDE_CODE_SESSION_ID=$(uid l) SESSION_STATUS_TICK_S=1 run --watch --every 30) && [ "$out" = 'Idle: new (nnnnnnnn): Done.' ] ||
+  { echo "second idle tick printed: $out"; exit 1; }
+[ "$(SESSION_STATUS_TICK_S=x run --watch)" = "SESSION_STATUS_TICK_S needs a positive number of seconds" ] || { echo "bad tick accepted"; exit 1; }
+kill "$live"
 fi
 
 if section docs; then
