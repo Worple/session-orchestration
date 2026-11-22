@@ -564,17 +564,24 @@ while IFS= read -r r; do
       tried="the quote approved under $under doesn't speak of landing or merging"; fault not-landing relay; continue; fi
     [ "$nm" != "$me" ] || key=${under:-$me}
     # A coordinator may have asked under the name without its project prefix (the "<project>-" of its own
-    # "<project>-coordinator"): that key verifies the yes too.
-    [ "$nm" != "$me" ] || [ -n "$under" ] || { pfx=$(jq -r .name <<<"$r"); pfx=${pfx%-coordinator*}-; [ "$pfx" = - ] || alt=${me#"$pfx"}; }
+    # "<project>-coordinator"): that key verifies the yes too, only as a pane answer asked under exactly it
+    # (a short name is often a plain word a typed yes merely mentions).
+    sn=$(jq -r .name <<<"$r"); pfx=${sn%-coordinator*}-
+    if [ "$nm" = "$me" ] && [ -z "$under" ] && [[ $sn == ?*-coordinator* && $me == "$pfx"?* ]] &&
+       [[ $(jq -r .quote <<<"$r") == "Approval pane answer for ${me#"$pfx"}:"* ]]; then alt=${me#"$pfx"}; fi
   fi
   # No tracker key (session-name keys): the user's words must name the target itself (REPO#ID; OWNER/ may precede).
   [ -n "$key" ] || key=$short
   [ -n "$key" ] || { tried="the matching relay's Action names no task key"; fault no-key relay; continue; }
+  v1=
   for k in "$key" ${alt:+"$alt"}; do
     v=$(cd "$cwd" 2>/dev/null && jq -r .quote <<<"$r" |
         bash "$here/../skills/orchestrating-sessions/verify-approval.sh" "$(jq -r .sid <<<"$r")" "$(jq -r .scwd <<<"$r")" "$(jq -r .name <<<"$r")" "$k" "$act")
     [[ $v != verified* ]] || break
+    v1=${v1:-$v}
   done
+  # Both keys failed: the deny gives the full key's reason.
+  [[ $v == verified* ]] || v=${v1:-$v}
   # One use per relay: a rerun (the CLI timed out after the server took it) needs a new approval.
   # ponytail: used up when allowed, not when the command succeeds; the deny says to check before asking again.
   used=~/.cache/session-status/approved/$(printf '%s|%s|%s' "$(jq -r .tp <<<"$r")" "$action" "$(jq -c "del(.tp)" <<<"$r")" | shasum -a 256 | cut -c1-32)

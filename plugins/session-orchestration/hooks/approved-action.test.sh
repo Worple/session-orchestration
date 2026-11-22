@@ -277,6 +277,13 @@ printf '#!/bin/sh\necho %s\n' "'[{\"sessionId\":\"$cid\",\"name\":\"claude-plugi
 } >> "$w"
 check "gh pr merge 48 -R acme/app --auto --rebase" allow "merge relayed under this session's name, the yes under its short key"
 check "gh pr merge 49 -R acme/app --auto --rebase" deny "the short key of another session's name"
+# The short key verifies only a pane answer asked under it, and only from a "<project>-coordinator".
+typed "yes, fix the x tests" "$now" >> "$proj/$cid.jsonl"
+relay "yes, fix the x tests" "merge acme/app#51 (claude-plugins-x)" claude-plugins-coordinator >> "$w"
+check "gh pr merge 51 -R acme/app --auto --rebase" deny "the short key only mentioned in a typed yes"
+printf '#!/bin/sh\necho %s\n' "'[{\"sessionId\":\"$cid\",\"name\":\"claude-plugins\",\"cwd\":\"$root\",\"kind\":\"interactive\"}]'" > "$tmp/bin/claude"
+relay "Approval pane answer for x: Yes, start x. Asked: Start x?" "merge acme/app#50 (claude-plugins-x)" claude-plugins >> "$w"
+check "gh pr merge 50 -R acme/app --auto --rebase" deny "the short key relayed by a sender that is no coordinator"
 printf '#!/bin/sh\necho %s\n' "'[{\"sessionId\":\"$cid\",\"name\":\"coord\",\"cwd\":\"$root\",\"kind\":\"interactive\"}]'" > "$tmp/bin/claude"
 # A landing by fast-forward (session-status --land BRANCH) is gated as a merge of BRANCH, run alone.
 check "grep -n 'session-status --land main' worker.md" pass "a mention of --land"
