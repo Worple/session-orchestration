@@ -556,7 +556,8 @@ fi
 # (the file --handover reads; worker.md, The replies file). No KEY: the task key context-watch.sh cached for that
 # session, else its name less a -prev-K; a sub-coordinator's (`Coordinate KEY`), always KEY-coordinator. It replaces what precedes the first `## Handoff` and keeps that section on,
 # so a report never drops the handoff; a report with its own `## Handoff` replaces it. A chunk files under KEY-cN-report;
-# a report without a plan heading over a file whose top has one (`## Plan`, `## Build plan`) goes to NAME-report.md. Exit 3: no replies folder.
+# a report without a plan heading over a file whose top has one (`## Plan`, `## Build plan`) goes to NAME-report.md.
+# A file with a `# Title` line (a design written to KEY.md) keeps it and what follows (up to a new report's own `## Handoff`; none when the report has a `# ` line). Exit 3: no replies folder.
 if [ "${1:-}" = --report-file ]; then
   rd=$(replies_path); [ -n "$rd" ] || { echo "$ROOT/CLAUDE.md names no replies folder" >&2; exit 3; }
   body=$(cat); [ -n "${body//[[:space:]]/}" ] && [ -n "${2:-}" ] || { echo "usage: session-status --report-file SESSION_ID < REPORT" >&2; exit 2; }
@@ -580,7 +581,8 @@ if [ "${1:-}" = --report-file ]; then
     awk '/^## Handoff/ { exit } /^## (Build )?[Pp]lan([[:space:]]|$)/ { p = 1; exit } END { exit !p }' "$f"; then n=$n-report; f=$rd/$n.md; fi
   {
     printf '%s\n' "$body"
-    if [ -f "$f" ] && ! grep -q '^## Handoff' <<<"$body"; then awk '/^## Handoff/ { on = 1 } on' "$f" | sed '1s/^/\n/'; fi
+    # kept: from the first `# Title` (a deliverable written to KEY.md, e.g. a design), else from `## Handoff` unless the report has its own
+    if [ -f "$f" ]; then awk -v h="$(grep -c '^## Handoff' <<<"$body")" -v t="$(grep -c '^# ' <<<"$body")" '/^## Handoff/ && h { on = 0; done = 1 } !done && ((!t && /^# /) || (!h && /^## Handoff/)) { on = 1 } on' "$f" | sed '1s/^/\n/'; fi
   } > "$f.$$" && mv "$f.$$" "$f" && echo "$f" || { rm -f "$f.$$"; echo "couldn't write $f" >&2; exit 1; }
   exit
 fi
@@ -1259,7 +1261,7 @@ if [ "${1:-}" = --start ]; then
     # The last coordinator saw what came before its handover, however old the note.
     if [ -f "$h" ]; then since=(-newer "$h") what='since the handover'; else since=(-mtime -1) what='in the last day'; fi
     printf '\n## Replies written %s (%s), newest first\n' "$what" "$rd"
-    r=(); while IFS= read -r -d '' f; do r+=("$f"); done < <(find "$rd" -maxdepth 1 -type f -name '*.md' ! -name coordinator-handover.md ! -name coordinator-inbox.md "${since[@]}" -print0 2>/dev/null)
+    r=(); while IFS= read -r -d '' f; do r+=("$f"); done < <(find "$rd" -maxdepth 1 -type f -name '*.md' ! -name coordinator-handover.md ! -name coordinator-inbox.md ! -name '*-archive.md' "${since[@]}" -print0 2>/dev/null)
     [ ${#r[@]} != 0 ] || echo '(none)'
     [ ${#r[@]} = 0 ] || mtime_named "${r[@]}" | sort -rn | head -20 | while read -r m f; do
       # The last `## ` section too: a log or handoff under the header may be newer than its status line.
@@ -1558,7 +1560,7 @@ if [ "${1:-}" = --changes ]; then
       # a report kept off a plan or a chunk's brief (--report-file): NAME-report.md, KEY-cN-report.md
       if [[ $k == ?*-report ]]; then k=${k%-report}; [[ ! $k =~ ^(.+)-c[0-9]+$ ]] || k=${BASH_REMATCH[1]}; fi
       grep -qxE "$kre" <<<"$k" && ! grep -qE "^$k(-|\$)" <<<"$mine" && r+=("$f")
-    done < <(find "$rd" -maxdepth 1 -type f -name '*.md' "${nw[@]}" -print0 2>/dev/null)
+    done < <(find "$rd" -maxdepth 1 -type f -name '*.md' ! -name '*-archive.md' "${nw[@]}" -print0 2>/dev/null)
     [ ${#r[@]} = 0 ] || new+=$'\nReports:'$(mtime_named "${r[@]}" | sort -rn |
       while read -r m f; do printf '\n  * report written: %s (%s)' "${f##*/}" "$(epochfmt "$m" '%m-%d %H:%M:%S')"; done)
     # This account past 90% of its weekly limit while another has headroom: wake the coordinator once to move.
@@ -1661,7 +1663,7 @@ if [ "${1:-}" = --changes ]; then
           grep -qiwF -- "$l" <<<"$b" || { [ -n "$c" ] && grep -qiF -- "$c" <<<"$b"; } ||
             grep -qiE '(^|[^a-z])(log-? ?in|sign(ed)?-? ?(in|out)|auth|expired)([^a-z]|$)' <<<"$b" || continue
           k=${f##*/}; keys+=${keys:+, }${k%.md}
-        done < <(find "$rd" -maxdepth 1 -type f -name '*.md' -mtime -7 -print0 2>/dev/null | sort -z)
+        done < <(find "$rd" -maxdepth 1 -type f -name '*.md' ! -name '*-archive.md' -mtime -7 -print0 2>/dev/null | sort -z)
         restored+="  * $l${keys:+ — blocked on it: $keys}"$'\n'
       done <<<"$all"
     fi
