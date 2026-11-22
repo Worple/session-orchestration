@@ -10,6 +10,9 @@ test('status rows parse whatever the columns hold', async () => {
   expect(parseTask(`${pad('A-3', '-')}no-wt | sess:—`)).toMatchObject({ status: '' })
   expect(parseTask(`${pad('A-4', 'Open')}no-wt | sess:"fix it" idle | Fix "foo" bar`))
     .toMatchObject({ sess: { name: 'fix it', state: 'idle' }, title: 'Fix "foo" bar' })
+  // A live sub-coordinator's segment comes before the title, and the pane shows it as part of it.
+  expect(parseTask(`${pad('A-7', 'Open')}no-wt | sess:"A-7-coordinator" idle | sub: coding; plan 2/5 landed, c3 running | Big task`))
+    .toMatchObject({ sess: { name: 'A-7-coordinator', state: 'idle' }, title: 'sub: coding; plan 2/5 landed, c3 running | Big task' })
   // A guess isn't an owner: the row has no session, the guess kept aside.
   expect(parseTask(`${pad('A-6', 'Open')}no-wt | sess:— (maybe 61c8fb76: 12 mentions) | Spike`))
     .toMatchObject({ sess: { name: '', state: 'none', maybe: '61c8fb76: 12 mentions' }, title: 'Spike' })

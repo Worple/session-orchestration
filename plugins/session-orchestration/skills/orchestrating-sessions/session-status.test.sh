@@ -98,6 +98,37 @@ printf '#!/bin/sh\necho %s\n' "'[{\"sessionId\":\"$sid\",\"name\":\"fix it\",\"c
 [ "$(CLAUDE_CODE_SESSION_ID=$b2 run4 --coordinator | paste -sd'|' -)" = coord ] && [ "$(CLAUDE_CODE_SESSION_ID=$sid run4 --coordinator | paste -sd'|' -)" = 'ABC-12-coordinator|coord' ] ||
   { echo "--coordinator, sub successor: $(CLAUDE_CODE_SESSION_ID=$b2 run4 --coordinator | paste -sd'|' -); $(cat "$tmp/bin4/claude")"; exit 1; }
 rm "$proj/$b2.jsonl"
+# Folded: while the sub lives, ABC-12's row carries `sub: STATE; plan …` from its report and plan, and the sessions
+# whose first prompt names ABC-12 (the worker asking, the chunk) leave the parent's footer; ABC-12's lookup lists them.
+ch=14141414-2222-3333-4444-555555555555; printf '%s\n' '{"type":"user","message":{"content":"Session task: ABC-12\nChunk: ABC-12/1"}}' > "$proj/$ch.jsonl"
+sub_ls() { printf '#!/bin/sh\necho %s\n' "'[{\"sessionId\":\"$sid\",\"name\":\"fix it\",\"cwd\":\"$root\",\"state\":\"blocked\"},{\"sessionId\":\"$cid\",\"name\":\"coord\",\"cwd\":\"$root\",\"status\":\"idle\"},$1{\"sessionId\":\"$ch\",\"name\":\"ABC-12-c1\",\"cwd\":\"$root\",\"status\":\"idle\"}]'" > "$tmp/bin4/claude"; }
+sub_ls "{\"sessionId\":\"$bid\",\"name\":\"ABC-12-coordinator\",\"cwd\":\"$root\",\"status\":\"idle\"},"
+mkdir -p "$tmp/replies"; echo "Replies folder: \`$tmp/replies\`" > "$root/CLAUDE.local.md"
+printf 'ABC-12-coordinator · ABC-12 · coding | waves 1-2\nDone: c1\n' > "$tmp/replies/ABC-12-coordinator.md"
+printf '# ABC-12\n\n## Plan\n\n| # | Chunk | Kind | Deps | Touches | Est | Model/effort | Done when |\n|---|---|---|---|---|---|---|---|\n| 1 | a | build | – | `a` | 30K | opus/medium | ok |\n| 2 | b | build | – | `b` | 30K | opus/medium | ok |\n| 3 | c | build | 1 | `c` | 30K | opus/medium | ok |\n' > "$tmp/replies/ABC-12.md"
+printf '## c2: done\n' > "$tmp/replies/ABC-12-build.md"
+row='ABC-12    -              wt dirty:1 unpushed:? | sess:"ABC-12-coordinator" idle | sub: coding / waves 1-2; plan 1/3 landed, c1 running'
+out=$(run4) && [ "$out" = "$row" ] && [ "$(run4 ABC-12)" = "$row"$'\n\nUnder ABC-12-coordinator:\n  "ABC-12-c1" idle (claude attach 14141414)\n  "fix it" blocked (claude attach 11111111)' ] ||
+  { echo "fold, the parent's sweep: $out"; run4 ABC-12; exit 1; }
+# The sub's own sweep keeps them; a prompt (blocked:) reaches the parent's Waiting on you.
+grep -qx '  "fix it" (claude attach 11111111)' <<<"$(CLAUDE_CODE_SESSION_ID=$bid run4)" || { echo "fold, the sub's sweep"; CLAUDE_CODE_SESSION_ID=$bid run4; exit 1; }
+mkdir -p "$tmp/.cache/session-status/blocked"; echo "{\"time\":$(date +%s),\"tool\":\"Bash\",\"input\":\"rm x\"}" > "$tmp/.cache/session-status/blocked/$sid.json"
+grep -qx '  "fix it" (claude attach 11111111) — blocked: Bash `rm x`' <<<"$(run4)" || { echo "fold, a prompt"; run4; exit 1; }
+rm "$tmp/.cache/session-status/blocked/$sid.json"
+# --changes: a chunk landing (the plan count) is no change, the report's state is, and so is the sub going: its row
+# unfolds (sub gone, ABC-12 unfinished), and its sessions are back in the footer. A restarted sub folds them again.
+run4 --changes >/dev/null; printf '## c2: done\n## c1: done\n' > "$tmp/replies/ABC-12-build.md"
+[ "$(run4 --changes)" = "no changes" ] || { echo "--changes, a chunk landed: $(run4 --changes)"; exit 1; }
+sed -i.bak 's/· coding |/· blocked |/' "$tmp/replies/ABC-12-coordinator.md"
+out=$(run4 --changes) && [ "$out" = "$(printf '%s\n' 'was: ABC-12 | sess:"ABC-12-coordinator" | sub: coding / waves 1-2' 'now: ABC-12 | sess:"ABC-12-coordinator" | sub: blocked / waves 1-2')" ] ||
+  { echo "--changes, the report's state: $out"; exit 1; }
+sub_ls ""; out=$(run4)
+grep -q '^ABC-12 .* | sub gone, ABC-12 unfinished: blocked / waves 1-2; plan 2/3 landed$' <<<"$out" && grep -qx '  "fix it" (claude attach 11111111)' <<<"$out" &&
+  ! grep -q Under <<<"$(run4 ABC-12)" && grep -q '^now: ABC-12 .*sub gone, ABC-12 unfinished' <<<"$(run4 --changes)" || { echo "sub gone: $out"; exit 1; }
+printf '%s\n' '{"type":"user","message":{"content":"Coordinate ABC-12: continue from replies/ABC-12-coordinator.md"}}' > "$proj/$b2.jsonl"
+sub_ls "{\"sessionId\":\"$b2\",\"name\":\"ABC-12-coordinator\",\"cwd\":\"$root\",\"status\":\"idle\"},"
+out=$(run4) && grep -q '^ABC-12 .* | sub: blocked / waves 1-2; plan 2/3 landed$' <<<"$out" && ! grep -q 'fix it' <<<"$out" || { echo "restarted sub: $out"; exit 1; }
+rm -r "$proj/$ch.jsonl" "$proj/$b2.jsonl" "$tmp/replies" "$root/CLAUDE.local.md"
 rm "$proj/$bid.jsonl"
 # A ready successor (coord-next, handover/coord.ready) goes before the old one still holding the name, though older.
 nid=77777777-2222-3333-4444-555555555555; mkdir -p "$tmp/bin3"
@@ -2855,6 +2886,13 @@ run --changes >/dev/null; out=$(CLAUDE_CODE_SESSION_ID=$(uid l) SESSION_STATUS_T
 sf 14 n new bg idle; run --changes >/dev/null
 out=$(CLAUDE_CODE_SESSION_ID=$(uid l) SESSION_STATUS_TICK_S=1 run --watch --every 30) && [ "$out" = 'Idle: new (nnnnnnnn): Done.' ] ||
   { echo "second idle tick printed: $out"; exit 1; }
+# A sub-coordinator (ABC-7-coordinator) reads idle to the parent's watcher, its chunk (ABC-7-c1) doesn't: that is the
+# sub's watcher's (--watch ABC-7), which shows only ABC-7's sessions, under its own seen file.
+sf 16 p ABC-7-coordinator bg idle; sf 17 q ABC-7-c1 bg idle; sf 18 r ABC-8-c1 bg idle; run --changes >/dev/null; run --changes ABC-7 >/dev/null
+out=$(CLAUDE_CODE_SESSION_ID=$(uid l) SESSION_STATUS_TICK_S=1 run --watch --every 30) &&
+  [ "$out" = "$(printf 'Idle: ABC-7-coordinator (pppppppp): Done.\nIdle: ABC-8-c1 (rrrrrrrr): Done.')" ] || { echo "idle, the parent's: $out"; exit 1; }
+out=$(CLAUDE_CODE_SESSION_ID=$(uid p) SESSION_STATUS_TICK_S=1 run --watch --every 30 ABC-7) && [ "$out" = 'Idle: ABC-7-c1 (qqqqqqqq): Done.' ] ||
+  { echo "idle, the sub's: $out"; exit 1; }
 [ "$(SESSION_STATUS_TICK_S=x run --watch)" = "SESSION_STATUS_TICK_S needs a positive number of seconds" ] || { echo "bad tick accepted"; exit 1; }
 kill "$live"
 fi

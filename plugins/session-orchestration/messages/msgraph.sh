@@ -324,7 +324,7 @@ the chat as a whole, no named addressee), or "other" (another named person, or n
 
 $me's open tickets:
 P
-      grep -E "^$NOTICE_KEYRE " "$NOTICE_ROWS" 2>/dev/null | awk -F' [|] ' '{print substr($1, 1, 24) "- " $NF}'
+      grep -E "^$NOTICE_KEYRE " "$NOTICE_ROWS" 2>/dev/null | awk -F' [|] ' '{print substr($1, 1, 24) "- " ($NF ~ /^sub( gone| done)?[:,]/ ? "" : $NF)}'
     } > "$T/phead"
     # Up to 8 messages per call, 3 calls at a time (all at once slowed each past the limit): Haiku takes ~70s for 35
     # at once. A chunk not started while 25s of the 40s are left (one call's usual time) waits for the next sweep,

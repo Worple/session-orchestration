@@ -56,7 +56,10 @@
 # --changes also skips a row whose only change is its session flipping between working, idle and blocked, or entering
 # `working`, or its worktree's counts
 # changing while it works, and "Waiting on you" churn: an entry appearing, or going away while its session
-# lives on (states of the sweep's sessions are kept in ~/.cache/session-status/<project>.agents).
+# lives on (states of the sweep's sessions are kept in ~/.cache/session-status/<project>.agents). A
+# live sub-coordinator's row compares as its key, session column and `sub: STATE` only: a chunk landing (the plan
+# count, the tracker status, its PRs) wakes no one, the sub's own watcher (--watch KEY) included; its report's state
+# changing, or the sub going, does.
 # "Resolved (idle a week)": leftovers idle 7 days (SESSION_STATUS_RESOLVE_DAYS) whose removal loses nothing (a
 # session idle or done; a clean worktree whose commits are merged or on origin): by transcript, last commit and folder times.
 # --changes doesn't compare that section: an item moving there, or going away from it, isn't news.
@@ -64,6 +67,8 @@
 # on you has those), coordinators (ran --start, --changes, --watch or --owner, or opened the pane) left out: `"NAME" STATE AGE[ · reviews KEY][ — LAST TEXT] (PREFIX attach ID)`.
 # AGE is since start while working, else since its transcript was last written; idle or done ones drop off at
 # SESSION_STATUS_OTHER_HOURS (3), unless at rest (blocked: still running) or superseded. --changes doesn't compare it either.
+# A session folded into a live sub-coordinator's row (see Sub-coordinator below) shows in no footer section but Waiting
+# on you, and there only on a prompt (`— blocked:`); the sub's own sweep shows them all.
 # "Stale": `* ask ID KEY: REASONS`, `* pending "LABEL": REASONS`, `* session "NAME" (ID8)[ KEY]: decision not on the
 # pane` (stale.jq). --changes reports an item once per wording (a new reason is a new wording), not one going away.
 # Owners: a review session (`Session task: KEY review`, "review" ending the marker) never owns KEY. Task markers
@@ -75,7 +80,8 @@
 # rows are the keys named by running sessions and worktree branches; no "Leftovers".
 #
 # Usage: session-status              all open tasks
-#        session-status KEY [KEY…]   these tasks; no footer (it covers all sessions)
+#        session-status KEY [KEY…]   these tasks; no footer (it covers all sessions). A key with a live sub-coordinator
+#                       lists its folded sessions under `Under KEY-coordinator:` (`"NAME" STATE (PREFIX attach ID)[ — blocked: …]`)
 #        session-status ARG…         other args go to the adapter's `tasks`
 #        session-status --start [args]   a coordinator's Start in one run: the status, the handoff file, the last
 #                       handover note, the replies written since it (else in the last day) with their first lines,
@@ -182,6 +188,11 @@
 # opened the pane (open_pane), are a coordinator's and never own a task; a plain run (a worker checking its own
 # task) doesn't count. A sub-coordinator (first prompt `Coordinate KEY`, named KEY-coordinator: lib.sh sub_key) is the
 # exception: it owns KEY before any other session, and --coordinator lists it only to KEY's own sessions, first.
+# While it is live, its row carries `sub: STATE[; plan D/N landed, cX running]` before the title (STATE: its report's,
+# <replies>/KEY-coordinator.md; the plan: <replies>/KEY.md's table), and the live sessions whose first prompt names KEY
+# (its chunks and reviews; coordinators aside) fold into that row: the sweep's footer leaves them out but for a prompt,
+# unless the caller is the sub. Its owner gone, the row reads `sub gone, KEY unfinished: …` and nothing folds.
+# --watch with no key args skips a live sub's sessions in Idle and reports the sub's; with key args, only those keys'.
 # The default key pattern also matches UTF-8 or SHA-256; a project with real keys should answer key-pattern.
 set -uo pipefail
 [ "${1:-}" = --init ] && { shift; exec bash "$(dirname "$0")/../setting-up-coordination/session-init" "$@"; }
@@ -924,30 +935,45 @@ fetch_quick() {
 # replied nor waits on a background task it started prints "Idle: NAME (ID8): its last line". Any printed: one wake,
 # exit 0. Skipped: a dead pid, the caller, this project's coordinators (CNRE, -prev-N). $ENC.idle holds the
 # ID<TAB>statusUpdatedAt of every session checked and still idle, so a turn is classified once.
-# Any coordinator's name (-coordinator, -next) is skipped too: a nested project's coordinator never reads idle here.
+# Any coordinator's name (-coordinator, -next) is skipped too: a nested project's coordinator never reads idle here; a
+# sub-coordinator (KEYRE-coordinator, IDLE_KEYRE) is not. Scoped (IDLE_SCOPE: --watch's key args, `|`-joined, a sub's
+# watcher), only the KEYs' sessions show (SCOPE, SCOPE-…), with their own $ENC-<cksum>.idle; unscoped, a live sub's
+# sessions (SUBKEY-…) are its watcher's, not this one's.
+# shortcut: by name (a sub names its chunks KEY-cN), where the sweep folds by first prompt, and a sub is known only as a
+# bg session; a KEY session named otherwise reads idle to the parent. Use $TMP/folded's rule once one misfires.
 # shortcut: a nested project's workers do show here (is_root can't tell it from a worktree of a repo with a committed
 # adapter); skip them once a nested root misfires.
 idle_check() {
-  local seen=~/.cache/session-status/$ENC.idle tick=${SESSION_STATUS_TICK_S:-60} dir pid id upd started name t how
+  local seen=~/.cache/session-status/$ENC${IDLE_SCOPE:+-$(printf '%s' "$IDLE_SCOPE" | cksum | cut -d' ' -f1)}.idle
+  local tick=${SESSION_STATUS_TICK_S:-60} dir pid id upd started name idle t how all subs subre=
   local keep= out=() line
-  while IFS=$'\t' read -r dir _; do
+  # every live bg session under ROOT (idle 1: idle a TICK), so a live sub is known even while it works
+  all=$(while IFS=$'\t' read -r dir _; do
     [ -d "$dir/sessions" ] || continue
-    while IFS=$'\t' read -r pid id upd started name; do
-      kill -0 "$pid" 2>/dev/null && [ "$id" != "${CLAUDE_CODE_SESSION_ID:-}" ] || continue
-      [[ ! $name =~ ^($CNRE)$ && ! $name =~ -prev-[0-9]+$ && ! $name =~ -coordinator(-next)?$ ]] || continue
-      line=$id$'\t'$upd
-      if ! grep -qxF "$line" "$seen" 2>/dev/null; then
-        t=("$dir"/projects/*/"$id".jsonl); [ -f "${t[0]}" ] || continue   # no transcript yet: next tick
-        how=$(jq -rRn --argjson since "$started" -f "$(dirname "$SELF")/session-idle.jq" < "${t[0]}" 2>/dev/null) || continue
-        [ "$how" != idle ] || out+=("Idle: $name (${id:0:8}): $(last_text "${t[0]}")")
-      fi
-      keep+=$line$'\n'
     # a jq per file: one caught mid-write mustn't hide the rest. No empty field: tabs are IFS whitespace.
-    done < <(for f in "$dir"/sessions/*.json; do jq -r --arg root "$ROOT" --argjson tick "$tick" 'select(.kind == "bg"
-        and .status == "idle" and .pid != null and now * 1000 - .statusUpdatedAt >= $tick * 1000
-        and (.cwd == $root or (.cwd | startswith($root + "/"))))
-      | [.pid, .sessionId, .statusUpdatedAt, .startedAt // 0, .name // "unnamed"] | @tsv' "$f" 2>/dev/null; done)
-  done < <(list_accounts)
+    for f in "$dir"/sessions/*.json; do jq -r --arg root "$ROOT" --argjson tick "$tick" --arg dir "$dir" 'select(.kind == "bg"
+        and .pid != null and (.cwd == $root or (.cwd | startswith($root + "/"))))
+      | [.pid, .sessionId, .statusUpdatedAt // 0, .startedAt // 0, .name // "unnamed",
+         (if .status == "idle" and now * 1000 - (.statusUpdatedAt // 0) >= $tick * 1000 then 1 else 0 end), $dir] | @tsv' "$f" 2>/dev/null; done
+  done < <(list_accounts) | while IFS=$'\t' read -r pid l; do kill -0 "$pid" 2>/dev/null && printf '%s\t%s\n' "$pid" "$l"; done)
+  if [ -z "${IDLE_SCOPE:-}" ] && [ -n "${IDLE_KEYRE:-}" ]; then
+    subs=$(cut -f5 <<<"$all" | grep -E "^$IDLE_KEYRE-coordinator\$" | sed 's/-coordinator$//' | paste -sd'|' -)
+    [ -z "$subs" ] || subre="^($subs)-"
+  fi
+  while IFS=$'\t' read -r pid id upd started name idle dir; do
+    [ "$idle" = 1 ] && [ "$id" != "${CLAUDE_CODE_SESSION_ID:-}" ] || continue
+    [[ ! $name =~ ^($CNRE)$ && ! $name =~ -prev-[0-9]+$ ]] || continue
+    [[ ! $name =~ -coordinator(-next)?$ ]] || { [ -n "${IDLE_KEYRE:-}" ] && [[ $name =~ ^$IDLE_KEYRE-coordinator$ ]]; } || continue
+    [ -z "${IDLE_SCOPE:-}" ] || [[ $name =~ ^($IDLE_SCOPE)(-|$) ]] || continue
+    [ -z "$subre" ] || [[ ! $name =~ $subre ]] || [[ $name =~ -coordinator$ ]] || continue
+    line=$id$'\t'$upd
+    if ! grep -qxF "$line" "$seen" 2>/dev/null; then
+      t=("$dir"/projects/*/"$id".jsonl); [ -f "${t[0]}" ] || continue   # no transcript yet: next tick
+      how=$(jq -rRn --argjson since "$started" -f "$(dirname "$SELF")/session-idle.jq" < "${t[0]}" 2>/dev/null) || continue
+      [ "$how" != idle ] || out+=("Idle: $name (${id:0:8}): $(last_text "${t[0]}")")
+    fi
+    keep+=$line$'\n'
+  done <<<"$all"
   [ -n "$keep" ] || [ -f "$seen" ] && { mkdir -p ~/.cache/session-status; printf '%s' "$keep" > "$seen"; }
   [ ${#out[@]} -gt 0 ] || return 0
   usage wake wake "${#out[@]}"; printf '%s\n' "${out[@]}"; exit 0
@@ -971,6 +997,8 @@ if [ "${1:-}" = --watch ]; then
   case $tries in ''|*[!0-9]*|0) echo "SESSION_STATUS_WATCH_TRIES needs a positive number"; exit 2 ;; esac
   case ${SESSION_STATUS_TICK_S:-60} in *[!0-9]*|0*) echo "SESSION_STATUS_TICK_S needs a positive number of seconds"; exit 2 ;; esac
   fails=0 seen=
+  # idle_check's scope: the args that are keys (a sub's `--watch KEY`); a live sub's own sessions skip the parent's
+  IDLE_KEYRE=$(key_re "$(adapter_path "$ROOT")") IDLE_SCOPE=$(for a in "$@"; do grep -xE "$IDLE_KEYRE" <<<"$a"; done | paste -sd'|' -)
   while :; do
     if [ -n "$seen" ]; then out=$(SESSION_STATUS_FORWARD=1 "$SELF" --changes "$@"); else out=$(SESSION_STATUS_PEEK=1 "$SELF" --changes "$@"); fi; rc=$?
     if [ "$rc" != 0 ]; then
@@ -1044,6 +1072,7 @@ if [ "${1:-}" = --changes ]; then
   # from Leftovers wakes no one, nor does it going away.
   : > "$last.resolved"
   new=$(SESSION_STATUS_FINISHED_OUT=$last.fin.$$ SESSION_STATUS_PRS_OUT=$last.prs.$$ SESSION_STATUS_NO_FEEDBACK=1 SESSION_STATUS_STRICT=1 "$SELF" "$@" | sed -E '/^  \* /!s/ \(PRs as of [0-9]{1,2}:[0-9]{2}\)//; /^  \* /!s/" (idle|busy)/"/; /^  \* /!s/ closed [0-9]+h/ closed/; /^  \* /!s/ \(maybe [0-9a-f]+: [0-9]+ mentions\)//; /^  \* \(failed\) .*auth/!s/^(  \* \(failed\) [^:]*):.*/\1/; s/^(  \* \(failed\) [^:]*):.*auth.*/\1: sign-in/' |
+    sed -E '/^[^ ].* \| sess:"[^"]*"[a-z ]* \| sub: /s/^([^ ]+) .*(\| sess:"[^"]*"[a-z ]* \| sub: [^;|]*).*$/\1 \2/' |
     awk -v r="$RESOLVED:" -v out="$last.resolved" '/^fix:/ {next} $0 == "Other sessions:" || $0 == "Stale prompts:" || $0 == "Sent (session-status --inbox --sent):" {drop = 1; next} drop && /^  / {next} {drop = 0} $0 == r {skip = 1; next} skip && /^  / {print > out; next} {skip = 0; print}') ||
     { rm -f "$last.fin.$$" "$last.fin.$$.wt"; echo "$new"; exit 1; }
   # Under --watch, a committing run stops each finished task's background session at rest (Leftovers or Resolved; not
@@ -1249,7 +1278,7 @@ if [ "${1:-}" = --changes ]; then
         /^was:   ".*" \(.*attach [0-9a-f]+\)( — blocked: .*)?$/ { match($0, /attach [0-9a-f]+\)/); id = substr($0, RSTART + 7, RLENGTH - 8)
           if (id in live && live[id] != "done") drop[NR] }
         END {
-          for (i = 1; i <= NR; i++) if (line[i] ~ /^(was|now): (Waiting on you:|Notices:|Stale:|Reports:|Weekly limit:|Inbox \(session-status --inbox\):|Feedback \(feedback list --plugin\):|Issues \(feedback issues\):)?$/|| line[i] == "was: Leftovers (task finished):") drop[i]
+          for (i = 1; i <= NR; i++) if (line[i] ~ /^(was|now): (Waiting on you:|Notices:|Stale:|Reports:|Weekly limit:|Inbox \(session-status --inbox\):|Feedback \(feedback list --plugin\):|Issues \(feedback issues\):|Under .*-coordinator:)?$/|| line[i] == "was: Leftovers (task finished):") drop[i]
           for (i = 1; i <= NR; i++) if (!(i in drop)) print line[i] }'; echo "$ev"; } | grep . || echo "no changes"
   else
     echo "$new"; [ -z "$ev" ] || printf '\n%s\n' "$ev"
@@ -2053,6 +2082,37 @@ awk -v fkf="$TMP/firstkey" -v rvf="$TMP/reviewers" -v ssf="$TMP/superseded.ids" 
   sort -k1,1 -k2,2rn > "$TMP/guess.all"   # key, mentions, id
 awk '!s[$1]++ && $2 >= 10 {print $1, $3, $2}' "$TMP/guess.all" > "$TMP/owners.guess"   # key, id, mentions
 
+# Sub-coordinators: KEY SUBID per key whose owner is a live sub (`own KEY 2`), and the sessions folded into its row
+# (ID KEY SUBID): live, not the sub, not a coordinator, first prompt naming KEY (first_key: a chunk's and a review's do;
+# --coordinator routes their replies to the sub by the same rule). The sweep leaves them out of its footer, unless the
+# caller is that sub; a key lookup lists them (Under KEY-coordinator). A gone sub folds nothing: they unfold.
+awk -F'\t' '$3 !~ /^(done|stopped)$/ {print $1}' "$TMP/agents" > "$TMP/live.ids"
+awk -v lf="$TMP/live.ids" 'BEGIN { while ((getline l < lf) > 0) live[l] } NR==FNR { if ($2 == 2) s[$1 " " $4]; next }
+  (($1 " " $2) in s) && ($2 in live)' "$TMP/owners.all" "$TMP/owners.exact" > "$TMP/subs"
+# (every `Coordinate KEY` session stays out: a retiring sub beside its successor isn't folded under it)
+awk -v subs="$TMP/subs" -v wf="$TMP/watchers" -v lf="$TMP/live.ids" 'BEGIN { while ((getline l < subs) > 0) { split(l, x, " "); sk[x[1]] = x[2] }
+    while ((getline l < wf) > 0) { sub(/.*\//, "", l); sub(/\.jsonl$/, "", l); w[l] } while ((getline l < lf) > 0) live[l] }
+  NR==FNR { if ($2 == 2) own[$4 " " $1]; next }
+  ($2 in sk) && !(($1 " " $2) in own) && !($1 in w) && ($1 in live) { print $1, $2, sk[$2] }' "$TMP/owners.all" "$TMP/firstkey" > "$TMP/folded"
+awk -v me="${CLAUDE_CODE_SESSION_ID:-}" '$3 != me {print $1}' "$TMP/folded" > "$TMP/folded.ids"
+# sub_seg KEY: a sub-owned row's segment before its title: `sub: STATE; plan D/N landed, cX running` (STATE: its
+# report's, <replies>/KEY-coordinator.md's first line after `KEY-coordinator · BRANCH · `; the plan: <replies>/KEY.md's
+# table, when it has one); its owner ended cleanly: `sub done: …`; gone otherwise: `sub gone, KEY unfinished: …`. --changes keeps a live one's `sub: STATE` only.
+RD=$(replies_path)
+sub_seg() {
+  local id st p
+  id=$(awk -v k="$1" '$1==k {print $2}' "$TMP/owners.exact")
+  [ -n "$id" ] && awk -v k="$1" -v id="$id" '$1==k && $2==2 && $4==id {f=1} END {exit !f}' "$TMP/owners.all" || return 0
+  st=; [ -z "$RD" ] || st=$(head -1 "$RD/$1-coordinator.md" 2>/dev/null | awk -F' · ' 'NF > 2 { s = $3; for (i = 4; i <= NF; i++) s = s " · " $i; print s }' | tr '|;' '/,')
+  # plan.py's plain mode reads only these of session-status --plan's environment; live names: a running KEY-cN
+  p=; [ -z "$RD" ] || [ ! -f "$RD/$1.md" ] || p=$(PLAN_MODELS= PLAN_MAXP=1 PLAN_AT=0 PLAN_LFAIL= PLAN_LIB= PLAN_LIVE="$(cut -f2 "$TMP/agents.all")" \
+    python3 -I "$(dirname "$SELF")/plan.py" "$RD/$1.md" 2>/dev/null | awk '$1 ~ /^c/ { n++; d += $2 == "done"; if ($2 == "running") r = r (r ? " " : "") $1 }
+      END { if (n) printf "plan %d/%d landed%s", d, n, r ? ", " r " running" : "" }')
+  if grep -qxF "$id" "$TMP/live.ids"; then printf 'sub: %s%s' "${st:-no report}" "${p:+; $p}"
+  elif awk -F'\t' -v id="$id" '$1==id && $3=="done" {f=1} END {exit !f}' "$TMP/agents"; then printf 'sub done: %s%s' "${st:-no report}" "${p:+; $p}"
+  else printf 'sub gone, %s unfinished: %s%s' "$1" "${st:-no report}" "${p:+; $p}"; fi
+}
+
 # What a session waits on, from hooks/blocked.sh: while its status is `waiting` (every prompt and question writes
 # a new record), or, with no status, while its transcript is no newer than the record (answering writes it; -nt
 # counts whole seconds here, so the same second still shows).
@@ -2243,6 +2303,7 @@ pr_owner() {  # KEY EXTRA STATUS
 tr '\t' '\037' < "$TMP/tasks" | while IFS=$'\037' read -r k st title extra; do
   wt=$(local_for "$k")
   line=$(printf '%-9s %-14s %s%s | %s' "$k" "$st" "$extra" "$wt" "$(session_for "$k" "$extra" "$wt")")
+  seg=$(sub_seg "$k"); [ -z "$seg" ] || title="$seg${title:+ | $title}"
   echo "$line${title:+ | $title}"
   [ -z "${SESSION_STATUS_PRS_OUT:-}" ] || ! grep -qE '#[0-9]+( |$)' <<<"$extra" || pr_owner "$k" "$extra" "$st" >> "$TMP/prs"
 done | tee "$TMP/rows"
@@ -2252,15 +2313,26 @@ done | tee "$TMP/rows"
   mv ~/.cache/session-status/$ENC.rows.tmp ~/.cache/session-status/$ENC.rows; }
 printf '%s\n' "${tasks:-}" "${looked:-}" | grep '^fix:' | awk '!seen[$0]++'
 
-# A key lookup answers about those tasks only: the footer surveys every session, so it's the sweep's job.
-[ -n "$BY_KEY" ] && exit 0
-
 mkdir -p ~/.cache/session-status && cp "$TMP/agents.all" ~/.cache/session-status/$ENC.agents.tmp &&
-  mv ~/.cache/session-status/$ENC.agents.tmp ~/.cache/session-status/$ENC.agents   # for --changes
+  mv ~/.cache/session-status/$ENC.agents.tmp ~/.cache/session-status/$ENC.agents   # for --changes (a key run too: its Under lines)
+# A key lookup answers about those tasks only: the footer surveys every session, so it's the sweep's job. A key with a
+# live sub-coordinator lists the sessions folded into its row (the sub's own view), each line shaped as Waiting on you's,
+# so --changes KEY wakes on a prompt (`— blocked:`) only.
+if [ -n "$BY_KEY" ]; then
+  while read -r id k _; do grep -qxF "$k" <<<"$keys" || continue
+    IFS=$'\037' read -r name st pre status < <(awk -F'\t' -v id="$id" '$1==id {print $2 "\037" $3 "\037" $4 "\037" $8}' "$TMP/agents")
+    b=$(blocked_of "$id" "$status")
+    printf '%s\t  "%s" %s (%s attach %s)%s\n' "$k" "$name" "$st" "$pre" "${id:0:8}" "${b:+ — $b}"
+  done < "$TMP/folded" | LC_ALL=C sort | awk -F'\t' '$1 != h { h = $1; printf "\nUnder %s-coordinator:\n", h } { print $2 }'
+  exit 0
+fi
+
 touch "$TMP/in_review.ids" "$TMP/on_you.ids" "$TMP/stale" "$TMP/listed.ids"
 blocked=$(tr '\t' '\037' < "$TMP/agents.all" | while IFS=$'\037' read -r id name st pre _ _ _ status _; do
   [ "$st" = blocked ] || continue
   v=$(verdict "$id"); ov=$v
+  # Folded into a live sub's row: only a prompt (`blocked:`) reaches the parent; the rest is the sub's to answer.
+  ! grep -qxF "$id" "$TMP/folded.ids" || case $v in ("on	blocked:"*) ;; (*) continue ;; esac
   if grep -qxF "$id" "$TMP/on_you.ids"; then case $v in (on*) ;; (*) v="on	" ;; esac   # a row keeps it on you
   elif grep -qxF "$id" "$TMP/in_review.ids"; then continue   # its rows show it idle, in review
   fi
@@ -2381,6 +2453,7 @@ awk -F'\t' '$1 == 0 {print $2}' "$TMP/leftovers" > "$TMP/left"; awk -F'\t' '$1 =
 OTHER_S=$(( ${SESSION_STATUS_OTHER_HOURS:-3} * 3600 )); touch "$TMP/shown_ids" "$TMP/leftovers"
 while IFS=$'\037' read -r id name st pre started _ _ status _; do
   grep -qxF "$id" "$TMP/listed.ids" || [ "$id" = "${CLAUDE_CODE_SESSION_ID:-}" ] || grep -qxF "$id" "$TMP/shown_ids" || grep -q "/$id\.jsonl$" "$TMP/watchers" ||
+    grep -qxF "$id" "$TMP/folded.ids" ||
     grep -q "stop ${id:0:8}$" "$TMP/leftovers" && continue
   # Blocked but not on you (verdict): at rest, or busy past a session limit.
   held=; [ "$st" != blocked ] || { held=1; [ "$status" = busy ] && st=busy || st=idle; }
