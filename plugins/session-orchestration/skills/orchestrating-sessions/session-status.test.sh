@@ -589,6 +589,23 @@ out=$(SESSION_STATUS_PEEK=1 SESSION_STATUS_FORWARD=1 run --changes) && [ -d "$ro
   [ "$(SESSION_STATUS_FORWARD=1 run --changes)" = "no changes" ] || { echo "watcher's worktree removal failed: $out / ${b:-}"; exit 1; }
 for w in wt4 wt5 wt6 wt7 wt8 wt9 wt10 wt11 wt12; do git -C "$root" worktree remove --force "$root/$w"; done; rm -rf "$root/cache" "$root/tasks"
 git -C "$root" config --unset extensions.worktreeConfig
+# An untracked symlink to the main checkout's same path loses nothing (a dir-only rule, nm/, never matches a link, so
+# git lists it untracked): the watcher removes that worktree (--force), dropping only the link. A worktree whose branch
+# names no key (side-*) counts only once idle RESOLVE_S: an old clean landed one goes too, a fresh one stays off the board.
+printf 'nm/\n' >> "$root/.git/info/exclude" && mkdir "$root/nm" && touch "$root/nm/keep"
+git -C "$root" worktree add -q -b feature/ABC-34-nm "$root/wt13" origin/main && ln -s "$root/nm" "$root/wt13/nm"
+c=$(GIT_COMMITTER_DATE=2020-01-01T00:00:00 git -C "$root" -c user.name=u -c user.email=u@u commit-tree -p origin/main -m old 'origin/main^{tree}')
+git -C "$root" update-ref refs/remotes/origin/main "$c"
+git -C "$root" worktree add -q -b side-old "$root/wt15" "$c" && touch -t 202001010000 "$root/wt15"
+git -C "$root" worktree add -q -b side-fresh "$root/wt14" "$c"
+out=$(run); grep -qF 'ABC-34 Done — worktree clean+merged: rm ./wt13/nm && git -C . worktree remove wt13 && ' <<<"$out" ||
+  { echo "a waived link's Leftovers line doesn't remove the link first: $(grep wt13 <<<"$out")"; exit 1; }
+run --changes >/dev/null
+out=$(SESSION_STATUS_FORWARD=1 run --changes) && [ ! -e "$root/wt13" ] && [ ! -e "$root/wt15" ] && [ -d "$root/wt14" ] && [ -f "$root/nm/keep" ] &&
+  grep -qxF '  * ABC-34 Done — removed worktree wt13 and branch feature/ABC-34-nm' <<<"$out" &&
+  grep -qxF '  * no task — removed worktree wt15 and branch side-old' <<<"$out" && ! run | grep -q wt14 ||
+  { echo "symlink / no-task worktree removal failed: $out"; exit 1; }
+git -C "$root" worktree remove --force "$root/wt14" && git -C "$root" branch -qD side-fresh && rm -rf "$root/nm"
 mv "$tmp/claude.keep" "$tmp/bin/claude"; unset SESSION_STATUS_STOP_AFTER_S
 fi
 

@@ -818,6 +818,22 @@ all_landed() {
   c=$(git -C "$1" cherry "$2" HEAD 2>/dev/null) && ! grep -q '^+' <<<"$c" &&
     [ "$(git -C "$1" rev-list --merges --count "$2..HEAD" 2>/dev/null)" = 0 ]
 }
+# link_free WT REPO < `git status --porcelain` lines: without an untracked symlink to REPO's same path. A dir-only
+# ignore rule (node_modules/) never matches a link, so git lists WT/node_modules -> REPO/node_modules untracked; removing
+# WT drops only the link. git counts it untracked, so removal deletes these links first (waived_links), keeping
+# `git worktree remove`'s own refusals (a late edit, submodules) rather than --force.
+link_free() {
+  local l
+  [ "$1" != "$2" ] || { cat; return; }   # the main checkout: every path is its own
+  while IFS= read -r l; do
+    [[ $l == '?? '* && -L $1/${l:3} && $1/${l:3} -ef $2/${l:3} ]] || printf '%s\n' "$l"
+  done
+}
+# waived_links WT REPO: the untracked links link_free drops, one WT-relative path a line
+waived_links() {
+  local s; s=$(git -C "$1" status --porcelain 2>/dev/null | grep '^?? ') || return 0
+  grep -vxF -f <(link_free "$1" "$2" <<<"$s") <<<"$s" | cut -c4-
+}
 # keeps_nothing WT REPO: removing WT loses nothing. No uncommitted or untracked file (untracked listed whatever
 # status.showUntrackedFiles says), no hidden edit (skip-worktree, assume-unchanged), and each ignored file, which `git
 # worktree remove` deletes too, also in REPO's checkout: a file the same, a folder holding every file of WT's the same, a symlink at a path REPO has too.
@@ -825,6 +841,7 @@ all_landed() {
 keeps_nothing() {
   local s p
   s=$(git -C "$1" status --porcelain --ignored --untracked-files=normal 2>/dev/null) || return 1
+  s=$(link_free "$1" "$2" <<<"$s")
   [ -z "$(grep -v '^!! ' <<<"$s" | grep .)" ] || return 1
   ! git -C "$1" ls-files -v 2>/dev/null | grep -q '^[a-zS] ' || return 1
   while IFS= read -r p; do
@@ -954,7 +971,8 @@ if [ "${1:-}" = --changes ]; then
     [ -z "${SESSION_STATUS_PEEK:-}" ] || { stopped+="  * would remove: $kl — worktree $rel, branch $br"$'\n'; continue; }
     [ -n "${SESSION_STATUS_FORWARD:-}" ] && ! grep -qxF "$kl" <<<"${kept:-}" || continue
     [ "$(git -C "$wt" symbolic-ref --short HEAD 2>/dev/null)" = "$br" ] && keeps_nothing "$wt" "$r" &&
-      all_landed "$wt" "$base" && git -C "$r" worktree remove "$wt" </dev/null >/dev/null 2>&1 || continue
+      all_landed "$wt" "$base" && { waived_links "$wt" "$r" | while IFS= read -r p; do rm -f "$wt/$p"; done
+        git -C "$r" worktree remove "$wt" </dev/null >/dev/null 2>&1; } || continue
     if git -C "$r" branch -D "$br" </dev/null >/dev/null 2>&1; then stopped+="  * $kl — removed worktree $rel and branch $br"$'\n'
     else stopped+="  * $kl — removed worktree $rel (branch $br kept: git branch -D failed)"$'\n'; fi
     # its Leftovers line, exactly as the sweep printed it, leaves the report and the baseline
@@ -2061,10 +2079,10 @@ fi
 
 # Local worktree for the key: dirty file count and unpushed commits.
 local_for() {
-  local wt dirty ahead
-  wt=$(worktrees_for "$1" | head -1 | cut -f2)
+  local r wt dirty ahead
+  IFS=$'\t' read -r r wt < <(worktrees_for "$1" | head -1)
   [ -n "$wt" ] || { echo "no-wt"; return; }
-  dirty=$(git -C "$wt" status --porcelain | wc -l | tr -d ' ')
+  dirty=$(git -C "$wt" status --porcelain | link_free "$wt" "$r" | wc -l | tr -d ' ')
   ahead=$(git -C "$wt" rev-list --count '@{u}..HEAD' 2>/dev/null || echo "?")
   echo "wt dirty:$dirty unpushed:$ahead"
 }
@@ -2151,9 +2169,60 @@ done)
 # A prompt unanswered for STALE_S: answer it (attach) or stop the session. Not counted as on you.
 [ ! -s "$TMP/stale" ] || { printf '\nStale prompts:\n'; cat "$TMP/stale"; }
 
+# leftover_wt REPO WT LABEL HELD [orphan]: WT's Leftovers line (`OLD<TAB>  LINE`, OLD 1: Resolved), and its
+# --changes removal entry when it loses nothing. HELD: live sessions on the key the watcher doesn't stop. orphan: WT's
+# branch names no key, so nothing ties it to a session: only one idle RESOLVE_S counts (a fresh worktree on main is
+# clean and landed too, and its session may work from the main checkout by path).
+leftover_wt() {
+  local r=$1 wt=$2 kl=$3 held=$4 orphan=${5:-} base dirty unmerged br local_only rel repo t m old kn fo ln f
+      # Idle: its last commit and the folder itself (a file added or removed) both older than RESOLVE_S.
+      [ -d "$wt" ] || return 0   # gone, not pruned: `git worktree prune`'s, nothing to remove here
+      t=$(git -C "$wt" log -1 --format=%ct 2>/dev/null) || t=$NOW; m=$(mtime "$wt" 2>/dev/null) || m=0; [ "$m" -gt "$t" ] && t=$m
+      old=$((t < NOW - RESOLVE_S))
+      [ -z "$orphan" ] || [ "$old" = 1 ] || return 0
+      base=$(git -C "$r" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || echo origin/HEAD)
+      # an orphan on the default branch is a long-lived checkout, never a finished task's
+      [ -z "$orphan" ] || [ "$(git -C "$wt" rev-parse --abbrev-ref HEAD)" != "${base#origin/}" ] || return 0
+      dirty=$(git -C "$wt" status --porcelain | link_free "$wt" "$r" | wc -l | tr -d ' ')
+      unmerged=$(git -C "$wt" rev-list --count "$base..HEAD" 2>/dev/null)   # unknown base: "check before removing"
+      br=$(git -C "$wt" rev-parse --abbrev-ref HEAD)
+      local_only=$(git -C "$wt" rev-list --count "origin/$br..HEAD" 2>/dev/null || echo "$unmerged")
+      rel=${wt#"$r"/} repo=${r#"$ROOT"/}; [ "$r" = "$ROOT" ] && repo=.
+      # files `git worktree remove` would delete that status --porcelain doesn't show (ignored or hidden ones only it has)
+      kn=1; [ "$dirty" != 0 ] || [ "$wt" = "$r" ] || keeps_nothing "$wt" "$r" || kn=0
+      # removal deletes waived links first (link_free), so the commands name them
+      fo=; [ "$dirty$kn" != 01 ] || fo=$(waived_links "$wt" "$r" | sed "s|^|$repo/$rel/|" | paste -sd' ' -)
+      fo=${fo:+rm $fo && }
+      if [ "$dirty" != 0 ]; then
+        old=0 ln="$kl — worktree $rel has $dirty uncommitted file(s) — check before removing"
+      elif [ "$kn" = 0 ]; then
+        old=0 ln="$kl — worktree $rel has ignored or hidden files the main checkout lacks — check before removing"
+      elif [ "$unmerged" = 0 ]; then
+        ln="$kl — worktree clean+merged: ${fo}git -C $repo worktree remove $rel && git -C $repo branch -d $br"
+      elif [ "$local_only" = 0 ]; then
+        # an orphan's open PR may still be under review: not Resolved, whatever its age
+        [ -z "$orphan" ] || old=0
+        ln="$kl — worktree clean, $unmerged unmerged commit(s) all on origin/$br: ${fo}git -C $repo worktree remove $rel && git -C $repo branch -D $br"
+      else
+        old=0 ln="$kl — worktree $rel has $local_only commit(s) not pushed anywhere — check before removing"
+      fi
+      printf '%s\t  %s\n' "$old" "$ln"
+      # For the watcher's removal (--changes): every account's sessions listed, nothing to lose (keeps_nothing), on a
+      # branch naming no open row's key, not the main checkout, no live session on the key or in the folder (any
+      # session dir) but this key's ones it stops, and everything landed (a stale base is fetched once per repo, then
+      # checked again).
+      if [ -n "${SESSION_STATUS_FINISHED_OUT:-}" ] && [ ! -e "$TMP/agents.failed" ] && [ "$dirty" = 0 ] && [ "$kn" = 1 ] &&
+          [ -z "$held" ] && [ "$wt" != "$r" ] && [ "$br" != HEAD ] && ! grep -qwF -f <(printf '%s\n' $keys | grep .) <<<"$br" &&
+          [ -z "$(awk -F'\t' -v w="$wt" '$6 == w || index($6, w "/") == 1 {print $1}' "$TMP/agents.every" |
+            grep -vxF -f <(awk -F'\t' -v k="$kl" '$2 == k {print $1}' "$TMP/finished"))" ]; then
+        f=$TMP/fetched.$(tr / _ <<<"$r")
+        all_landed "$wt" "$base" || { [ ! -e "$f" ] && : > "$f" && fetch_quick "$r" && all_landed "$wt" "$base"; } &&
+          printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$r" "$wt" "$br" "$kl" "$rel" "$base" "$ln" >> "$TMP/removable"
+      fi
+}
 # Leftovers: running sessions and worktrees whose task is finished. Candidates are the pointed-at keys that
 # aren't rows; one adapter call checks them all.
-: > "$TMP/finished"; : > "$TMP/removable"
+: > "$TMP/finished"; : > "$TMP/removable"; : > "$TMP/leftovers"
 pointed_keys | sort -u | grep -vxF -f <(printf '%s\n' $keys) > "$TMP/cand" || true
 for k in $keys; do awk -v k="$k" '$1==k {print $2}' "$TMP/owners.exact" "$TMP/owners.guess"; done | sort -u > "$TMP/busy_ids"
 if [ -s "$TMP/cand" ] && [ -n "$ADAPTER" ]; then
@@ -2177,50 +2246,22 @@ if [ -s "$TMP/cand" ] && [ -n "$ADAPTER" ]; then
     done
     # The watcher removes the key's worktrees only once no live session holds the key but ones it stops (finished).
     held=$(grep -vxF -f <(cut -f1 "$TMP/finished") <<<"$ids" | grep .)
-    worktrees_for "$k" | while IFS=$'\t' read -r r wt; do
-      base=$(git -C "$r" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || echo origin/HEAD)
-      dirty=$(git -C "$wt" status --porcelain | wc -l | tr -d ' ')
-      unmerged=$(git -C "$wt" rev-list --count "$base..HEAD" 2>/dev/null)   # unknown base: "check before removing"
-      br=$(git -C "$wt" rev-parse --abbrev-ref HEAD)
-      local_only=$(git -C "$wt" rev-list --count "origin/$br..HEAD" 2>/dev/null || echo "$unmerged")
-      rel=${wt#"$r"/} repo=${r#"$ROOT"/}; [ "$r" = "$ROOT" ] && repo=.
-      # Idle: its last commit and the folder itself (a file added or removed) both older than RESOLVE_S.
-      t=$(git -C "$wt" log -1 --format=%ct 2>/dev/null) || t=$NOW; m=$(mtime "$wt"); [ "$m" -gt "$t" ] && t=$m
-      old=$((t < NOW - RESOLVE_S))
-      # files `git worktree remove` would delete that status --porcelain doesn't show (ignored or hidden ones only it has)
-      kn=1; [ "$dirty" != 0 ] || [ "$wt" = "$r" ] || keeps_nothing "$wt" "$r" || kn=0
-      if [ "$dirty" != 0 ]; then
-        old=0 ln="$kl — worktree $rel has $dirty uncommitted file(s) — check before removing"
-      elif [ "$kn" = 0 ]; then
-        old=0 ln="$kl — worktree $rel has ignored or hidden files the main checkout lacks — check before removing"
-      elif [ "$unmerged" = 0 ]; then
-        ln="$kl — worktree clean+merged: git -C $repo worktree remove $rel && git -C $repo branch -d $br"
-      elif [ "$local_only" = 0 ]; then
-        ln="$kl — worktree clean, $unmerged unmerged commit(s) all on origin/$br: git -C $repo worktree remove $rel && git -C $repo branch -D $br"
-      else
-        old=0 ln="$kl — worktree $rel has $local_only commit(s) not pushed anywhere — check before removing"
-      fi
-      printf '%s\t  %s\n' "$old" "$ln"
-      # For the watcher's removal (--changes): every account's sessions listed, nothing to lose (keeps_nothing), on a
-      # branch naming no open row's key, not the main checkout, no live session on the key or in the folder (any
-      # session dir) but this key's ones it stops, and everything landed (a stale base is fetched once per repo, then
-      # checked again).
-      if [ -n "${SESSION_STATUS_FINISHED_OUT:-}" ] && [ ! -e "$TMP/agents.failed" ] && [ "$dirty" = 0 ] && [ "$kn" = 1 ] &&
-          [ -z "$held" ] && [ "$wt" != "$r" ] && [ "$br" != HEAD ] && ! grep -qwF -f <(printf '%s\n' $keys | grep .) <<<"$br" &&
-          [ -z "$(awk -F'\t' -v w="$wt" '$6 == w || index($6, w "/") == 1 {print $1}' "$TMP/agents.every" |
-            grep -vxF -f <(awk -F'\t' -v k="$kl" '$2 == k {print $1}' "$TMP/finished"))" ]; then
-        f=$TMP/fetched.$(tr / _ <<<"$r")
-        all_landed "$wt" "$base" || { [ ! -e "$f" ] && : > "$f" && fetch_quick "$r" && all_landed "$wt" "$base"; } &&
-          printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$r" "$wt" "$br" "$kl" "$rel" "$base" "$ln" >> "$TMP/removable"
-      fi
-    done
+    worktrees_for "$k" | while IFS=$'\t' read -r r wt; do leftover_wt "$r" "$wt" "$kl" "$held"; done
   done < "$TMP/done" > "$TMP/leftovers"
-  # Resolved: a leftover idle RESOLVE_S (a week) that loses nothing when removed; it needs nothing, so it
-  # leaves Leftovers. One that could lose work (uncommitted, unpushed) stays a leftover however old.
-  awk -F'\t' '$1 == 0 {print $2}' "$TMP/leftovers" > "$TMP/left"; awk -F'\t' '$1 == 1 {print $2}' "$TMP/leftovers" > "$TMP/resolved"
-  [ -s "$TMP/left" ] && printf '\nLeftovers (task finished):\n' && cat "$TMP/left"
-  [ -s "$TMP/resolved" ] && printf '\n%s:\n' "$RESOLVED" && cat "$TMP/resolved"
 fi
+# A worktree whose branch names no task key (named for the work, or EnterWorktree's worktree-NAME) is no row's or
+# candidate's, so nothing above lists it: idle RESOLVE_S, it gets the same line and removal (only once everything
+# landed: removable), so finished ones don't pile up.
+while read -r r; do
+  git -C "$r" worktree list --porcelain 2>/dev/null | awk -v r="$r" '/^worktree /{p=substr($0,10)} /^branch refs\/heads\//{print r "\t" p "\t" substr($0,19)}'
+done < "$TMP/repos" | while IFS=$'\t' read -r r wt br; do
+  [ "$wt" = "$r" ] || grep -qE -- "$KEYRE" <<<"$br" || leftover_wt "$r" "$wt" "no task" "" orphan
+done >> "$TMP/leftovers"
+# Resolved: a leftover idle RESOLVE_S (a week) that loses nothing when removed; it needs nothing, so it
+# leaves Leftovers. One that could lose work (uncommitted, unpushed) stays a leftover however old.
+awk -F'\t' '$1 == 0 {print $2}' "$TMP/leftovers" > "$TMP/left"; awk -F'\t' '$1 == 1 {print $2}' "$TMP/leftovers" > "$TMP/resolved"
+[ ! -s "$TMP/left" ] || { printf '\nLeftovers (task finished):\n'; cat "$TMP/left"; }
+[ ! -s "$TMP/resolved" ] || { printf '\n%s:\n' "$RESOLVED"; cat "$TMP/resolved"; }
 [ -z "${SESSION_STATUS_FINISHED_OUT:-}" ] || { cp "$TMP/finished" "$SESSION_STATUS_FINISHED_OUT"; cp "$TMP/removable" "$SESSION_STATUS_FINISHED_OUT.wt"; }
 
 # Other sessions (see the header). Leftovers' sessions are listed there already. A worker that ran the status

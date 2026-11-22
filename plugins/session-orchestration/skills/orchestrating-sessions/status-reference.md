@@ -24,7 +24,9 @@ owning session, live (name + state) or closed (`closed Nh`). Then the footers: *
 sessions that sit on a prompt or whose last turn asks the user, with the `claude attach` command and, on a prompt, what
 it waits on: `— blocked: Bash \`…\``; one at rest asking nothing shows idle), **Stale prompts** (prompts unanswered 6h+,
 with the stop command: answer or stop), **Leftovers** (sessions and worktrees of finished tasks, with the stop/remove
-command; `--watch` stops the sessions at rest itself, see `--changes`; one idle a week whose removal loses nothing moves to **Resolved**), **Notices** (from the messages module,
+command; `--watch` stops the sessions at rest itself, see `--changes`; one idle a week whose removal loses nothing moves to **Resolved**; a worktree whose branch names no task key shows as
+`no task` once idle a week; an untracked symlink to the main checkout's same path, such as `node_modules`, counts as
+clean), **Notices** (from the messages module,
 then the adapter, the handoff file and the docs watch (`features/docs-watch.md`); act on a message line per the module's doc; a message line the user calls handled: `session-status
 --dismiss "LINE"`, for every session, not passed on again) and **Other sessions** (live sessions that own no task,
 e.g. a reviewer: `· reviews KEY`), and last, at most once a day, `plugin feedback: N open (M seen ≥2×) — apply?` (or
