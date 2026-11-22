@@ -54,8 +54,9 @@ for k in human bang self deny bash; do grep -q $'\t'"$k"$'\t' <<<"$out" || fail 
 grep -q 'old prompt' <<<"$out" && fail "events: the 2020 line is outside the window" "$out"
 grep -q $'deny\tBash: gh pr merge 7\tclassifier/x' <<<"$out" || fail "events: deny row with source/reason" "$out"
 
-out=$(retro waits 7 5)
-grep -q $'aaaaaaaa\t2026-10-12T10:00\t20\tBash' <<<"$out" || fail "waits: the 20-minute refused call" "$out"
+out=$(retro waits 7 5 2>&1)
+grep -q $'aaaaaaaa\t2026-10-12T10:00\t20\tBash\t.*\t$' <<<"$out" || fail "waits: the 20-minute refused call, untagged" "$out"
+grep -q "{'waits': 1, 'minutes': 20, 'sleep': 0, 'sleep_minutes': 0}" <<<"$out" || fail "waits: totals" "$out"
 
 out=$(retro bgtasks pr-watch 7 2>&1)
 grep -q $'aaaaaaaa\t2026-10-12T10:21\tSILENT' <<<"$out" || fail "bgtasks: a notice after the window leaves the task silent" "$out"
@@ -376,17 +377,20 @@ out=$(XDG_STATE_HOME=$tmp/state retro kinds 7)
 out=$(RATES=1,1,1,1 XDG_STATE_HOME=$tmp/state retro kinds 7)
 grep -q $'^build\topus\tmedium\t2\t1\t2.0\t' <<<"$out" || fail "kinds: RATES prices every model alike" "$out"
 # kind-scan started again at 18:00 (review) in dddddd04, on claude-opus-4-1 ($15 for 1M input) with 1M 5-minute cache
-# writes ($6.25 at 1.25x input): the 17:00 start keeps only dddddd03, the 18:00 one gets dddddd04.
+# writes ($6.25 at 1.25x input), once more with the split and no total ($6.25), and a split over a zero total ($0):
+# the 17:00 start keeps only dddddd03, the 18:00 one gets dddddd04.
 cat > "$a/dddddd04-1111.jsonl" <<'EOF'
 {"type":"custom-title","customTitle":"kind-scan"}
 {"type":"user","timestamp":"2026-10-12T18:00:10.000Z","message":{"content":"Work on kind-scan: again"}}
 {"type":"assistant","timestamp":"2026-10-12T18:00:11.000Z","requestId":"d4","message":{"model":"claude-opus-4-1-20250805","usage":{"input_tokens":1000000}}}
 {"type":"assistant","timestamp":"2026-10-12T18:00:12.000Z","requestId":"d5","message":{"model":"claude-opus-4-5-20251101","usage":{"cache_creation_input_tokens":1000000,"cache_creation":{"ephemeral_5m_input_tokens":1000000}}}}
+{"type":"assistant","timestamp":"2026-10-12T18:00:12.500Z","requestId":"d5y","message":{"model":"claude-opus-4-5-20251101","usage":{"cache_creation":{"ephemeral_5m_input_tokens":1000000}}}}
+{"type":"assistant","timestamp":"2026-10-12T18:00:13.000Z","requestId":"d5z","message":{"model":"claude-opus-4-5-20251101","usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":1000000}}}}
 EOF
 echo "{\"t\":1791828000,\"k\":\"start\",\"what\":\"review\",\"model\":\"opus\",\"effort\":\"xhigh\",\"sess\":\"$(h kind-scan)\",\"size\":\"L\"}" >> "$st/usage.jsonl"
 out=$(XDG_STATE_HOME=$tmp/state retro kinds 7)
-grep -q $'^scan\thaiku\tlow\t1\t1\t1.0\t' <<<"$out" && grep -q $'^review:L\topus\txhigh\t1\t1\t21.25\t' <<<"$out" ||
-  fail "kinds: a reused name joins the later start only; older opus and 5-minute cache-write rates" "$out"
+grep -q $'^scan\thaiku\tlow\t1\t1\t1.0\t' <<<"$out" && grep -q $'^review:L\topus\txhigh\t1\t1\t27.5\t' <<<"$out" ||
+  fail "kinds: a reused name joins the later start only; older opus and 5-minute cache-write rates; a split with no total is the total, over a zero total nothing" "$out"
 # kind-adv started with a fable advisor (plan.advisor.build): its own request is 1M opus input ($5) plus one advisor
 # call of 1M fable input ($8, left out of the request's totals); a subagent's call, logged twice, is 1M sonnet ($3).
 cat > "$a/dddddd05-1111.jsonl" <<'EOF'
@@ -544,6 +548,14 @@ EOF
 done
 all=$(retro sessions 7)
 for s in wt000001 ot000001 lk000001; do grep -q $'\t'$s$'\t' <<<"$all" || fail "sessions: without --project, every project ($s)" "$all"; done
+# their 10-minute waits all end at 08:10 in three sessions: the machine woke, counted apart; aaaaaaaa's stays a wait
+out=$(retro waits 7 5 2>&1)
+for s in wt000001 ot000001 lk000001; do grep -q "^$s"$'\t.*\tsleep$' <<<"$out" || fail "waits: $s woke with the others: sleep" "$out"; done
+grep -q $'^aaaaaaaa\t.*\t$' <<<"$out" && grep -q "{'waits': 1, 'minutes': 20, 'sleep': 3, 'sleep_minutes': 30}" <<<"$out" ||
+  fail "waits: a lone wait isn't sleep; sleep totals apart" "$out"
+out=$(retro waits 7 5 --project /x/proj 2>&1)
+grep -q $'^wt000001\t.*\tsleep$' <<<"$out" && ! grep -qE 'ot000001|lk000001' <<<"$out" ||
+  fail "waits --project: woke with other projects' sessions: sleep, their rows left out" "$out"
 for c in "sessions 7" "events 7" "waits 7 5" "bgtasks pr-watch 7" "replies 7"; do
   # shellcheck disable=SC2086
   out=$(retro $c --project /x/proj 2>&1)
@@ -560,6 +572,15 @@ head -2 "$home/.claude/projects/-x-proj--worktrees-w/wt000001-0001.jsonl" | sed 
 out=$(retro sessions 7 --project /x/proj)
 grep -q sb000001 <<<"$out" && ! grep -q ol000001 <<<"$out" || fail "--project: a subfolder's session by its cwd, not a lookalike root's" "$out"
 retro sessions 7 --project 2>/dev/null && fail "--project without a value fails" ""
+# --project ROOT reads task keys by the project's key_pattern; a run that can't see them says so
+kp=$tmp/kp; mkdir -p "$kp/.claude/coordination" "$home/.claude/projects/$(sed 's/[^A-Za-z0-9]/-/g' <<<"$kp")"
+echo '{"key_pattern":"kp-[[:lower:][:digit:]-]+"}' > "$kp/.claude/coordination/coordination.json"   # POSIX classes too
+printf '%s\n' "{\"type\":\"user\",\"cwd\":\"$kp\",\"timestamp\":\"2026-10-11T08:00:00.000Z\",\"message\":{\"content\":\"Work on kp-fix-thing\"}}" \
+  > "$home/.claude/projects/$(sed 's/[^A-Za-z0-9]/-/g' <<<"$kp")/kp000001-0001.jsonl"
+out=$(retro replies 7 --project "$kp" 2>&1)
+grep -q $'\tkp-fix-thing\t' <<<"$out" && grep -q "'task': 1," <<<"$out" || fail "replies --project ROOT: the project's key_pattern" "$out"
+out=$(retro replies 7 --project '-kp$' 2>&1)
+grep -q "'task': 0," <<<"$out" && grep -q '^note: 1 sessions .*Pass --project ROOT' <<<"$out" || fail "replies: no task by the default keys, a note" "$out"
 
 # sections: a plugin run writes no project-only section, a project run no plugin-only one; retro.sections narrows them
 [ "$(retro sections plugin | tr '\n' ' ')" = "units context waste feedback protocol features sizing " ] || fail "sections plugin" "$(retro sections plugin)"

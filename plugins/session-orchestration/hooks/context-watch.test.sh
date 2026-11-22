@@ -148,6 +148,16 @@ jq -nc '{type: "assistant", message: {usage: {input_tokens: 6, cache_read_input_
     {type: "message", input_tokens: 2, cache_read_input_tokens: 93574, cache_creation_input_tokens: 1424}]}}}' >> "$t/adv.jsonl"
 out=$(jq -nc --arg f "$t/adv.jsonl" --arg c "$t/proj" '{session_id: "adv", transcript_path: $f, hook_event_name: "PostToolUse", cwd: $c}' |
   bash "$here/context-watch.sh"); [ -z "$out" ] || fail "advisor iterations counted as context: $out"
+# The same in a coordinator: iterations adding up to 155K (past its line) while the last message holds 78K: nothing.
+expect advc "$coord" 100000 ''
+jq -nc '{type: "assistant", message: {usage: {input_tokens: 4, cache_read_input_tokens: 150000, cache_creation_input_tokens: 4996,
+  iterations: [{type: "message", input_tokens: 2, cache_read_input_tokens: 72000, cache_creation_input_tokens: 2000},
+    {type: "advisor_message", input_tokens: 80000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0},
+    {type: "message", input_tokens: 2, cache_read_input_tokens: 76000, cache_creation_input_tokens: 2000}]}}}' >> "$t/advc.jsonl"
+for ev in PostToolUse UserPromptSubmit; do
+  out=$(jq -nc --arg f "$t/advc.jsonl" --arg c "$t/proj" --arg e "$ev" '{session_id: "advc", transcript_path: $f, hook_event_name: $e, cwd: $c}' |
+    bash "$here/context-watch.sh"); [ -z "$out" ] || fail "coordinator: advisor iterations counted as context ($ev): $out"
+done
 
 # A first prompt on a 30 MB transcript returns at once though classifying takes over 5 s (a slow git: a loaded
 # machine; first_prompt's head stands in), and writes .kind for the next prompt, which reads only the tail: both well

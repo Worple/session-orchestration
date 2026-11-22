@@ -5,7 +5,7 @@
 # each failed section's output). Each `if section NAME; then … fi` below runs alone, in its own process on a fresh
 # fixture (its own $tmp): all of them with no argument, the named ones otherwise; TEST_JOBS at a time (default the CPU
 # count, 1 = one after another).
-set -euo pipefail; unset XDG_CONFIG_HOME XDG_CACHE_HOME   # the person-wide config.json and stamps: never the real ones
+set -Eeuo pipefail; unset XDG_CONFIG_HOME XDG_CACHE_HOME   # the person-wide config.json and stamps: never the real ones
 here=$(cd "$(dirname "$0")" && pwd)
 if [ -z "${TEST_SECTION:-}" ]; then
   all=$(sed -n 's/^if section \([^ ;]*\); then$/\1/p' "$0"); [ $# -gt 0 ] || set -- $all
@@ -19,7 +19,11 @@ if [ -z "${TEST_SECTION:-}" ]; then
   [ -z "$failed" ] || exit 1; echo "ok:" "$@"; exit 0
 fi
 section() { [ "$1" = "$TEST_SECTION" ]; }
-tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT; trap 'echo "failed at line $LINENO: $BASH_COMMAND" >&2' ERR
+# set -E: a command failing inside a function (`run --changes >/dev/null`) reports here too, with its caller's line.
+# A failed section's output can carry earlier lines from expected failures (`out=$(xr …) || rc=$?`): the last stopped it.
+# It writes to fd 9, the section's own stderr, so a `$(… 2>&1)` under test never captures it.
+exec 9>&2
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT; trap 'echo "failed at line $LINENO (called from ${BASH_LINENO[*]}): $BASH_COMMAND" >&9' ERR
 root=$(mkdir -p "$tmp/proj" && cd "$tmp/proj" && pwd -P)
 sid=11111111-2222-3333-4444-555555555555 cid=99999999-2222-3333-4444-555555555555
 

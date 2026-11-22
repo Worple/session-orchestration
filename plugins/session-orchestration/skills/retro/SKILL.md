@@ -116,7 +116,7 @@ and no heading.
      $(cat keys.txt)`), and pass `--merged merged.txt` to both `units` calls. An adapter without `yesterday`, or a
      non-zero exit: leave it out and say merges count only the ones sessions ran (`merge_ran`).
    - `context`: `context 7 <split> P > context.tsv` (split: last run's end, so the slice after it gets its own row).
-   - `waste`: `sessions 7 P > sessions.tsv`, `events 7 P > events.tsv 2> events.txt`, `waits 7 5 P > waits.tsv`,
+   - `waste`: `sessions 7 P > sessions.tsv`, `events 7 P > events.tsv 2> events.txt`, `waits 7 5 P > waits.tsv 2> waits.txt`,
      `bgtasks 'session-status.*--watch' 7 P > bg-watch.tsv`, plus any `bgtasks` regex the project brief names
      (project scope), and `replies 7 P > replies.tsv` (lost reports). Refusals: count them from `denied.jsonl` for
      the window when it covers it (project scope: the lines whose `cwd` is the root or under it), else from `deny`
@@ -156,7 +156,8 @@ and no heading.
      handoffs to the user (`bang` rows are a session's suggestion, one per distinct session and command; `ran` rows
      are the user running one), wrong relayed claims (`self` rows plus corrections), lost reports (bg tasks SILENT,
      `replies.tsv` rows; a `NO NOTICE YET` task was still running at the window's end: not lost), waits over 5
-     minutes. Not counted yet (known gaps, so figures stay comparable run to run): subagent transcripts
+     minutes, those tagged `sleep` (the machine woke: the same end minute in 3+ sessions) counted apart (`waits.txt`
+     totals). Not counted yet (known gaps, so figures stay comparable run to run): subagent transcripts
      (`<session>/subagents/*.jsonl`), and history a fork copied from its parent is counted again in the fork's row.
      Name them when a figure hinges on them.
    - `feedback`, project scope: group this project's cases (friction from its hosts, sign-ins, docs and scripts)

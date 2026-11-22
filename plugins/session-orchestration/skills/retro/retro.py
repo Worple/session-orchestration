@@ -134,10 +134,10 @@ def project_filter(arg):
     return keep
 
 
-def transcripts():
+def transcripts(every=False):
     for r in roots():
         for f in glob.glob(f"{r}/*/*.jsonl"):
-            if os.path.getmtime(f) >= CUT and (not PROJECT or PROJECT(f)):
+            if os.path.getmtime(f) >= CUT and (every or not PROJECT or PROJECT(f)):
                 yield f
 
 
@@ -157,8 +157,9 @@ def usd(i, o, cr, cw, model=""):
 def req_tokens(u):
     """A request's usage as usd's (in, out, cache read, cache write). Cache write is priced at the 1-hour rate (2x input),
     so 5-minute writes (1.25x input), when the usage splits them out, count as 0.625 of a token each."""
-    cw = u.get("cache_creation_input_tokens", 0)
-    w5 = (u.get("cache_creation") or {}).get("ephemeral_5m_input_tokens", 0)
+    split = u.get("cache_creation") or {}
+    w5 = split.get("ephemeral_5m_input_tokens", 0)
+    cw = u.get("cache_creation_input_tokens", w5 + split.get("ephemeral_1h_input_tokens", 0))
     return (u.get("input_tokens", 0), u.get("output_tokens", 0), u.get("cache_read_input_tokens", 0),
             cw - min(w5, cw) * 0.375)   # the 5-minute split is part of the total: a zero total writes nothing
 
@@ -420,7 +421,7 @@ def units(days=7, *opts):
         cost = sum(c for _, _, c in requests(f))
         total += cost
         hits, is_review, first = unit_hits(f, rx)
-        if k := TASK.search(first):
+        if k := task().search(first):
             keys.add(k.group(1))
         for key, ts, cmd in hits:
             if key not in found:
@@ -859,8 +860,9 @@ def waits(days=7, min_minutes=5):
     window(days)
     MIN = float(min_minutes)
     rows = []
-    for f in transcripts():
+    for f in transcripts(every=True):   # a wake shows across projects: --project narrows the rows printed, not this
         sid = os.path.basename(f)[:8]
+        keep = not PROJECT or PROJECT(f)
         pend = {}
         for _, o in lines(f):
             ts = o.get("timestamp")
@@ -878,16 +880,19 @@ def waits(days=7, min_minutes=5):
                     mins = (P(ts) - P(t0)).total_seconds() / 60
                     pd = o.get("permissionDecision") or {}
                     if mins >= MIN and name not in ("Monitor", "ScheduleWakeup", "Agent"):
-                        rows.append((ts[:16], mins, [sid, t0[:16], f"{mins:.0f}", name, f"{pd.get('source')}/{pd.get('reasonType')}", re.sub(r"\s+", " ", arg)[:160]]))
+                        rows.append((ts[:16], mins, keep, [sid, t0[:16], f"{mins:.0f}", name, f"{pd.get('source')}/{pd.get('reasonType')}", re.sub(r"\s+", " ", arg)[:160]]))
     # A wait ending in the same minute as waits in 2+ other sessions is the machine waking from sleep, not a wait.
-    # shortcut: two sessions waking together, or three answered in one minute by hand, are misread; upgrade with the
-    # power log (pmset -g log) or a no-line-in-any-session test when that shows up.
+    # shortcut: two sessions waking together, three answered in one minute by hand, or a wake whose results straddle a
+    # minute boundary are misread; upgrade with the power log (pmset -g log) or a no-line-in-any-session test when that
+    # shows up.
     woke = {}
-    for end, _, r in rows:
+    for end, _, _, r in rows:
         woke.setdefault(end, set()).add(r[0])
     tot = {"waits": 0, "minutes": 0, "sleep": 0, "sleep_minutes": 0}
     print("session\tts\tminutes\ttool\tdecision\tinput\tsleep")
-    for end, mins, r in rows:
+    for end, mins, keep, r in rows:
+        if not keep:
+            continue
         sl = len(woke[end]) >= 3
         tot["sleep" if sl else "waits"] += 1; tot["sleep_minutes" if sl else "minutes"] += round(mins)
         print("\t".join(r + ["sleep" if sl else ""]))
@@ -946,7 +951,10 @@ def bgtasks(regex=None, days=7):
 
 
 task_re = lambda k: re.compile(r"(?:Session task:|Work on)\s+(?:https?://\S+/browse/)?" + k)
-TASK = task_re(r"([A-Z][A-Z0-9]+-\d+)")   # lib.sh key_re's default; --project ROOT takes the project's (project_key)
+TASK = task_re(r"([A-Z][A-Z0-9]+-\d+)")   # lib.sh key_re's default; --project ROOT takes the project's (task())
+ROOT = None   # --project's value when it is a path: task() reads that project's key_pattern
+POSIX = {"[:upper:]": "A-Z", "[:lower:]": "a-z", "[:digit:]": "0-9", "[:alnum:]": "A-Za-z0-9", "[:alpha:]": "A-Za-z",
+         "[:space:]": r"\s", "[:xdigit:]": "0-9A-Fa-f"}   # key_re's ERE classes, which Python reads as plain sets
 
 
 def project_key(root):
@@ -959,9 +967,22 @@ def project_key(root):
     try:
         k = subprocess.run(["bash", "-c", '. "$1" && cd "$2" && key_re "$(adapter_path .)"', "_", lib, root],
                            capture_output=True, text=True, timeout=30).stdout.strip()
+        for c, py in POSIX.items():
+            k = k.replace(c, py)
         return task_re(k) if k else None   # key_re wraps it in parentheses: group(1) is the key
     except (OSError, subprocess.SubprocessError, re.error):
         return None
+
+
+_task = []
+
+
+def task():
+    """TASK, or the project's (project_key) under --project ROOT; worked out once, by the commands that read keys only
+    (it runs the project's adapter)."""
+    if not _task:
+        _task.append(ROOT and project_key(ROOT) or TASK)
+    return _task[0]
 
 
 def replies(days=7):
@@ -986,7 +1007,7 @@ def replies(days=7):
                 txt = c if isinstance(c, str) else " ".join(b.get("text", "") for b in c or [] if isinstance(b, dict))
                 if txt.startswith("<") and "<cross-session-message" not in txt:
                     continue  # a slash command or caveat line, not the first prompt
-                if "<cross-session-message" not in txt and (k := TASK.search(txt[:400])):
+                if "<cross-session-message" not in txt and (k := task().search(txt[:400])):
                     key = k.group(1)
                 elif txt.strip():
                     key = ""  # the first prompt names no task: not a task session
@@ -1022,8 +1043,9 @@ def replies(days=7):
             print(f"{os.path.basename(f)[:8]}\t{key}\t{(last or '')[:16]}\t{name or ''}")
     print(tot, file=sys.stderr)
     if untasked and not tot["task"]:
-        print(f"note: {untasked} sessions in the window, none named a task by {TASK.pattern}: a key_pattern this "
-              "can't see? Pass --project ROOT.", file=sys.stderr)
+        hint = ("ROOT's key_pattern was read" if task() is not TASK else
+                "ROOT's key_pattern couldn't be read" if ROOT else "a key_pattern this can't see? Pass --project ROOT")
+        print(f"note: {untasked} sessions in the window, none named a task by {task().pattern}: {hint}.", file=sys.stderr)
 
 
 # What a handoff entry waits on, from its last wording; the first that matches. ponytail: keyword buckets, read the
@@ -1743,7 +1765,7 @@ if __name__ == "__main__":
             sys.exit("--project needs a ROOT path or a regex")
         PROJECT = project_filter(a[i + 1])
         if a[i + 1][:1] in "/~.":
-            TASK = project_key(os.path.expanduser(a[i + 1])) or TASK
+            ROOT = os.path.expanduser(a[i + 1])
         a = a[:i] + a[i + 2:]
     if not a or a[0] not in CMDS:
         sys.exit(__doc__)
