@@ -113,7 +113,8 @@ if [ -z "$landing" ]; then   # (not indented: the rest of the command parsing, u
 # anything else (a shell, awk, a variable, a path or `.` as the command, read, set, sudo, sort, uniq, tee) fails
 # closed. git counts only as git [-C DIR] [--no-pager] add|commit|status|log|diff|show|branch|push|fetch, not with
 # --output, and push/fetch not with --r…, --e…, --u… (-c, aliases, other subcommands can run text); npx only for the
-# four CLIs (bitbucketdc, forgejo, jiradc, msgraph; any npm scope); rg not with --pre; no option word with an escape or a $ in it. Shared by both passes.
+# four CLIs (bitbucketdc, forgejo, jiradc, msgraph; any npm scope); rg not with --pre; and those (git push|fetch|log|diff|show,
+# rg, printf) with no word the shell could rewrite into an option (below). Shared by both passes.
 SAFE=' cat echo printf grep egrep fgrep rg git claude head tail wc ls cd mkdir touch test [ true false cut tr diff jq gh bitbucketdc-cli forgejo-cli jiradc-cli msgraph '
 # lex(S): S with quoting resolved: quote marks dropped, and each separator, < and ( inside quotes made `_` (an escape: char 1; a $ in "…" kept), so what
 # is left splits into commands as the shell would (unclosed quote: the rest counts as quoted). A # at a word start
@@ -129,7 +130,8 @@ function lex(s,   o, c, j, n, iq) { o = ""; iq = ""; n = length(s)
     if (c == iq) { iq = ""; continue }
     # "…$x" expands and "…`cmd`" runs cmd: kept, so safe() sees them (its ( still becomes _: the scan below keeps a "…$(")
     if (iq == "\"" && (c == "`" || c == "$")) { o = o c; continue }
-    o = o (c ~ /[;|&()<>`$\n]/ ? "_" : c) }
+    # quoted glob and brace characters are text too, so safe() sees only live ones
+    o = o (c ~ /[;|&()<>`$\n{}*?[^]/ ? "_" : c) }
   LQ = iq; return o }
 # qat(S, P): the quote open at char P of S ("" none, a backslash when an escape takes char P)
 function qat(s, p,   j, c, iq) { iq = ""
@@ -137,14 +139,14 @@ function qat(s, p,   j, c, iq) { iq = ""
     if (iq != Q && c == "\\") { if (++j >= p) return c; continue }
     if (iq == "") { if (c == "\"" || c == Q) iq = c } else if (c == iq) iq = "" }
   return iq }
-function safe(u, cat,   n, seg, x, m, w, y, t) {
+function safe(u, cat,   n, seg, x, m, w, y, t, z, M) {
   # a space before each separator, so a redirect target is a whole word: >&2hook writes the file 2hook
   if (!cat) { gsub(/[;|&)]/, " &", u); gsub(/&?[0-9]*>>?[ \t]*(&[0-9]+|&-|\/dev\/null)([ \t]|$)/, " ", u); if (u ~ />/) return 0 }
+  # a word M ends a command whose words a `…` or $(…) goes on (git push `echo --exec=sh`)
+  M = sprintf("%c", 2); gsub(/`|\$\(/, " " M "&", u)
   n = split(u, seg, /[;|&()`\n]|\$\(/)
   for (x = 1; x <= n; x++) { m = split(seg[x], w, /[ \t]+/); t = ""
-    # an escape or expansion in an option (--outpu\t, --pr\e, --${x:-receive-pack=…}) hides it from the checks below
-    if (seg[x] ~ ("(^|[ \t])-[^ \t]*[" sprintf("%c", 1) "$]")) return 0
-    for (y = 1; y <= m; y++) { if (w[y] == "" || index(PRE, " " w[y] " ")) continue
+    for (y = 1; y <= m; y++) { if (w[y] == "" || w[y] == M || index(PRE, " " w[y] " ")) continue
       if (w[y] ~ /^[A-Za-z_][A-Za-z0-9_]*=/) return 0
       t = w[y]; break }
     if (t == "") continue
@@ -156,8 +158,20 @@ function safe(u, cat,   n, seg, x, m, w, y, t) {
     if (t == "npx") { for (y++; w[y] == "-y" || w[y] == "--yes"; y++); t = w[y]; sub(/@[^@\/]*$/, "", t); sub(/^@[^\/]*\//, "", t)
       if (t !~ /^(bitbucketdc|forgejo|jiradc|msgraph)-cli$/) return 0 }
     if (t == "rg" && seg[x] ~ /--pre/ || t == "printf" && seg[x] ~ /(^|[ \t])-v/) return 0
-    if (t == "git") { for (y++; w[y] == "-C" || w[y] == "--no-pager"; y += w[y] == "-C" ? 2 : 1);
-      if (!index(" add commit status log diff show branch push fetch ", " " w[y] " ") || seg[x] ~ /--output/) return 0
+    # -C DIR: a DIR the shell rewrites (-C {.,-c,core.sshCommand=sh}) adds a -c before the subcommand
+    if (t == "git") { for (y++; w[y] == "-C" || w[y] == "--no-pager"; y += w[y] == "-C" ? 2 : 1)
+        if (w[y] == "-C" && (index(w[y + 1], "$") || w[y + 1] ~ ("[" sprintf("%c", 1) "{}*?[]"))) return 0
+      if (!index(" add commit status log diff show branch push fetch ", " " w[y] " ") || seg[x] ~ /--output/) return 0 }
+    # Where an option runs or writes (git push/fetch --exec, log/diff/show --output, rg --pre, printf -v), a word the
+    # shell rewrites could become one the checks miss: \--exec, $'--exec', $x, `…`, --{output=f,}, a glob (* matches a
+    # file named --exec=sh). Refused: a word holding a $ (origin$_ splits into origin --exec=sh), starting with an
+    # escape, a brace or a glob (^ too: zsh extendedglob), or a dash word holding one.
+    if (t == "git" && index(" push fetch log diff show ", " " w[y] " ") || t == "rg" || t == "printf") {
+      # shortcut: M also marks a closing backtick, so `git log -1` beside a gated mention fails closed too
+      if (index(seg[x], M)) return 0
+      for (z = y + 1; z <= m && (t != "printf" || z == y + 1); z++)
+        if (index(w[z], "$") || w[z] ~ ("^[" sprintf("%c", 1) "{}*?[^]") || w[z] ~ ("^-.*[" sprintf("%c", 1) "{}*?[]")) return 0 }
+    if (t == "git") {
       # git takes any unique prefix: --rec(eive-pack), --exe(c), --upl(oad-pack) run a command
       if ((w[y] == "push" || w[y] == "fetch") && seg[x] ~ /(^|[ \t])--[reu]/) return 0 }
     if (!index(SAFE, " " t " ")) return 0 }
@@ -174,7 +188,7 @@ cmd=$(printf '%s\n' "$cmd" | awk "${awkv[@]}" "$awklib"'
     while (i <= NR) { line = L[i++]
       s = q line; u = lex(s); q = LQ   # a quote still open goes on to the next line
       O[++n] = line; lc = s
-      if (q != "" || u ~ /\(\(|<<</ || line ~ /\\$/ || gsub(/<</, "&", u) != 1) continue
+      if (q != "" || u ~ /\(\(|<<</ || match(line, /\\+$/) && RLENGTH % 2 || gsub(/<</, "&", u) != 1) continue
       # The delimiter, read from the raw line as bash does, at its one << outside quotes and escapes (not a quoted
       # "<<E" beside a split <''<): a plain word, bare or in one pair of quotes, then a blank, a separator or the
       # end. Anything else (E;F, E F, E$(x), \E, E"x") is a heredoc this cannot read: the command is opaque, since its
@@ -213,9 +227,10 @@ ghind='(=["'"'"']?|\$\(|`)[[:space:]]*((which|command[[:space:]]+-v|type[[:space
 # shortcut: a known list of re-parsing commands (eval, shells, interpreters); add one if it shows up.
 ghreparse='(^|[^A-Za-z0-9_.-])(eval|source|sh|bash|zsh|dash|ksh|fish|python3?|perl|ruby|node)([^A-Za-z0-9_.-]|$)'
 ghro='[[:space:]]+((pr|issue)[[:space:]]+(view|checks|list|status|diff)|run[[:space:]]+(view|list|watch)|repo[[:space:]]+view)([^A-Za-z0-9_.-]|$)'
-# One line: continuations joined, other newlines made command separators.
+# One line: continuations joined as bash joins them (-\<nl>-exec is --exec; a line ending \\ goes on to no next
+# line), other newlines made command separators.
 # (awk, not ${cmd//"$nl"/ ; }: bash 3.2's replace-all is quadratic, minutes on a 50 KB heredoc.)
-cmd=$(printf '%s\n' "$cmd" | awk 'NR > 1 { printf "%s", (c ? " " : " ; ") } { c = sub(/\\$/, ""); printf "%s", $0 }') || exit 1
+cmd=$(printf '%s\n' "$cmd" | awk 'NR > 1 { printf "%s", (c ? "" : " ; ") } { c = match($0, /\\+$/) && RLENGTH % 2; if (c) sub(/\\$/, ""); printf "%s", $0 }') || exit 1
 # What the CLI mentions are counted in: the command without its quoted runs of words (a grep pattern, a commit
 # message, a prompt), which are arguments, not calls. A quoted single word stays (gh "pr" merge), and so do a value
 # (X='npx cli', run as $X later) and a "…" holding $( or `, which the shell runs. Unless every command is safe(),
