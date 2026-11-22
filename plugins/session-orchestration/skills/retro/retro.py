@@ -21,7 +21,8 @@ usage: python3 -I retro.py [--until YYYY-MM-DDTHH:MM[:SS]] CMD [args] [--project
                                   --merged: the adapter's `yesterday EPOCH KEY…` output, whose merges of the sessions'
                                   keys count too (a reviewer pressed merge); merge_ran on stderr is the ones a session
                                   ran. --keys: also write the sessions' task keys to FILE, one line, for `yesterday`
-  waits [days=7] [min=5]          tool calls whose result came back >= min minutes later (prompts, hangs)
+  waits [days=7] [min=5]          tool calls whose result came back >= min minutes later (prompts, hangs); `sleep`
+                                  marks one ending in the same minute in 3+ sessions (the machine woke); totals on stderr
   bgtasks REGEX [days=7]              background Bash launches vs. their completion notices (SILENT = died with
                                   its session); totals on stderr
   replies [days=7]                task sessions idle > 6 h that never wrote replies/<KEY>* (by hand, or the reply
@@ -159,7 +160,7 @@ def req_tokens(u):
     cw = u.get("cache_creation_input_tokens", 0)
     w5 = (u.get("cache_creation") or {}).get("ephemeral_5m_input_tokens", 0)
     return (u.get("input_tokens", 0), u.get("output_tokens", 0), u.get("cache_read_input_tokens", 0),
-            cw - w5 * 0.375)
+            cw - min(w5, cw) * 0.375)   # the 5-minute split is part of the total: a zero total writes nothing
 
 
 def advisor(u):
@@ -857,7 +858,7 @@ def trial(days=28):
 def waits(days=7, min_minutes=5):
     window(days)
     MIN = float(min_minutes)
-    print("session\tts\tminutes\ttool\tdecision\tinput")
+    rows = []
     for f in transcripts():
         sid = os.path.basename(f)[:8]
         pend = {}
@@ -877,7 +878,20 @@ def waits(days=7, min_minutes=5):
                     mins = (P(ts) - P(t0)).total_seconds() / 60
                     pd = o.get("permissionDecision") or {}
                     if mins >= MIN and name not in ("Monitor", "ScheduleWakeup", "Agent"):
-                        print("\t".join([sid, t0[:16], f"{mins:.0f}", name, f"{pd.get('source')}/{pd.get('reasonType')}", re.sub(r"\s+", " ", arg)[:160]]))
+                        rows.append((ts[:16], mins, [sid, t0[:16], f"{mins:.0f}", name, f"{pd.get('source')}/{pd.get('reasonType')}", re.sub(r"\s+", " ", arg)[:160]]))
+    # A wait ending in the same minute as waits in 2+ other sessions is the machine waking from sleep, not a wait.
+    # shortcut: two sessions waking together, or three answered in one minute by hand, are misread; upgrade with the
+    # power log (pmset -g log) or a no-line-in-any-session test when that shows up.
+    woke = {}
+    for end, _, r in rows:
+        woke.setdefault(end, set()).add(r[0])
+    tot = {"waits": 0, "minutes": 0, "sleep": 0, "sleep_minutes": 0}
+    print("session\tts\tminutes\ttool\tdecision\tinput\tsleep")
+    for end, mins, r in rows:
+        sl = len(woke[end]) >= 3
+        tot["sleep" if sl else "waits"] += 1; tot["sleep_minutes" if sl else "minutes"] += round(mins)
+        print("\t".join(r + ["sleep" if sl else ""]))
+    print(tot, file=sys.stderr)
 
 
 def bgtasks(regex=None, days=7):
@@ -931,7 +945,23 @@ def bgtasks(regex=None, days=7):
     print(tot, file=sys.stderr)
 
 
-TASK = re.compile(r"(?:Session task:|Work on)\s+(?:https?://\S+/browse/)?([A-Z]+-\d+)")
+task_re = lambda k: re.compile(r"(?:Session task:|Work on)\s+(?:https?://\S+/browse/)?" + k)
+TASK = task_re(r"([A-Z][A-Z0-9]+-\d+)")   # lib.sh key_re's default; --project ROOT takes the project's (project_key)
+
+
+def project_key(root):
+    """The task key regex of the project at ROOT as lib.sh key_re gives it (config key_pattern, else the adapter's,
+    else the default), or None when ROOT isn't a folder or the pattern isn't one Python reads."""
+    import subprocess
+    if not os.path.isdir(root):
+        return None
+    lib = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "lib.sh")
+    try:
+        k = subprocess.run(["bash", "-c", '. "$1" && cd "$2" && key_re "$(adapter_path .)"', "_", lib, root],
+                           capture_output=True, text=True, timeout=30).stdout.strip()
+        return task_re(k) if k else None   # key_re wraps it in parentheses: group(1) is the key
+    except (OSError, subprocess.SubprocessError, re.error):
+        return None
 
 
 def replies(days=7):
@@ -940,6 +970,7 @@ def replies(days=7):
     reply tool's report with key KEY)."""
     window(days)
     tot = {"task": 0, "wrote": 0, "lost": 0, "open": 0}
+    untasked = 0
     for f in transcripts():
         key = last = name = None
         wrote, rep = False, set()
@@ -979,6 +1010,7 @@ def replies(days=7):
                             (re.search(r"\.write(?:_text)?\(|writeFile", cmd) and re.search(path, cmd)):
                         wrote = True
         if not key:
+            untasked += key == ""
             continue
         tot["task"] += 1
         if wrote:
@@ -989,6 +1021,9 @@ def replies(days=7):
             tot["lost"] += 1
             print(f"{os.path.basename(f)[:8]}\t{key}\t{(last or '')[:16]}\t{name or ''}")
     print(tot, file=sys.stderr)
+    if untasked and not tot["task"]:
+        print(f"note: {untasked} sessions in the window, none named a task by {TASK.pattern}: a key_pattern this "
+              "can't see? Pass --project ROOT.", file=sys.stderr)
 
 
 # What a handoff entry waits on, from its last wording; the first that matches. ponytail: keyword buckets, read the
@@ -1706,7 +1741,10 @@ if __name__ == "__main__":
         i = a.index("--project")
         if i + 1 >= len(a):
             sys.exit("--project needs a ROOT path or a regex")
-        PROJECT = project_filter(a[i + 1]); a = a[:i] + a[i + 2:]
+        PROJECT = project_filter(a[i + 1])
+        if a[i + 1][:1] in "/~.":
+            TASK = project_key(os.path.expanduser(a[i + 1])) or TASK
+        a = a[:i] + a[i + 2:]
     if not a or a[0] not in CMDS:
         sys.exit(__doc__)
     CMDS[a[0]](*a[1:])
