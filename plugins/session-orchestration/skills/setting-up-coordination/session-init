@@ -46,6 +46,12 @@
 #                                   line that names one), the auto ones fixed, backed up and logged, the ask ones
 #                                   listed, P/setup.json stamped once none is left (see Migrate below). A file git
 #                                   tracks is changed in a team PR (coordination/migrate-<id>), never in the checkout.
+#   session-status --init --team-memory
+#                                   the prune's gather (shared mode): the memory's [team] lines appended, deduped and
+#                                   scrubbed, to the same topic in .claude/coordination/memory/<topic>.md (a flat
+#                                   memory's to misc.md; the index row added) in a worktree from origin/<default> on
+#                                   coordination/memory-<date>-<time>, with the Team PR line; lines origin/<default> has
+#                                   leave the memory; while this clone's gather branch is unmerged, nothing new opens.
 # Configured: the nearest adapter (.claude/session-status-adapter, as session-status finds the root) is in this
 # folder, and its CLAUDE.md or CLAUDE.local.md names a replies folder (the line --handover reads). A folder with its
 # own adapter is its own project even when a parent folder has one too (a subproject coordinator); with no adapter
@@ -62,7 +68,7 @@ for a; do
   case $a in --move) move=1; continue ;; --link) link=1; continue ;; esac
   rest+=("$a")
   case $a in
-    --check) mode=check ;; --write) mode=write ;; --migrate) mode=migrate ;; --dry-run) dry=1 ;;
+    --check) mode=check ;; --write) mode=write ;; --migrate) mode=migrate ;; --team-memory) mode=team_memory ;; --dry-run) dry=1 ;;
     --own) own=1 ;; --delegate) delegate=1 ;; --shared) shared=1 ;;
     --trust=?*@?*) trust+=("${a#--trust=}") ;;
     --review-brief) review_brief=1 ;; --retro-brief) retro_brief=1 ;;
@@ -1100,6 +1106,132 @@ trel=${td#"$trepo"/}
 # The team memory: memory.md (the prune PR's lines) and memory/*.md.
 gattr="/$trel/memory.md merge=union
 /$trel/memory/*.md merge=union"
+# --- Team memory (--team-memory): the prune's gather -------------------------------------------------------------
+# The [team] entry lines of the person's memory (P's memory.md, a flat one's lines to misc.md, and memory/<topic>.md)
+# go, verbatim, to the same topic in the team folder (T/memory/<topic>.md, T/memory.md its index), in a worktree from
+# origin/<default> on coordination/memory-<date>-<time>: deduped, scrubbed (a refused line stays in P, named), one commit
+# and a Team PR line for one pane ask. A line leaves P only once origin/<default>'s team memory has it (the PR
+# merged, or a teammate carried the same line); a gather branch of this clone that isn't merged yet is the one open
+# team PR: nothing new is opened meanwhile. merge=union on the topic files lets two people's PRs rebase cleanly.
+if [ "$mode" = team_memory ]; then
+  mdir=$(at "$orch")
+  [ -z "$dry" ] || { echo "--team-memory has no --dry-run"; exit 2; }
+  [ -z "$newer" ] || { echo "refused: $newer"; exit 1; }
+  [ -n "$trepo" ] || { echo "refused: --team-memory needs a git repo for the team files"; exit 1; }
+  case $trel in /*) echo "refused: --team-memory: the repo file's folder ($trel) is outside $trepo"; exit 1 ;; esac
+  GIT_TERMINAL_PROMPT=0 git -C "$trepo" fetch -q origin "$tdb" 2>/dev/null   # best effort: offline, the origin/$tdb fetched last
+  git -C "$trepo" cat-file -e "origin/$tdb:$trel/coordination.json" 2>/dev/null ||
+    { echo "refused: --team-memory: origin/$tdb has no $trel/coordination.json (no shared mode: session-status --init --write --shared): [team] lines stay in your memory"; exit 1; }
+  # carried: the entry lines origin/<default>'s team memory has (the index too: older gathers added them there)
+  carried=$(git -C "$trepo" ls-tree -r --name-only "origin/$tdb" -- "$trel/memory.md" "$trel/memory/" |
+    while IFS= read -r f; do git -C "$trepo" show "origin/$tdb:$f"; done | grep '^- ')
+  # notin TEXT: the lines of stdin not in TEXT
+  notin() { grep -vxF -f <(printf '%s\n' "$1") || :; }
+  tagged='^- [^:]*: \[team\] '   # the tag where memory-rules puts it: `- <date> <TASK>: [team] …`
+  srcs=(); [ ! -f "$mdir/memory.md" ] || srcs+=("$mdir/memory.md")
+  for f in "$mdir"/memory/*.md; do [ -f "$f" ] && srcs+=("$f"); done
+  # 1. This clone's earlier gather branches: merged (every entry line it adds is, or once was, on origin/<default>: a
+  # rebase merge rewrites SHAs, union may reorder, a later prune may drop a line) goes, its lines counted as carried;
+  # else it's the open team PR.
+  git -C "$trepo" worktree prune 2>/dev/null
+  while IFS= read -r B; do
+    [ -n "$B" ] || continue
+    add=$(git -C "$trepo" diff "origin/$tdb...$B" -- "$trel" | sed -n 's/^+- /- /p')
+    hist=$(git -C "$trepo" log -p --format= "origin/$tdb" -- "$trel" | sed -n 's/^+- /- /p')
+    if [ -n "$(notin "$carried"$'\n'"$hist" <<<"$add")" ]; then
+      drop="git -C $trepo worktree remove --force $trepo/.worktrees/$B; git -C $trepo branch -D $B"
+      if [ -z "$(git -C "$trepo" config --get "branch.$B.remote")" ]; then
+        echo "Team memory branch not pushed: $B (the pane ask said no?): push it and open its PR (git -C $trepo/.worktrees/$B show), or drop it ($drop); no new one meanwhile."
+      elif GIT_TERMINAL_PROMPT=0 git -C "$trepo" ls-remote --exit-code --heads origin "$B" >/dev/null 2>&1; [ $? = 2 ]; then
+        echo "Team PR gone from origin: $B (merged with edits, or closed): the lines it adds that origin/$tdb never had stay in your memory; reword or untag them there, then drop the branch ($drop)."
+      else
+        echo "Team PR open: $B: its lines leave your memory once it merges and this runs again; no new one meanwhile. Not merging it: close the PR and drop the branch ($drop; git -C $trepo push origin --delete $B)"
+      fi
+      exit 0
+    fi
+    carried+=$'\n'$add
+    git -C "$trepo" worktree remove --force "$trepo/.worktrees/$B" >/dev/null 2>&1; git -C "$trepo" branch -q -D "$B" >/dev/null 2>&1
+  done < <(git -C "$trepo" for-each-ref --format='%(refname:short)' 'refs/heads/coordination/memory-*')
+  # 2. Carried lines leave P. shortcut: a session's append in the instant between the grep and the mv is lost; a
+  # lock would need every appender to take it.
+  gone=0
+  for f in ${srcs[@]+"${srcs[@]}"}; do
+    d=$(grep "$tagged" "$f" | grep -xF -f <(printf '%s\n' "$carried")) || continue
+    { grep -vxF -f <(printf '%s\n' "$d") "$f" || :; } > "$f.tmp" && mv "$f.tmp" "$f" || { echo "refused: rewriting $f failed"; exit 1; }
+    gone=$((gone + $(wc -l <<<"$d")))
+  done
+  [ "$gone" = 0 ] || echo "Carried: $gone [team] line(s) landed on origin/$tdb, removed from your memory."
+  # 3. The rest: TOPIC<tab>LINE each, deduped; a line the scrub refuses stays in P.
+  todo= kept=
+  for f in ${srcs[@]+"${srcs[@]}"}; do
+    t=${f##*/}; [ "$f" != "$mdir/memory.md" ] || t=misc.md
+    while IFS= read -r l; do
+      [ -n "$l" ] || continue
+      bad=$(team_scrub "memory/$t" "$l")
+      if [ -n "$bad" ]; then kept+=$(sed 's/^[^:]*:[0-9]*: /  /' <<<"$bad")$'\n'; else todo+="$t	$l"$'\n'; fi
+    done < <(grep "$tagged" "$f" | notin "$carried")
+  done
+  todo=$(printf '%s' "$todo" | awk '!s[$0]++')
+  [ -z "$kept" ] || printf 'Kept in your memory (reword or untag them; the scrub refuses them for a team file):\n%s' "$kept"
+  [ -n "$todo" ] || { echo "Team memory: nothing to carry."; exit 0; }
+  # to the second: an earlier gather's branch may still be on origin after its merge
+  tb=coordination/memory-$(date +%F-%H%M%S); wt=$trepo/.worktrees/$tb
+  # --no-track: an upstream set only by the Team PR line's push -u tells step 1 the branch was pushed
+  git -C "$trepo" worktree add -q --no-track -b "$tb" "$wt" "origin/$tdb" 2>&1 || { echo "Team memory: git worktree add failed: no team PR"; exit 1; }
+  tex=$(git -C "$trepo" rev-parse --git-path info/exclude); case $tex in /*) ;; *) tex=$trepo/$tex ;; esac
+  (cd "$trepo" && git check-ignore -q .worktrees/x) || echo /.worktrees/ >> "$tex"   # the main checkout stays clean
+  tfail() { echo "Team memory: $1: no team PR"; git -C "$trepo" worktree remove --force "$wt"; git -C "$trepo" branch -q -D "$tb"; exit 1; }
+  ti=$wt/$trel/memory.md
+  if [ ! -f "$ti" ]; then mkdir -p "$wt/$trel" && cp "$tpl/team-memory.md" "$ti" || tfail "writing $trel/memory.md failed"; fi
+  topics=$(cut -f1 <<<"$todo" | sort -u)
+  while IFS= read -r t; do
+    tf=$wt/$trel/memory/$t src=$mdir/memory/$t
+    if [ ! -f "$tf" ]; then
+      # the person's topic header (title, trigger), as written by memory-init: the same text in every clone, so two
+      # people's first gathers of a topic merge to one header
+      h1=$(grep -m1 '^# ' "$src" 2>/dev/null) rw=$(grep -m1 '^> \*\*Read when\*\*: ' "$src" 2>/dev/null)
+      [ "$t" != misc.md ] || [ -n "$h1" ] || { h1='# Memory: everything else' rw='> **Read when**: nothing else fits.'; }
+      [ -n "$h1" ] && [ -n "$rw" ] && [ -z "$(team_scrub x "$h1"$'\n'"$rw")" ] || { h1="# Memory: ${t%.md}" rw="> **Read when**: ${t%.md}."; }
+      mkdir -p "${tf%/*}" && printf '%s\n\n%s\n' "$h1" "$rw" > "$tf" || tfail "writing $trel/memory/$t failed"
+    fi
+    [ -z "$(tail -c1 "$tf")" ] || echo >> "$tf"
+    awk -F'\t' -v t="$t" '$1 == t' <<<"$todo" | cut -f2- >> "$tf" || tfail "writing $trel/memory/$t failed"
+    # union merges can repeat a line: each one once (blank lines stay)
+    awk 'NF == 0 || !s[$0]++' "$tf" > "$tf.tmp" && mv "$tf.tmp" "$tf" || tfail "deduping $trel/memory/$t failed"
+    # its index row, rows sorted by name (a table added at the end of an index that has none, a flat older one)
+    grep -qF "| \`$t\` |" "$ti" && continue
+    rw=$(sed -n 's/^> \*\*Read when\*\*: \(.*\)\.$/\1/p' "$tf" | head -1)
+    grep -q '^| Topic file' "$ti" || printf '\n| Topic file (`memory/`) | Read when |\n|------------------------|-----------|\n' >> "$ti"
+    h=$(awk '/^\| Topic file/ { t = NR; next } t && NR == t + 1 && /^\|-/ { print NR; exit }' "$ti")
+    [ -n "$h" ] || tfail "$trel/memory.md has no separator row under its | Topic file header"
+    n=$(awk -v h="$h" 'NR > h && /^\| `/ { c++; next } NR > h { exit } END { print c + 0 }' "$ti")
+    { head -n "$h" "$ti"; { [ "$n" = 0 ] || sed -n "$((h + 1)),$((h + n))p" "$ti"; echo "| \`$t\` | ${rw:-${t%.md}} |"; } | LC_ALL=C sort
+      tail -n +"$((h + n + 1))" "$ti"; } > "$ti.tmp" && mv "$ti.tmp" "$ti" || tfail "writing $trel/memory.md failed"
+  done <<<"$topics"
+  ga_old=$(git -C "$trepo" show "origin/$tdb:.gitattributes" 2>/dev/null)
+  ga_need=$(while IFS= read -r l; do grep -qxF -- "$l" <<<"$ga_old" || echo "$l"; done <<<"$gattr")
+  if [ -n "$ga_need" ]; then
+    [ ! -s "$wt/.gitattributes" ] || [ -z "$(tail -c1 "$wt/.gitattributes")" ] || echo >> "$wt/.gitattributes"
+    printf '%s\n' "$ga_need" >> "$wt/.gitattributes" || tfail "writing .gitattributes failed"
+  fi
+  git -C "$wt" add -f -- "$trel/memory.md" "$trel/memory" .gitattributes || tfail "git add failed"
+  bad=$(team_scrub "$tb" "$(git -C "$wt" diff --cached -U0 | sed -n '/^+++ /d; s/^+//p')")
+  [ -z "$bad" ] || { echo "refused: $tb would put personal details in a team file:"; sed 's/^/  /' <<<"$bad"; tfail "scrub"; }
+  nl=$(wc -l <<<"$todo" | tr -d ' ')
+  tmsg="coordination: team memory ($nl line(s): $(paste -sd, - <<<"$topics" | sed 's/,/, /g'))"
+  git -C "$wt" commit -q -m "$tmsg" || tfail "the commit in $wt failed"
+  turl=$(git -C "$trepo" config --get remote.origin.url) pr="git -C $wt push -u origin $tb" prnote=
+  case $turl in   # as configured, not insteadOf-rewritten: what gh resolves
+    *github.com*) pr+=" && gh pr create -R $(url_slug "$turl") --base $tdb --head $tb --title '$tmsg' --body 'Team memory: [team] lines from project memory, for every collaborator; the gather removes them from personal memory once this merges.'" ;;
+    *) prnote="Then open a PR from $tb into $tdb on the code host." ;;
+  esac
+  echo "Team memory: $nl line(s) committed on $tb ($wt):"
+  cut -f1 <<<"$todo" | sort | uniq -c | while read -r c t; do echo "  $trel/memory/$t: $c"; done
+  [ -z "$ga_need" ] || echo "  .gitattributes: merge=union for team memory"
+  echo "Team PR: show its diff in one pane ask (git -C $wt show), then on yes: $pr"
+  [ -z "$prnote" ] || echo "$prnote"
+  exit 0
+fi
 # The team section: claude-section.md's rule lines (team_sec) in the committed CLAUDE.md. Once this checkout's
 # CLAUDE.md has it, the personal section keeps only its own lines (local_sec): the coordinator, replies, memory,
 # handoff; until the team PR merges it stays whole, so no session goes without the rules. Shared mode adds it in one

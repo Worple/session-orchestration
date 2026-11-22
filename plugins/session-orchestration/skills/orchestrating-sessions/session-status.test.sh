@@ -2019,6 +2019,67 @@ rc=0; init "$p/sub1" --write --trust=session-status-adapter@0000 >/dev/null || r
   [ "$(jq -r .tracker "$p/sub2/.claude/coordination/coordination.json")" = github ] || { echo "init (s6) under a parent: $(ls -a "$p/sub1" "$p/sub2/.claude")"; exit 1; }
 fi
 
+if section team-memory; then
+gh_offline
+# Team memory: two people (clones x and y of one shared repo, each its own P) tag [team] lines in the same topic;
+# --team-memory commits each one's on coordination/memory-<date>-<time> from origin/main, one lands and the other rebases
+# cleanly (merge=union): first when both create the topic, then when it exists. A line leaves P only once origin/main
+# has it; one with a home path stays in P, named; the main checkout stays clean.
+o=$(mkdir -p "$tmp/tm/o.git" && cd "$tmp/tm/o.git" && pwd -P); git -C "$o" init -q --bare
+s=$(mkdir -p "$tmp/tm/seed" && cd "$tmp/tm/seed" && pwd -P); git -C "$s" init -q && git -C "$s" symbolic-ref HEAD refs/heads/main
+mkdir -p "$s/.claude/coordination"; echo '{"tracker":"none","host":"github"}' > "$s/.claude/coordination/coordination.json"
+printf '/.claude/coordination/memory.md merge=union\n/.claude/coordination/memory/*.md merge=union\n' > "$s/.gitattributes"
+git -C "$s" add -A && gc "$s" -m shared && git -C "$s" push -q "$o" main
+git clone -q "$o" "$tmp/tm/x" && git clone -q "$o" "$tmp/tm/y"; x=$(cd "$tmp/tm/x" && pwd -P) y=$(cd "$tmp/tm/y" && pwd -P)
+for c in "$x" "$y"; do git -C "$c" config user.name t && git -C "$c" config user.email t@t && init "$c" --write >/dev/null; done
+mx=$(pof "$x")/memory/misc.md my=$(pof "$y")/memory/misc.md
+# prb OUT: the gather branch the Team PR line pushes
+prb() { sed -n 's/^Team PR: .* push -u origin \(coordination\/memory-[0-9-]*\).*/\1/p' <<<"$1"; }
+tmf=.claude/coordination/memory/misc.md
+[ -f "$mx" ] && [ -f "$my" ] || { echo "team-memory: no P topic: $(ls -R "$(pof "$x")")"; exit 1; }
+# round N A B: x tags A, y tags B; both gather; x lands; y rebases on it cleanly, then lands; both gather again
+round() {
+  echo "- 2026-11-0$1 X-$1: [team] $2" >> "$mx"; echo "- 2026-11-0$1 Y-$1: [team] $3" >> "$my"
+  out=$(init "$x" --team-memory) && tb=$(prb "$out") && wx=$x/.worktrees/$tb && [ -n "$tb" ] &&
+    grep -qF "Team PR: show its diff in one pane ask (git -C $wx show), then on yes: git -C $wx push -u origin $tb" <<<"$out" &&
+    [ -z "$(git -C "$x" status --short)" ] && grep -qxF -- "- 2026-11-0$1 X-$1: [team] $2" "$mx" &&
+    git -C "$x" show "$tb:$tmf" | grep -qxF -- "- 2026-11-0$1 X-$1: [team] $2" || { echo "team-memory ($1) x gather: $out"; exit 1; }
+  out=$(init "$x" --team-memory) && grep -q "^Team memory branch not pushed: $tb " <<<"$out" && git -C "$wx" push -q -u origin "$tb" &&
+    out=$(init "$x" --team-memory) && grep -q "^Team PR open: $tb: " <<<"$out" || { echo "team-memory ($1) x open: $out"; exit 1; }
+  out=$(init "$y" --team-memory) && tby=$(prb "$out") && [ -n "$tby" ] && wy=$y/.worktrees/$tby || { echo "team-memory ($1) y gather: $out"; exit 1; }
+  git -C "$wx" push -q origin "HEAD:main"
+  git -C "$wy" fetch -q origin && git -C "$wy" rebase -q origin/main || { echo "team-memory ($1): y's rebase conflicted: $(git -C "$wy" status --short)"; exit 1; }
+  ! git -C "$wy" grep -q '^<<<<<<<' && git -C "$wy" push -q origin "HEAD:main" || { echo "team-memory ($1): conflict markers"; exit 1; }
+  out=$(init "$x" --team-memory) && grep -qxF 'Carried: 1 [team] line(s) landed on origin/main, removed from your memory.' <<<"$out" &&
+    ! grep -qF "[team] $2" "$mx" && ! git -C "$x" rev-parse -q --verify "refs/heads/$tb" >/dev/null && [ ! -e "$wx" ] || { echo "team-memory ($1) x after merge: $out"; exit 1; }
+  out=$(init "$y" --team-memory) && grep -qxF 'Team memory: nothing to carry.' <<<"$out" && ! grep -qF "[team] $3" "$my" || { echo "team-memory ($1) y after merge: $out"; exit 1; }
+}
+echo '- 2026-11-01 X-0: personal' >> "$mx"; echo '- 2026-11-01 Y-0: [team] notes in /home/u/notes' >> "$my"
+round 1 alpha beta   # both create misc.md and the index
+round 2 gamma delta  # misc.md exists: both append at its end
+git -C "$o" show main:$tmf > "$tmp/tmf"; git -C "$o" show main:.claude/coordination/memory.md > "$tmp/tmi"
+[ "$(grep -c '^# ' "$tmp/tmf")" = 1 ] && [ "$(grep -c '^- ' "$tmp/tmf")" = 4 ] && [ "$(grep -c '^| `misc.md` |' "$tmp/tmi")" = 1 ] &&
+  [ "$(grep -c '^# ' "$tmp/tmi")" = 1 ] && grep -qxF -- '- 2026-11-01 X-0: personal' "$mx" && grep -qF '/home/u/notes' "$my" &&
+  ! grep -qF '/home/u' "$tmp/tmf" && grep -qF 'Kept in your memory' <<<"$(init "$y" --team-memory)" ||
+  { echo "team-memory: origin/main: $(cat "$tmp/tmf" "$tmp/tmi")"; exit 1; }
+# a topic file without a final newline gets the line on a line of its own; a merged gather whose line a later prune
+# dropped from origin/main is still merged (not the open PR forever) and its line leaves P; [team] past the tag's
+# place is no tag
+git -C "$x" fetch -q origin && git -C "$x" checkout -q --detach origin/main && printf %s "$(cat "$x/$tmf")" > "$x/$tmf" &&
+  git -C "$x" commit -qam 'no final newline' && git -C "$x" push -q origin HEAD:main && git -C "$x" checkout -q main
+echo '- 2026-11-05 X-5: [team] eps' >> "$mx"
+out=$(init "$x" --team-memory) && tb=$(prb "$out") && [ -n "$tb" ] && git -C "$x" show "$tb:$tmf" | grep -qxF -- '- 2026-11-05 X-5: [team] eps' ||
+  { echo "team-memory no final newline: $out / $(git -C "$x" show "$tb:$tmf")"; exit 1; }
+# landed as a rebase merge does (a new SHA), then pruned
+git -C "$x" checkout -q --detach origin/main && git -C "$x" cherry-pick "$tb" >/dev/null && git -C "$x" commit -q --amend -m landed &&
+  git -C "$x" rm -q "$tmf" && git -C "$x" commit -qm prune && git -C "$x" push -q origin HEAD:main && git -C "$x" checkout -q main ||
+  { echo "team-memory land and prune failed"; exit 1; }
+echo '- 2026-11-06 X-6: not [team] material' >> "$mx"
+out=$(init "$x" --team-memory) && grep -qxF 'Carried: 1 [team] line(s) landed on origin/main, removed from your memory.' <<<"$out" &&
+  grep -qxF 'Team memory: nothing to carry.' <<<"$out" && ! grep -qF '[team] eps' "$mx" && grep -qxF -- '- 2026-11-06 X-6: not [team] material' "$mx" ||
+  { echo "team-memory pruned after merge: $out"; exit 1; }
+fi
+
 if section move; then
 gh_offline
 # --write --move: an older setup's files into the state folder. old ROOT ORCH REPLIES: ROOT's fresh setup made an

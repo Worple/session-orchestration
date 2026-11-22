@@ -104,7 +104,8 @@ project runs their own coordinator.
 
 **Shared**: a repo's owner can commit `.claude/coordination/` (`session-status --init --write --shared` commits the
 repo's tracker settings and a `merge=union` line for team memory in a worktree of its own, for one team PR the user
-approves; personal files stay out of git): the repo's tracker settings, team memory, and optionally a shared adapter or terminal modules. Each collaborator's setup reads
+approves; personal files stay out of git): the repo's tracker settings, team memory (lines a session tags `[team]`,
+carried by the coordinator's prune in one team PR per prune), and optionally a shared adapter or terminal modules. Each collaborator's setup reads
 it; committed code runs on a person's machine only after they've reviewed it and recorded its hash, and again after
 every change. Delegation, accounts, terminal and personal memory always stay per person.
 

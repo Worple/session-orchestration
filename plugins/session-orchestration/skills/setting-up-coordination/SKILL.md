@@ -142,7 +142,8 @@ excluded) with the person's git identity, so the main checkout stays clean:
 - **Shared** (read by every collaborator once merged): `.claude/coordination/coordination.json` (repo keys only:
   tracker, host, features.review_inbox, plus any repo key set in this checkout's file) and the `.gitattributes` lines
   `/.claude/coordination/memory.md merge=union` and `/.claude/coordination/memory/*.md merge=union`, so two people's
-  team memory appends merge on rebase. This checkout's exclude hides only the repo file, not the folder, so team
+  team memory appends merge on rebase (the coordinator's prune adds them with `--team-memory`, memory topic by topic:
+  orchestrating-sessions' memory-rules.md). This checkout's exclude hides only the repo file, not the folder, so team
   files added there later show in `git status`. In one repo (not a workspace, whose sessions start above the team
   repo), also the team section `## Coordinated sessions (team)` appended to `CLAUDE.md`: the section template's rule
   lines (approvals, the reserved list, task names, branches, worktrees), no path, name or coordinator.
