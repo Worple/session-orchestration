@@ -11,8 +11,9 @@
    version that doesn't exist yet. A branch that bumped `version` in its last commit keeps that number.
    A change to what setup writes, or to where a project's files live, ships its migration: see "Adding a migration" in
    `plugins/session-orchestration/skills/setting-up-coordination/migrations.md`. A change to where coordinator files
-   live, or to what is kept out of git, says what is shared and what stays personal: other people may work in the
-   project, with or without this plugin, and committing the shared files is a per-project choice.
+   live, or to what is kept out of git, says in its doc and migration what is shared and what stays personal: other
+   people may work in the project, with or without this plugin, and committing the shared files is a per-project
+   choice.
 2. Before committing: `claude plugin test plugins/<plugin>`, `tsc -p plugins/<plugin>` (needs the
    engine's generated `.claude-plugin/types/`, untracked: copy it from the main checkout into a new worktree first, or
    tsc finds no tsconfig and writes stray `.js` next to the sources; if `claude plugin test` fails, compare with
@@ -22,10 +23,11 @@
    touches: `bash session-status.test.sh NAME…`, picking each `if section NAME; then` block that runs the option or
    behaviour you changed (`grep -n -e '--yourflag' -e '^if section'` shows which; a fixture or helper change at the
    top touches all of them). The full suite is CI's (`test.yml`, macOS and Ubuntu), not a local step.
-3. Land it through a PR: push the branch, open the PR, send the done report (`reply` with `done: pr`), and only once
-   the coordinator's relay naming that PR number has arrived, `gh pr merge <N> -R OWNER/REPO --auto --rebase`. An
-   approval given at the task's start is the coordinator's to relay, not the session's to act on: the approval hook
-   refuses the merge until the relay names the PR.
+3. Land it through a PR: push the branch, open the PR and, once the task is approved, `gh pr merge <N> -R OWNER/REPO --auto --rebase`.
+   In a coordinated session, approved means the coordinator's relay naming that PR (`merge OWNER/REPO#N`): send the
+   done report first (`reply` with `done: pr` and `key`), then merge once the relay arrives. An approval in the start
+   brief is the coordinator's to relay, not the session's to act on, and the approval hook refuses the merge before
+   the relay; none comes: ask for it as worker.md's "Posting and merging" says.
    `main` takes only rebase merges of a branch green in CI; nothing pushes `main` by hand. A branch need not be up to
    date with `main`: each landing adds a release commit, so `BEHIND` is normal and GitHub rebases the branch as it
    merges. Until yours shows merged, after each `gh pr checks <N> -R OWNER/REPO --watch` check
