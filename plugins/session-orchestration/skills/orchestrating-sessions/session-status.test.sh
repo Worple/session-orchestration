@@ -2697,6 +2697,64 @@ for n in coord-next Coordinator; do stub "$n"; rc=0; out=$(ap --relay ABC-11 x 2
   [ $rc = 1 ] && [[ $out == *"name yet (coord-next)"* ]] || { echo "--relay as $n: $rc $out"; exit 1; }; done
 fi
 
+if section idle; then
+# session-idle.jq: why a background session's turn ended. Rows at 10:00:0N; since is 10:00:00.
+since=$(jq -n '"2026-01-01T10:00:00Z" | fromdateiso8601 * 1000')
+ts() { echo "2026-01-01T10:00:0$1.123Z"; }
+turn() { printf '{"type":"user","timestamp":"%s","message":{"content":"%s"}}\n' "$(ts "$1")" "$2"; }
+use() { jq -nc --arg ts "$(ts "$1")" --arg id "$2" --arg n "$3" --argjson in "${4:-null}" \
+  '{type: "assistant", timestamp: $ts, message: {content: [{type: "tool_use", id: $id, name: $n, input: ($in // {})}]}}'; }
+res() { jq -nc --arg ts "$(ts "$1")" --arg id "$2" --arg t "$3" --argjson e "${4:-false}" \
+  '{type: "user", timestamp: $ts, message: {content: [{type: "tool_result", tool_use_id: $id, content: $t, is_error: $e}]}}'; }
+note() { jq -nc --arg ts "$(ts "$1")" --arg c "<task-notification>
+<task-id>b1</task-id>
+<tool-use-id>$2</tool-use-id>
+<status>$3</status>
+</task-notification>" '{type: "queue-operation", operation: "enqueue", timestamp: $ts, content: $c}'; }
+done_() { printf '{"type":"assistant","timestamp":"%s","message":{"content":[{"type":"text","text":"Done."}]}}\n' "$(ts "$1")"; }
+notes() { jq -nc --arg ts "$(ts "$1")" --arg c "$2" '{type: "user", origin: {kind: "task-notification"}, timestamp: $ts, message: {content: $c}}'; }
+nb() { printf '<task-notification>\n<tool-use-id>%s</tool-use-id>\n<status>completed</status>\n</task-notification>' "$1"; }
+# check WANT CASE [SINCE]: the transcript on stdin classifies as WANT
+check() { local got; got=$(jq -rRn --argjson since "${3:-$since}" -f "$here/session-idle.jq") || got="jq failed"
+  [ "$got" = "$1" ] || { echo "idle, $2: $got, want $1"; exit 1; }; }
+ms() { jq -n --arg t "$1" '($t | sub("\\.[0-9]+"; "") | fromdateiso8601) * 1000 + ($t | capture("\\.(?<f>[0-9]+)").f | tonumber)'; }
+bg='{"run_in_background":true,"command":"sleep 9"}'
+{ turn 1 'Work on ABC-12'; echo 'not json'; done_ 2; } | check idle 'a finished turn'
+{ turn 1 'Work on ABC-12'; use 2 t1 mcp__session-orchestration__reply; res 3 t1 sent; done_ 4; } | check replied 'the reply tool'
+{ turn 1 'Work on ABC-12'; use 2 t1 SendMessage; res 3 t1 sent; done_ 4; } | check replied 'SendMessage'
+{ turn 1 'Work on ABC-12'; use 2 t1 SendMessage; res 3 t1 sent; turn 4 'And ABC-13'; done_ 5; } | check idle 'a reply in an earlier turn'
+{ turn 1 'Work on ABC-12'; use 2 t1 Bash "$bg"; res 3 t1 'Command running in background with ID: b1'; done_ 4; } |
+  check waiting 'a background Bash, no notification'
+{ turn 1 'Work on ABC-12'; use 2 t1 Bash "$bg"; res 3 t1 'Command running in background with ID: b1'; note 4 t1 completed; done_ 5; } |
+  check idle 'a background Bash, completed'
+{ turn 1 'Work on ABC-12'; use 2 t1 Monitor '{"command":"tail -f log"}'; res 3 t1 'Monitor started'; done_ 4; } | check waiting 'a pending Monitor'
+{ turn 1 'Work on ABC-12'; use 2 t1 Bash "$bg"; res 3 t1 'Permission denied' true; done_ 4; } | check idle 'a failed launch'
+{ turn 1 'Work on ABC-12'; use 2 t1 Agent '{"prompt":"x"}'; res 3 t1 'Async agent launched. Running in the background as @a1'; done_ 4; } |
+  check waiting 'a backgrounded Agent, pending'
+{ turn 1 'Work on ABC-12'; use 2 t1 Agent '{"prompt":"x"}'; res 3 t1 'The agent found 3 files'; done_ 4; } | check idle 'a foreground Agent'
+{ turn 1 'Work on ABC-12'; use 2 t1 Agent '{"prompt":"x","run_in_background":true}'; done_ 3; } | check waiting 'an Agent started in the background, no result yet'
+{ turn 1 'Work on ABC-12'; use 2 t1 Bash "$bg"; res 3 t1 'Command running in background with ID: b1'; done_ 4; } |
+  check idle 'a background start before since' "$(ms 2026-01-01T10:00:05.000Z)"
+{ turn 1 'Work on ABC-12'; use 2 t1 Bash "$bg"; res 3 t1 'Command running in background with ID: b1'; done_ 4; } |
+  check waiting 'a background start in the same second as since, after it' "$(ms 2026-01-01T10:00:02.100Z)"
+# Stopped with TaskStop: never notified, ended all the same; a failed stop leaves it running.
+{ turn 1 'Work on ABC-12'; use 2 t1 Bash "$bg"; res 3 t1 'Command running in background with ID: b1'
+  use 4 t2 TaskStop '{"task_id":"b1"}'; res 5 t2 'Successfully stopped task: b1'; done_ 6; } | check idle 'a background Bash stopped'
+{ turn 1 'Work on ABC-12'; use 2 t1 Bash "$bg"; res 3 t1 'Command running in background with ID: b1'
+  use 4 t2 TaskStop '{"task_id":"b1"}'; res 5 t2 'No task b1' true; done_ 6; } | check waiting 'a failed stop'
+# A notification only as a user row (a resumed transcript), and two in one enqueue.
+{ turn 1 'Work on ABC-12'; use 2 t1 Bash "$bg"; res 3 t1 'Command running in background with ID: b1'; notes 4 "$(nb t1)"; done_ 5; } |
+  check idle 'notified in a user row'
+{ turn 1 'Work on ABC-12'; use 2 t1 Bash "$bg"; res 3 t1 'Command running in background with ID: b1'
+  use 4 t2 Bash "$bg"; res 5 t2 'Command running in background with ID: b2'
+  jq -nc --arg c "$(nb t1)$(nb t2)" '{type: "queue-operation", operation: "enqueue", content: $c}'; done_ 6; } | check idle 'two notifications in one enqueue'
+# A failed send isn't a reply; a notification, a compact summary or a slash command after the reply starts no new turn.
+{ turn 1 'Work on ABC-12'; use 2 t1 SendMessage; res 3 t1 '{"success":false,"message":"No agent named x"}'; done_ 4; } | check idle 'a failed SendMessage'
+{ turn 1 'Work on ABC-12'; use 2 t1 mcp__session-orchestration__reply; res 3 t1 'failed' true; done_ 4; } | check idle 'a failed reply'
+{ turn 1 'Work on ABC-12'; use 2 t1 SendMessage; res 3 t1 sent; notes 4 "$(nb t0)"; echo '{"type":"user","isCompactSummary":true,"message":{"content":"Summary"}}'
+  echo '{"type":"user","message":{"content":"<command-name>/reload-plugins</command-name>"}}'; done_ 5; } | check replied 'a reply, then a notification, a summary and /reload-plugins'
+fi
+
 if section docs; then
 # The docs watch: a Notices line per watched page a listed doc's reviewed list lacks; the index fetched once a day.
 cat > "$tmp/bin/curl" <<EOF
