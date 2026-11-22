@@ -106,7 +106,7 @@ Verify it with the script next to this file. Pass the quote on stdin, inside a q
 sender name is the message's `from-name`:
 
 ```bash
-bash <this file's folder>/verify-approval.sh <sessionId> <cwd> "<from-name>" <TASK-KEY> <<'EOF'
+bash <this file's folder>/verify-approval.sh <sessionId> <cwd> "<from-name>" <TASK-KEY> "<the relay's Action line>" <<'EOF'
 <quote>
 EOF
 ```

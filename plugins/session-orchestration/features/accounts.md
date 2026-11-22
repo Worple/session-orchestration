@@ -17,7 +17,8 @@ it). Setup turns it on when it finds a second Claude account sharing this one's 
 agents` list. With the feature on, `session-status` (status, `--activity`, `--all-projects`, the pane) asks every
 account whose `projects/` is the same directory as yours (`~/.claude` and every `~/.claude-*`), and prefixes the
 commands that reach another account's session with its `CLAUDE_CONFIG_DIR` (`env -u CLAUDE_CONFIG_DIR claude` for
-`~/.claude`). `verify-approval.sh` looks the coordinator up in each of those accounts' `claude agents`, so a relayed
+`~/.claude`). `verify-approval.sh` checks the relay against the coordinator's transcript first and, without that proof, looks the
+coordinator up in each of those accounts' `claude agents`, so a relayed
 approval verifies from a worker under another account. The list comes from `features/accounts.sh`.
 
 ## Coordinating across accounts

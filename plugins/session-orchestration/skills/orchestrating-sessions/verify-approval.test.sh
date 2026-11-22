@@ -126,6 +126,16 @@ cp "$proj/$cid.jsonl" "$tmp/t.jsonl"
 { echo '{"type":"agent-name","agentName":"coord"}'; relay "$now" yes; relay "$old" "Yes, deploy ABC-4"; } >> "$proj/$cid.jsonl"
 check ABC-1 yes "verified, answering: Merge ABC-1?"
 check ABC-4 "Yes, deploy ABC-4" verified
+# Running (listed in the worker's account): a fresh relay verifies by its transcript alone, without listing the sessions
+# (`claude agents` per account took past the hook's 60 s on a loaded machine); an old one lists them and, its source
+# running, counts the quote's age to now.
+echo "$home/.claude-work" > "$tmp/coord"; mv "$tmp/bin/claude" "$tmp/claude.real"
+printf '#!/bin/sh\ntouch %s\nexec %s "$@"\n' "'$tmp/listed'" "'$tmp/claude.real'" > "$tmp/bin/claude"; chmod +x "$tmp/bin/claude"
+check ABC-1 yes "verified, answering: Merge ABC-1?"
+[ ! -e "$tmp/listed" ] || { echo "FAIL a fresh relay's proof still listed the sessions"; exit 1; }
+check ABC-4 "Yes, deploy ABC-4" "$no ABC-4 in it or in the message it answers"
+[ -e "$tmp/listed" ] || { echo "FAIL an old relay didn't list the sessions"; exit 1; }
+mv "$tmp/claude.real" "$tmp/bin/claude"; echo "$home/.claude-other" > "$tmp/coord"
 check ABC-2 "Yes, patch the ABC-2 config and restart fe" "$stopped its transcript holds no relay of this quote and action"
 # The whole relay must match: another Action under the same quote, or none given, doesn't verify.
 ACT="merge app#2 (ABC-1)" check ABC-1 yes "$stopped its transcript holds no relay of this quote and action"

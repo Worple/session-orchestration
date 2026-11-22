@@ -16,7 +16,7 @@
 #     first prompt wasn't typed.
 #  3. In that session's transcript, one message the user typed (origin human, no pasted content)
 #     matches the quote as a whole (double quotes escaped \" or curled count as straight ones) and is at most MAX_AGE_H hours old (default 24; with
-#     the transcript proof, when it sent the relay). The task key is in
+#     the transcript proof of a send within MAX_AGE_H, or of a stopped source's, when it sent the relay). The task key is in
 #     the quote, or in the coordinator's last text before it (the message the user was answering).
 #     An answer the user gave in the coordinator's question box (AskUserQuestion: the option label they
 #     clicked, or their "Other" text) counts the same way, with the question as the message answered.
@@ -56,7 +56,9 @@ sent=
       else . end)
     | if .bg then "bg" elif .named | not then "name" elif .at == null then "none"
       else .at | sub("\\.[0-9]+Z$"; "Z") | fromdate end' "$f") || sent=unreadable
-if [[ $sent =~ ^[0-9]+$ ]]; then ref=$sent
+# Only a send within MAX_AGE_H skips the listing: an older one verifies only from a stopped source (a running one counts
+# the quote's age to now), so the listing decides.
+if [[ $sent =~ ^[0-9]+$ ]] && [ "$sent" -ge $(( ref - max_age_h * 3600 )) ]; then ref=$sent
 else
   IFS=$'\037' read -r _ s_name _ _ _ s_cwd s_kind _ <<<"$(list_sessions | awk -F'\t' -v id="$id" '$1 == id' | head -1 | tr '\t' '\037')"
   if [ -n "$s_name$s_cwd" ]; then
@@ -67,6 +69,7 @@ else
   else
     [ -f "$f" ] || reject "source session isn't running, and has no transcript"
     case $sent in
+      *[0-9]) ref=$sent ;;
       '') reject "source session isn't running: pass the relay's Action line to verify it by its transcript" ;;
       bg) reject "source session isn't running, and was a background session" ;;
       name) reject "source session isn't running, and its transcript never names it $sender" ;;

@@ -129,8 +129,9 @@ user a command).
   design task's pane answer "start stage 1 as its own PR; landing it is approved with it"), quote that answer and
   relay `Action: merge OWNER/REPO#ID (<session name>, approved under <that key>)`: the hook verifies the quote with
   that key, within 24h of the answer. A project that lands by fast-forward instead: `Action: merge <branch> (<session
-  name>)` for the worker's `session-status --land <branch>`. A relay whose source session has since stopped still
-  verifies, by its transcript's send of that quote.
+  name>)` for the worker's `session-status --land <branch>`. The check reads the source's transcript for its send of
+  that whole relay first (no session listing for a send within 24h), so a relay whose source has since stopped still
+  verifies.
 - Never relay an approval for something that was denied or blocked in your own session.
 - A review-inbox decision isn't relayed: the user's click on the inbox page is their approval to post that row
   ([review-inbox.md](review-inbox.md)).
