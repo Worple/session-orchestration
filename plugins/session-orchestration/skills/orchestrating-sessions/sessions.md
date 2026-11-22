@@ -92,6 +92,15 @@ or blocked. When finished: reply with done and the check that proves it.'`
   (exit 2: a wrong kind or name; fix it, don't start without them). It logs the start for retro. `fable` only as `--kind` prints it
   (config `fable.accounts`, `choosing-model-effort`) or when the user names it: then set it by hand. A handover or fresh restart of that task takes the same flags without running `--kind` again, so the task logs
   one start.
+- **`--kind` exits 3, printing nothing: not yours to start** (ownership on start, from the release after it: `--kind`
+  runs `session-status --claim` on the key the name starts with). The task is assigned to someone else, or a branch on
+  origin naming it has another person's commits. Don't start: queue the ask its stderr names (`ask_approval`: "KEY:
+  REASON: start anyway on a separate branch / leave it"). On "start anyway", run `--kind` again with `--anyway` after
+  the name, and brief the session to work on a new branch of its own; never take over, push to, rebase or force-push
+  another person's branch. An unassigned task (the adapter's `owner` says `none`) is assigned to the user as `--kind`
+  runs (`claim`), before `claude --bg`: the start is their yes to it, by `start.mode` or their own request; a start
+  dropped after that leaves it assigned, so unassign it in the tracker. A GitHub issue (`#N`) can't lead a session
+  name: check and claim it with `session-status --claim '#N'` before the start.
 - The first prompt names the task. `-n` names the session by its ticket (e.g. `PROJ-1234-fix-settler`: no spaces).
   With the key not known yet, leave it out, and the session names itself with `name_session` once it finds it.
   Without `-n` the real name shows in `ListAgents` a few seconds later and may repeat one: then message `name [ref]`.

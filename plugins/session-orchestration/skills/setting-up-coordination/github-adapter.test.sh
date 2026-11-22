@@ -37,6 +37,10 @@ cat > "$tmp/bin/gh" <<EOF
 #!/bin/sh
 echo x >> "$tmp/calls"
 [ -e "$tmp/gh-down" ] && { echo "gh: HTTP 401: Bad credentials" >&2; exit 1; }
+# owner/claim: you are "me"; #10 is yours, #12 unassigned, #13 alice's (the stub prints what --jq would)
+case "\$*" in "api user"*) echo me; exit 0 ;; "issue view 10 "*) echo me; exit 0 ;; "issue view 12 "*) exit 0 ;;
+  "issue view 13 "*) printf 'alice\nbob\n'; exit 0 ;; "issue view 99 "*) exit 1 ;; "issue edit"*) echo "\$*" >> "$tmp/edits"; exit 0 ;;
+  *headRefName,author*) cat "$tmp/authors.json"; exit 0 ;; esac
 case "\$*" in *"--assignee @me"*) jq "[.[] | select(.assignees | map(.login) | index(\"me\"))]" "$tmp/issues.json"; exit 0 ;; *no:assignee*) jq "[.[] | select(.assignees == [])]" "$tmp/issues.json"; exit 0 ;; esac
 case "\$*" in *"--author @me"*) cat "$tmp/mine.json"; exit 0 ;; esac
 state=\$(echo "\$*" | sed -n 's/.*--state \([a-z]*\).*/\1/p' | tr a-z A-Z)
@@ -70,4 +74,14 @@ rm "$cache"
 [ "$(grep -c . "$tmp/calls")" = 3 ] || { echo "gh retried after a failure: $(grep -c . "$tmp/calls") calls"; exit 1; }
 rm "$tmp/gh-down"
 [ "$(run mine | paste -sd' ' -)" = "#10 #11 DEMO-1" ] || { echo "mine: $(run mine)"; exit 1; }
+# owner (ownership on start): an issue by its assignees, a branch key by its open PRs' authors (anyone else's: other);
+# an unreadable issue (#99) goes unanswered and the keys after it are still answered; claim assigns an issue
+cat > "$tmp/authors.json" <<'EOF'
+[{"headRefName":"DEMO-1-a","author":{"login":"me"}},{"headRefName":"feature/DEMO-2-b","author":{"login":"alice"}},
+ {"headRefName":"DEMO-3-c","author":{"login":"me"}},{"headRefName":"DEMO-3-d","author":{"login":"alice"}}]
+EOF
+want=$(printf '%s\t%s\n' DEMO-1 me DEMO-2 other DEMO-3 other DEMO-6 none '#10' me '#12' none '#13' other)
+diff <(run owner DEMO-1 DEMO-2 DEMO-3 DEMO-6 '#10' '#99' '#12' '#13') <(echo "$want") || { echo "owner differs"; exit 1; }
+run claim '#12' && [ "$(cat "$tmp/edits")" = "issue edit 12 -R acme/app --add-assignee @me" ] || { echo "claim #12: $(cat "$tmp/edits" 2>&1)"; exit 1; }
+rc=0; run claim DEMO-6 || rc=$?; [ "$rc" = 2 ] || { echo "claim of a branch key exited $rc"; exit 1; }
 echo ok

@@ -166,9 +166,15 @@
 #        session-status --relay KEY ACTION   the approval block for KEY's newest live pane answer, verified as the
 #                       worker will verify it, to send as is once its Quote approves ACTION (exit 1 with why when
 #                       there's none, it is a No or the check fails)
-#        session-status --kind KIND[:S|M|L] [NAME]   `--model M --effort E` from plan.models.KIND for a task start (a
-#                       size moves the effort a step), logged as a usage start line (NAME, the -n session name, hashed);
-#                       ` --advisor A` too where config plan.advisor.KIND is set and pairs with the model
+#        session-status --kind KIND[:S|M|L] [NAME [--anyway]]   `--model M --effort E` from plan.models.KIND for a task
+#                       start (a size moves the effort a step), logged as a usage start line (NAME, the -n session name,
+#                       hashed); ` --advisor A` too where config plan.advisor.KIND is set and pairs with the model. A
+#                       NAME starting with a task key runs --claim on it first (not for review, retro, research or
+#                       coordinator), its lines on stderr; its exit 3 is --kind's: nothing printed, don't start
+#        session-status --claim KEY|NAME [--anyway]   ownership on start: exit 3 (not started) when the adapter's
+#                       `owner KEY` says other or an origin branch naming KEY has another author's commits; the ask
+#                       to put on the pane is its last line. Unassigned (none): `claim KEY`. --anyway (the user's
+#                       start anyway): passes, claims nothing. KEY `#N`: a GitHub issue (no session name carries one)
 #        session-status --plan FILE [--check | --next | --brief N | --done N]   a design's plan table: waves and chunk
 #                       states, its problems (exit 1), the `claude --bg` lines of the runnable chunks, row N's brief
 #                       skeleton, or (run by chunk N once it landed) its usage chunk line
@@ -222,8 +228,13 @@ fi
 # left off with one stderr line saying why.
 if [ "${1:-}" = --kind ]; then
   k=${2:-} sz=; [[ $k =~ ^(.+):([SML])$ ]] && { k=${BASH_REMATCH[1]}; sz=${BASH_REMATCH[2]}; }
-  { { [ $# = 2 ] && [ -z "$sz" ]; } || { [ $# = 3 ] && [[ $3 =~ ^[A-Za-z0-9._-]{1,80}$ ]]; }; } && me=$(config "plan.models.$k" 2>/dev/null) ||
-    { echo "usage: session-status --kind design|build|mechanical|review|release|scan|coordinator|retro|research[:S|M|L] [SESSION-NAME]" >&2; exit 2; }
+  { { [ $# = 2 ] && [ -z "$sz" ]; } || { { [ $# = 3 ] || { [ $# = 4 ] && [ "$4" = --anyway ]; }; } && [[ $3 =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]]; }; } &&
+    me=$(config "plan.models.$k" 2>/dev/null) ||
+    { echo "usage: session-status --kind design|build|mechanical|review|release|scan|coordinator|retro|research[:S|M|L] [SESSION-NAME [--anyway]]" >&2; exit 2; }
+  # Ownership on start (--claim): only its exit 3 stops the start; a failed lookup or claim says so and lets it go.
+  if [ $# -ge 3 ] && ! [[ $k =~ ^(review|retro|research|coordinator)$ ]]; then
+    CLAIM_RERUN="session-status --kind $2 $3 --anyway" bash "$0" --claim "$3" ${4:+"$4"} >&2; [ $? != 3 ] || exit 3
+  fi
   m=${me%%/*} e=${me#*/}
   case $sz in S) e=$(effort_step "$e" -1) ;; L) e=$(effort_step "$e" 1) ;; esac
   a=$(config "plan.advisor.$k" 2>/dev/null) adv=
@@ -916,12 +927,12 @@ keeps_nothing() {
     esac || return 1
   done < <(sed -n 's/^!! //p' <<<"$s")
 }
-# fetch_quick REPO: fetch origin, never waiting on a prompt or a stalled connection (no `timeout` on macOS); a custom
-# ssh command of the user's is kept.
+# fetch_quick REPO [ARG…]: fetch origin (ARGs after it), never waiting on a prompt or a stalled connection (no
+# `timeout` on macOS); a custom ssh command of the user's is kept.
 fetch_quick() {
   local ssh=${GIT_SSH_COMMAND:-$(git -C "$1" config core.sshCommand 2>/dev/null || echo ssh)}
   GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="$ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=3" \
-    git -c http.lowSpeedLimit=1 -c http.lowSpeedTime=30 -C "$1" fetch -q origin </dev/null 2>/dev/null
+    git -c http.lowSpeedLimit=1 -c http.lowSpeedTime=30 -C "$1" fetch -q origin "${@:2}" </dev/null 2>/dev/null
 }
 
 # idle_check: the project's background sessions (cwd ROOT or under it) idle for a TICK, from each account's session
@@ -1314,6 +1325,66 @@ if [ -z "$ACT$SEND$COMPACT$HANDOVER$PEEK" ]; then
   repos=$(adapter repos 2>/dev/null) ||
     repos=$(git rev-parse --git-dir >/dev/null 2>&1 && echo . || find . -mindepth 2 -maxdepth 2 -name .git | sed 's#/\.git$##')
   (cd "$ROOT" && while read -r r; do [ -n "$r" ] && (cd "$r" 2>/dev/null && pwd -P); done <<<"$repos") > "$TMP/repos"
+fi
+
+# --claim KEY|NAME [--anyway]: ownership on start, before a task's `claude --bg` (--kind runs it). KEY: the argument,
+# or the task key a session name starts with (none: nothing to check, exit 0). Stops (exit 3, the pane ask as the last
+# line) when the adapter's `owner KEY` prints other, or an origin branch naming KEY (after a fetch with --prune) has
+# non-merge commits past the default branch, not all in it, by an author email other than git's user.email (only
+# noted when owner says me): never take over another person's task or branch. KEY `#N`: a GitHub issue. --anyway, the
+# user's "start anyway": the reasons, then a pass that claims nothing. Else `none` runs
+# the adapter's `claim KEY` (the start was the user's yes to an unassigned task). An unanswered `owner` (exit 2, no
+# adapter) checks the branches only; a failed one says "ownership not checked" and claims nothing.
+if [ "${1:-}" = --claim ]; then
+  { [ $# = 2 ] || { [ $# = 3 ] && [ "$3" = --anyway ]; }; } && [ -n "$2" ] ||
+    { echo "usage: session-status --claim KEY|SESSION-NAME [--anyway]" >&2; exit 2; }
+  if [[ $2 =~ ^#[0-9]+$ ]]; then key=$2; else key=$(grep -oE -m1 "^($KEYRE)" <<<"$2" | head -1); fi
+  [ -n "$key" ] || exit 0
+  why= bwhy= own= rc=0
+  if [ -n "$ADAPTER" ]; then
+    o=$("$ADAPTER" owner "$key" 2>/dev/null) || rc=$?
+    own=$(awk -F'\t' -v k="$key" '$1 == k { print $2; exit }' <<<"$o")
+    if [ "$rc" = 0 ] && [[ $own =~ ^(me|other|none)$ ]]; then [ "$own" != other ] || why="assigned to someone else"
+    elif [ "$rc" != 2 ]; then own= o=${o%%$'\n'*}; echo "$key: ownership not checked (adapter owner: exit $rc${o:+, $o})"
+    else own=; fi
+  fi
+  kq=$(sed 's/[][\.*^$+?(){}|/]/\\&/g' <<<"$key")
+  while read -r r; do
+    git -C "$r" remote get-url origin >/dev/null 2>&1 || continue
+    fetch_quick "$r" --prune || echo "$key: fetch failed in ${r##*/}: remote branches as of the last fetch"
+    base=; for b in "$(git -C "$r" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)" origin/main origin/master; do
+      [ -n "$b" ] && git -C "$r" rev-parse -q --verify "$b^{commit}" >/dev/null && { base=$b; break; }; done
+    [ -n "$base" ] || continue   # no default branch to compare with: every commit would count
+    me=$(git -C "$r" config user.email | tr A-Z a-z)
+    while read -r b; do
+      [ "$b" != "$base" ] && [ "$b" != origin/HEAD ] && [ "$b" != origin ] || continue
+      # the branch's own key must be KEY itself: a session-name key is a prefix of longer ones (proj-fix, proj-fix-ci)
+      [ "$(grep -oE -m1 "$KEYRE" <<<"${b#origin/}" | head -1)" = "$key" ] || continue
+      [[ $(git -C "$r" cherry "$base" "$b" 2>/dev/null) == *+* ]] || continue   # all of it already in base (squash/rebase merged)
+      # captured, not `grep -q` in the pipe: under pipefail its early exit SIGPIPEs git and hides the match
+      ae=$(git -C "$r" log --no-merges --format=%ae "$b" --not "$base" -- | tr A-Z a-z | grep -vxF -- "${me:-@}" | sort -u | paste -sd, -) || :
+      [ -z "$ae" ] || bwhy="${bwhy:+$bwhy
+}remote branch $b has commits by another author ($ae)"
+    done < <(git -C "$r" for-each-ref --format='%(refname:short)' refs/remotes/origin | grep -E "(^|[^A-Za-z0-9])$kq([^A-Za-z0-9]|\$)")
+  done < "$TMP/repos"
+  # the tracker says it's yours: other authors on its branch (a web-UI merge, your other address, a reviewer's fixup)
+  # are only noted
+  if [ "$own" = me ] && [ -n "$bwhy" ]; then sed "s/^/$key: note: /" <<<"$bwhy"
+  else why="${why:+$why${bwhy:+$'\n'}}$bwhy"; fi
+  if [ -n "$why" ]; then
+    sed "s/^/$key: /" <<<"$why"
+    [ "${3:-}" != --anyway ] || { echo "$key: starting anyway, not claimed: brief the session to work on a new branch of its own, never pushing to, rebasing or force-pushing another person's branch"; exit 0; }
+    w1=${why%%$'\n'*}
+    echo "not started: queue the ask (ask_approval: \"$key: $w1: start anyway on a separate branch / leave it\"); on start anyway, run: ${CLAIM_RERUN:-session-status --claim $2 --anyway}"
+    exit 3
+  fi
+  case $own in
+    me) echo "$key: yours" ;;
+    none) if [ "${3:-}" = --anyway ]; then echo "$key: unassigned, not claimed (--anyway)"
+      elif c=$("$ADAPTER" claim "$key" 2>&1); then echo "$key: claimed"
+      else rc=$? c=${c%%$'\n'*}; [ "$rc" = 2 ] && echo "$key: unassigned (the adapter can't claim)" || echo "$key: claim failed (exit $rc): $c"; fi ;;
+  esac
+  exit 0
 fi
 
 COORD=; [ "${1:-}" = --coordinator ] && { COORD=1; shift; }

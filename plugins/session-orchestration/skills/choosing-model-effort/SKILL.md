@@ -59,7 +59,8 @@ change is the kind's or an escalation's (`session-status --handover --escalate`,
 
 - **A session (`claude --bg`)**: run `session-status --kind <kind>[:S|M|L] <session-name>` as its own call (`<session-name>` is
   the `-n` value: letters, digits, `.`, `_`, `-`, at most 80) and paste the `--model M --effort E` it prints onto the
-  start line. Exit 2 means a wrong kind or name: fix it, and don't start without the flags. It logs the start for retro,
+  start line. Exit 2 means a wrong kind or name: fix it, and don't start without the flags. Exit 3: the task isn't the user's to
+  start (someone else's ticket or branch): don't start, queue the ask its stderr names. It logs the start for retro,
   so run it once per task: a handover or fresh restart of the same task reuses the flags. `session-status` is in this
   plugin's `skills/orchestrating-sessions/` (`../orchestrating-sessions/session-status` from this skill's folder) and
   isn't on a task session's PATH: run it by that path.

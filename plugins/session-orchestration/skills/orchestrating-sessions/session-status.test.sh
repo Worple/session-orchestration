@@ -2981,6 +2981,67 @@ echo "{\"feedback\": {\"repo_dir\": \"$root\"}}" > "$root/.claude/coordination.l
   [ "$(run --config features.docs_watch)" = true ] || { echo "docs watch: the plugin repo's default"; exit 1; }
 fi
 
+if section claim; then
+# --claim (ownership on start) with a fake adapter: `other` stops the start (exit 3, from --kind too, nothing on its
+# stdout), `none` claims, `me` passes; an origin branch naming the key with another author's commits stops it,
+# --anyway passes and claims nothing; an own branch, another key's branch and an unanswered `owner` don't stop it.
+cat > "$root/.claude/session-status-adapter" <<EOF
+#!/bin/sh
+case \$1 in
+  owner) [ -f $tmp/owner ] || exit 2; printf '%s\t%s\n' "\$2" "\$(cat $tmp/owner)" ;;
+  claim) echo "\$2" >> $tmp/claims ;;
+  *) exit 2 ;;
+esac
+EOF
+chmod +x "$root/.claude/session-status-adapter"; : > "$tmp/claims"
+git init -q --bare "$tmp/origin.git" && git -C "$root" remote add origin "$tmp/origin.git" && git -C "$root" config user.email T@t
+git -C "$root" push -q origin HEAD:refs/heads/main && git -C "$root" fetch -q origin && git -C "$root" remote set-head origin main
+echo other > "$tmp/owner"
+rc=0; out=$(run --claim ABC-7) || rc=$?
+[ "$rc" = 3 ] && [[ $out == *"ABC-7: assigned to someone else"*"start anyway on a separate branch / leave it"*"--anyway" ]] &&
+  [ ! -s "$tmp/claims" ] || { echo "other: rc=$rc $out"; exit 1; }
+rc=0; out=$(run --kind build ABC-7-fix 2>"$tmp/err") || rc=$?
+[ "$rc" = 3 ] && [ -z "$out" ] && [ ! -s "$tmp/claims" ] &&
+  [[ $(tail -1 "$tmp/err") == *"run: session-status --kind build ABC-7-fix --anyway" ]] || { echo "--kind on other: rc=$rc $out $(cat "$tmp/err")"; exit 1; }
+rc=0; run --kind build --anyway >/dev/null 2>&1 || rc=$?; [ "$rc" = 2 ] || { echo "--anyway as NAME exited $rc"; exit 1; }
+[ "$(run --kind review ABC-7-fix)" = "$(run --kind review)" ] || { echo "a review start checked ownership"; exit 1; }
+[ "$(run --claim ABC-7 --anyway | tail -1)" = "ABC-7: starting anyway, not claimed: brief the session to work on a new branch of its own, never pushing to, rebasing or force-pushing another person's branch" ] &&
+  [ ! -s "$tmp/claims" ] || { echo "--anyway"; exit 1; }
+echo none > "$tmp/owner"
+[ "$(run --kind build ABC-7-fix 2>"$tmp/err")" = '--model opus --effort medium' ] && [ "$(cat "$tmp/claims")" = ABC-7 ] &&
+  [ "$(cat "$tmp/err")" = "ABC-7: claimed" ] || { echo "none: $(cat "$tmp/claims" "$tmp/err")"; exit 1; }
+echo me > "$tmp/owner"; : > "$tmp/claims"
+[ "$(run --claim ABC-7)" = "ABC-7: yours" ] && [ ! -s "$tmp/claims" ] || { echo "me"; exit 1; }
+# branches on origin: ABC-8's by someone else, ABC-9's by you (another case of your email), ABC-80's by someone else
+c=$tmp/clone; git clone -q "$tmp/origin.git" "$c"
+for b in feature/ABC-8-x:o@x ABC-9-y:t@T ABC-80-z:o@x; do
+  git -C "$c" checkout -q -b "${b%%:*}" origin/main && git -C "$c" -c user.name=o -c user.email="${b#*:}" commit -q --allow-empty -m w
+  git -C "$c" push -q origin "${b%%:*}"; done
+echo none > "$tmp/owner"
+rc=0; out=$(run --claim ABC-8) || rc=$?
+[ "$rc" = 3 ] && [[ $out == "ABC-8: remote branch origin/feature/ABC-8-x has commits by another author"* ]] &&
+  [ ! -s "$tmp/claims" ] || { echo "another's branch: rc=$rc $out"; exit 1; }
+run --claim ABC-8 --anyway >/dev/null && [ ! -s "$tmp/claims" ] || { echo "another's branch, --anyway claimed"; exit 1; }
+[ "$(run --claim ABC-9 --anyway)" = "ABC-9: unassigned, not claimed (--anyway)" ] && [ ! -s "$tmp/claims" ] || { echo "--anyway claimed"; exit 1; }
+[ "$(run --claim ABC-9)" = "ABC-9: claimed" ] || { echo "own branch: $(run --claim ABC-9)"; exit 1; }
+# the tracker says yours: another author on its branch is only noted
+echo me > "$tmp/owner"
+[ "$(run --claim ABC-8)" = "ABC-8: note: remote branch origin/feature/ABC-8-x has commits by another author (o@x)
+ABC-8: yours" ] || { echo "yours with another's branch: $(run --claim ABC-8)"; exit 1; }
+# a leftover branch whose change is already in main (squash or rebase merged) doesn't stop it
+git -C "$c" checkout -q -b ABC-5-m origin/main && echo m > "$c/m" && git -C "$c" add m &&
+  git -C "$c" -c user.name=o -c user.email=o@x commit -q -m m && git -C "$c" push -q origin ABC-5-m
+git -C "$c" checkout -q -B main origin/main && git -C "$c" -c user.name=t -c user.email=t@t cherry-pick ABC-5-m >/dev/null && git -C "$c" push -q origin main
+echo none > "$tmp/owner"; : > "$tmp/claims"
+[ "$(run --claim ABC-5)" = "ABC-5: claimed" ] || { echo "merged leftover: $(run --claim ABC-5)"; exit 1; }
+rm "$tmp/owner"; : > "$tmp/claims"
+rc=0; out=$(run --claim ABC-6) || rc=$?; [ "$rc" = 0 ] && [ -z "$out" ] && [ ! -s "$tmp/claims" ] || { echo "unanswered owner: rc=$rc $out"; exit 1; }
+# a deleted origin branch stops blocking (the fetch prunes it)
+git -C "$c" push -q origin --delete feature/ABC-8-x
+[ "$(run --claim ABC-8)" = "" ] || { echo "pruned branch: $(run --claim ABC-8)"; exit 1; }
+rc=0; run --claim 2>/dev/null || rc=$?; [ "$rc" = 2 ] || { echo "--claim with no key exited $rc"; exit 1; }
+fi
+
 if section land; then
 # --land: from a linked worktree, fast-forwards the branch the main checkout has out, files included; refuses a
 # dirty checkout and a non-fast-forward.

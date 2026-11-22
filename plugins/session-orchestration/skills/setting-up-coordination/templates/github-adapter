@@ -7,6 +7,9 @@
 # gh queries) are cached for a minute; when gh fails, it isn't retried for a minute and the last good lists are used,
 # marked `(PRs as of HH:MM)`. `mine` lists the tasks you own (shared mode: a coordinator forwards notices only for
 # these): your open PRs' keys, and #N of the open issues assigned to you or, unassigned, closed by one of your PRs.
+# `owner KEY…` (ownership on start: session-status --claim) prints KEY<TAB>me|other|none: #N by the issue's
+# assignees, any other key by the authors of its open PRs (none open: none). `claim #N` assigns the issue to you;
+# any other key has no assignee to set (exit 2).
 set -uo pipefail
 repo='{{repo_slug}}'
 key_re='{{key_re}}'
@@ -72,6 +75,24 @@ case ${1:-} in
       | ($p[] | .headRefName | match($re).string),
         ($a[] | "#\(.number)"),
         ($u[] | .number as $n | select($linked | index($n)) | "#\($n)")' | sort -u ;;
+  owner)
+    shift; [ $# -gt 0 ] || exit 2
+    who=$(gh api user --jq .login) || exit 1
+    p=$(gh pr list -R "$repo" --state open --limit 200 --json headRefName,author) || exit 1
+    for k in "$@"; do
+      if [[ $k =~ ^#([0-9]+)$ ]]; then
+        a=$(gh issue view "${BASH_REMATCH[1]}" -R "$repo" --json assignees --jq '.assignees[].login') || continue   # unreadable: this key unanswered
+        if [ -z "$a" ]; then w=none; elif grep -qxF -- "$who" <<<"$a"; then w=me; else w=other; fi
+      else
+        a=$(jq -r --arg re "$key_re" --arg k "$k" '.[] | select(((.headRefName | match($re).string) // "") == $k) | .author.login' <<<"$p")
+        # any PR by someone else makes it theirs too
+        if [ -z "$a" ]; then w=none; elif grep -qvxF -- "$who" <<<"$a"; then w=other; else w=me; fi
+      fi
+      printf '%s\t%s\n' "$k" "$w"
+    done ;;
+  claim)
+    [[ ${2:-} =~ ^#([0-9]+)$ ]] || exit 2   # only an issue has an assignee
+    gh issue edit "${BASH_REMATCH[1]}" -R "$repo" --add-assignee @me >/dev/null ;;
 {{?key_re_flag}}  key-pattern) echo "$key_re" ;;
 {{?urls}}  urls) printf '%s\n' {{urls}} ;;
   pending) cat '{{handoff}}' ;;
