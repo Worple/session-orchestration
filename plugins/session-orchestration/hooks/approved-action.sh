@@ -411,7 +411,10 @@ while [ "$i" -lt "${#toks[@]}" ]; do
     shift
   done
   # Its words must be plain: a variable or $(…) there, or an unknown group (an alias), can't be read.
-  case "${pos[*]:-}" in *'$'*|*'`'*) attended "Blocked: gh with a variable or \$(…) in its words can't be checked by the approval hook. $alone" ;; esac
+  # A plain $var past a plain read-only group and verb (a status poll's `for n in …; do gh pr view $n`) reads only.
+  case "${pos[*]:-}" in *'$('*|*'`'*) ro= ;; *) ro=1 ;; esac
+  [[ -n $ro && "${pos[0]:-}${pos[1]:-}" != *'$'* ]] && grep -qE "^$ghro" <<<" ${pos[0]:-} ${pos[1]:-}" || ro=
+  [ -n "$ro" ] || case "${pos[*]:-}" in *'$'*|*'`'*) attended "Blocked: gh with a variable or \$(…) in its words can't be checked by the approval hook. $alone" ;; esac
   { [[ ${pos[0]:-} != *[[:space:]]* ]] && { [[ ${pos[0]:-} != pr && ${pos[0]:-} != issue ]] || [[ ${pos[1]:-} != *[[:space:]]* ]]; }; } ||
     attended "Blocked: gh with a quoted run of words as its command (gh pr 'merge 5') can't be checked by the approval hook. $alone"
   [ -z "${pos[0]:-}" ] || [[ $groups == *" ${pos[0]} "* ]] ||
@@ -534,7 +537,7 @@ done
 tried= me=
 while IFS= read -r r; do
   [ -n "$r" ] || continue
-  act=$(jq -r .action <<<"$r")
+  act=$(jq -r .action <<<"$r") alt=
   # A send names all it sends: the whole action, word for word (none dropped or added, not another verb or target).
   if [ "$kind" = send ]; then grep -qF -- "$action" <<<"$act" || continue
   else w=${what//./\\.}; grep -qE "(^|[^A-Za-z0-9#/.-])$w([^A-Za-z0-9]|$)" <<<"$act" || continue; fi
@@ -560,12 +563,18 @@ while IFS= read -r r; do
     if [ -n "$under" ] && ! jq -r .quote <<<"$r" | grep -qiE 'land|merg'; then
       tried="the quote approved under $under doesn't speak of landing or merging"; fault not-landing relay; continue; fi
     [ "$nm" != "$me" ] || key=${under:-$me}
+    # A coordinator may have asked under the name without its project prefix (the "<project>-" of its own
+    # "<project>-coordinator"): that key verifies the yes too.
+    [ "$nm" != "$me" ] || [ -n "$under" ] || { pfx=$(jq -r .name <<<"$r"); pfx=${pfx%-coordinator*}-; [ "$pfx" = - ] || alt=${me#"$pfx"}; }
   fi
   # No tracker key (session-name keys): the user's words must name the target itself (REPO#ID; OWNER/ may precede).
   [ -n "$key" ] || key=$short
   [ -n "$key" ] || { tried="the matching relay's Action names no task key"; fault no-key relay; continue; }
-  v=$(cd "$cwd" 2>/dev/null && jq -r .quote <<<"$r" |
-      bash "$here/../skills/orchestrating-sessions/verify-approval.sh" "$(jq -r .sid <<<"$r")" "$(jq -r .scwd <<<"$r")" "$(jq -r .name <<<"$r")" "$key" "$act")
+  for k in "$key" ${alt:+"$alt"}; do
+    v=$(cd "$cwd" 2>/dev/null && jq -r .quote <<<"$r" |
+        bash "$here/../skills/orchestrating-sessions/verify-approval.sh" "$(jq -r .sid <<<"$r")" "$(jq -r .scwd <<<"$r")" "$(jq -r .name <<<"$r")" "$k" "$act")
+    [[ $v != verified* ]] || break
+  done
   # One use per relay: a rerun (the CLI timed out after the server took it) needs a new approval.
   # ponytail: used up when allowed, not when the command succeeds; the deny says to check before asking again.
   used=~/.cache/session-status/approved/$(printf '%s|%s|%s' "$(jq -r .tp <<<"$r")" "$action" "$(jq -c "del(.tp)" <<<"$r")" | shasum -a 256 | cut -c1-32)

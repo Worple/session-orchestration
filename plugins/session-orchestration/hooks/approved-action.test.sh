@@ -269,6 +269,15 @@ check "gh pr merge 45 -R acme/app --auto --rebase" deny "approved under a key th
 check "gh pr merge 46 -R acme/app --auto --rebase" allow "merge relayed as approved under the key the yes was given under"
 relay "Approval pane answer for claude-plugins-y: Yes, start claude-plugins-y. Asked: Start claude-plugins-y?" "merge acme/app#47 (claude-plugins-x, approved under claude-plugins-y)" >> "$w"
 check "gh pr merge 47 -R acme/app --auto --rebase" deny "approved under a key whose yes doesn't speak of landing"
+# The yes asked under the name without the project prefix (the coordinator's "<project>-coordinator" names it).
+typed "Approval pane answer for x: Yes, start x. Asked: Start x?" "$now" >> "$proj/$cid.jsonl"
+printf '#!/bin/sh\necho %s\n' "'[{\"sessionId\":\"$cid\",\"name\":\"claude-plugins-coordinator\",\"cwd\":\"$root\",\"kind\":\"interactive\"}]'" > "$tmp/bin/claude"
+{ relay "Approval pane answer for x: Yes, start x. Asked: Start x?" "merge acme/app#48 (claude-plugins-x)" claude-plugins-coordinator
+  relay "Approval pane answer for x: Yes, start x. Asked: Start x?" "merge acme/app#49 (claude-plugins-y)" claude-plugins-coordinator
+} >> "$w"
+check "gh pr merge 48 -R acme/app --auto --rebase" allow "merge relayed under this session's name, the yes under its short key"
+check "gh pr merge 49 -R acme/app --auto --rebase" deny "the short key of another session's name"
+printf '#!/bin/sh\necho %s\n' "'[{\"sessionId\":\"$cid\",\"name\":\"coord\",\"cwd\":\"$root\",\"kind\":\"interactive\"}]'" > "$tmp/bin/claude"
 # A landing by fast-forward (session-status --land BRANCH) is gated as a merge of BRANCH, run alone.
 check "grep -n 'session-status --land main' worker.md" pass "a mention of --land"
 check "bash /x/session-status --land main" deny "--land, no relay"
@@ -532,6 +541,12 @@ s=$SECONDS; check "$big" pass "a 50 KB heredoc"
 [ $((SECONDS - s)) -lt 5 ] || { echo "FAIL: a 50 KB heredoc took $((SECONDS - s)) s"; exit 1; }
 CLAUDE_CODE_SESSION_ATTENDED=1 check "gh pr merge 99 -R acme/app" ask "attended, unapproved gh merge"
 CLAUDE_CODE_SESSION_ATTENDED=1 check "gh api -X POST repos/acme/app/merges" ask "attended, gh api write"
+CLAUDE_CODE_SESSION_ATTENDED=1 check "for n in 112 116; do gh pr view \$n -R acme/app --json state; done" pass "attended, a read-only gh poll over a variable"
+CLAUDE_CODE_SESSION_ATTENDED=1 check "gh pr checks \"\$n\" -R acme/app" pass "attended, gh checks with a quoted variable"
+CLAUDE_CODE_SESSION_ATTENDED=1 check "gh pr view \$(echo 5) -R acme/app" ask "attended, gh view with \$(…) in its words"
+CLAUDE_CODE_SESSION_ATTENDED=1 check "gh pr \$v 5 -R acme/app" ask "attended, gh with a variable verb"
+CLAUDE_CODE_SESSION_ATTENDED=1 check "gh pr merge \$n -R acme/app" ask "attended, gh merge with a variable target"
+CLAUDE_CODE_SESSION_ATTENDED=1 check "gh api repos/acme/app/pulls/\$n" ask "attended, gh api over a variable"
 CLAUDE_CODE_SESSION_ATTENDED=1 check "$bb pr merge 272 --repo app" ask "attended, unapproved merge"
 CLAUDE_CODE_SESSION_ATTENDED=1 check "$jd issue comment create PROJ-9 --body-file $tmp/body.txt" ask "attended, wrong key"
 CLAUDE_CODE_SESSION_ATTENDED=1 check "$bb pr merge 290 --repo app" allow "attended, approved merge"

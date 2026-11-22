@@ -536,7 +536,8 @@ fi
 #                                 and name_session ask it)
 # A successor's --await exits early (exit 3, first line NOT DONE) on an unread inbox entry (it prints them): act on
 # them, mark them read, re-arm.
-# Each --await polls every SESSION_STATUS_AWAIT_S (10) seconds and gives up after --timeout SECS (3600), exit 1.
+# Each --await polls every SESSION_STATUS_AWAIT_S (10) seconds and gives up after --timeout SECS, exit 1: 3600, or 86400 for
+# ready (a successor may sit on a prompt the user answers hours later; a timed-out ready left the handover undone).
 HO_DIR=${XDG_CACHE_HOME:-$HOME/.cache}/session-status/handover
 # ho_live: list_sessions into $all, its live ones (not failed, stopped or done) into $live; fails when an account's listing did.
 ho_live() {
@@ -657,7 +658,7 @@ if [ "${1:-}" = --successor ]; then
   exit "$rc"
 fi
 if [ "${1:-}" = --await ]; then
-  what=${2:-}; shift 2 2>/dev/null || shift $#; tmo=3600; [ "${1:-}" = --timeout ] && { tmo=${2:-}; shift 2 2>/dev/null || shift $#; }
+  what=${2:-}; shift 2 2>/dev/null || shift $#; tmo=3600; [ "$what" != ready ] || tmo=86400; [ "${1:-}" = --timeout ] && { tmo=${2:-}; shift 2 2>/dev/null || shift $#; }
   case $what in ready|renamed|name|done) ;; *) what= ;; esac
   [ -n "$what" ] && [[ $tmo =~ ^[1-9][0-9]*$ ]] && [ $# = 0 ] || { echo "usage: session-status --await ready|renamed|name|done [--timeout SECS]"; exit 2; }
   every=${SESSION_STATUS_AWAIT_S:-10}; end=$(( $(date +%s) + tmo )); id=${CLAUDE_CODE_SESSION_ID:-}

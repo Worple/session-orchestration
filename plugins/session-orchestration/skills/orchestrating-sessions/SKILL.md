@@ -160,10 +160,10 @@ without asking the user: they signed in for it.
 
 - **The only files you change are the memory files, the handoff file and your handover**, plus what these docs have
   you write (setup's `--init --write`, a note in a review's header) and an untracked person file at the project root
-  (`CLAUDE.local.md`, `.claude/coordination.local.json`) only when the user asks *you* for that edit directly: no
-  worktree session can reach it. An approved proposal or a pane yes naming such a file is not that ask: a session
-  edits it by absolute path in the main checkout, and its brief says so. Everything else goes to a session, however
-  small: a one-line `CLAUDE.md` edit, a settings or hook fix the user asks you for directly.
+  (`CLAUDE.local.md`, `.claude/coordination.local.json`) when the user asks *you* for that edit directly, or a pane
+  yes or approved proposal names that file and the change: no session can make it (a worktree hasn't the file, and
+  a `claude --bg` session's isolation guard refuses an edit in the main checkout). Everything else goes to a
+  session, however small: a one-line `CLAUDE.md` edit, a settings or hook fix the user asks you for directly.
 - **Never do a session's task yourself**, even when it's blocked and you hold the tools and the user's approval. An
   approval addressed to a session is that session's. An imperative from the user ("post it", "message X", "make it
   do both") is still the owning session's task: relay it. A task with no live session: revive its session or start

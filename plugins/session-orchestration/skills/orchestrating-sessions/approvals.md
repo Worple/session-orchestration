@@ -130,7 +130,8 @@ user a command).
   send's `--attachments` files are each named with their own sha256 too. A `gh` merge's Action names `OWNER/REPO#ID`;
   the user's approval of the task covers landing its own PR: relay that with the worker's session name in the
   parentheses, `Action: merge OWNER/REPO#ID (<session name>)`, within 24h of that approval (later, ask for the
-  merge itself). When the yes that started the session was given under another key and speaks of its landing (a
+  merge itself); a yes asked under that name without your project prefix (`issue-templates` for
+  `<project>-issue-templates`, the prefix of your own `<project>-coordinator`) verifies the same way. When the yes that started the session was given under another key and speaks of its landing (a
   design task's pane answer "start stage 1 as its own PR; landing it is approved with it"), quote that answer and
   relay `Action: merge OWNER/REPO#ID (<session name>, approved under <that key>)`: the hook verifies the quote with
   that key, within 24h of the answer. A project that lands by fast-forward instead: `Action: merge <branch> (<session
