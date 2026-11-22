@@ -900,6 +900,9 @@ fetch_quick() {
 # replied nor waits on a background task it started prints "Idle: NAME (ID8): its last line". Any printed: one wake,
 # exit 0. Skipped: a dead pid, the caller, this project's coordinators (CNRE, -prev-N). $ENC.idle holds the
 # ID<TAB>statusUpdatedAt of every session checked and still idle, so a turn is classified once.
+# Any coordinator's name (-coordinator, -next) is skipped too: a nested project's coordinator never reads idle here.
+# shortcut: a nested project's workers do show here (is_root can't tell it from a worktree of a repo with a committed
+# adapter); skip them once a nested root misfires.
 idle_check() {
   local seen=~/.cache/session-status/$ENC.idle tick=${SESSION_STATUS_TICK_S:-60} dir pid id upd started name t how
   local keep= out=() line
@@ -907,7 +910,7 @@ idle_check() {
     [ -d "$dir/sessions" ] || continue
     while IFS=$'\t' read -r pid id upd started name; do
       kill -0 "$pid" 2>/dev/null && [ "$id" != "${CLAUDE_CODE_SESSION_ID:-}" ] || continue
-      [[ ! $name =~ ^($CNRE)$ && ! $name =~ -prev-[0-9]+$ ]] || continue
+      [[ ! $name =~ ^($CNRE)$ && ! $name =~ -prev-[0-9]+$ && ! $name =~ -coordinator(-next)?$ ]] || continue
       line=$id$'\t'$upd
       if ! grep -qxF "$line" "$seen" 2>/dev/null; then
         t=("$dir"/projects/*/"$id".jsonl); [ -f "${t[0]}" ] || continue   # no transcript yet: next tick

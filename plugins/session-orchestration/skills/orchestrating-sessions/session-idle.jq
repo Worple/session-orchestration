@@ -21,15 +21,21 @@ def ok($r): ($r.is_error // false | not) and ($r.content | text | contains("\"su
     | .id]
    + [$uses[] | select(.name == "TaskStop" or .name == "KillShell") | select(ok($results[.id]))
       | "task:" + ((.input.task_id // .input.shell_id) | tostring)]) as $ended
-| ([$rows[$turn:][] | select(.type == "assistant") | .message.content[]?
+# a notification resumes the turn: a reply before it doesn't cover what the session did after it
+| ([$rows | to_entries[] | select(.key >= $turn and .value.type == "user"
+    and (.value.origin.kind? == "task-notification" or (.value.message.content | strings | startswith("<task-notification>"))))
+    | .key] | last // $turn) as $seg
+| ([$rows[$seg:][] | select(.type == "assistant") | .message.content[]?
     | select(.type? == "tool_use" and (.name == "mcp__session-orchestration__reply" or .name == "SendMessage"))
     | select(ok($results[.id]))] | length > 0) as $replied
 | ([$uses[] | select(.ts >= $since) | $results[.id] as $r | select($r.is_error // false | not)
-    | select((.name == "Bash" and .input.run_in_background == true) or .name == "Monitor"
+    # a Bash past its timeout is moved to the background with no run_in_background flag
+    | select((.name == "Bash" and (.input.run_in_background == true
+          or ($r.content | text | test("moved to (the )?background"; "i")))) or .name == "Monitor"
         or ((.name == "Agent" or .name == "Skill")
           and (.input.run_in_background == true or ($r.content | text | test("running in the background"; "i")))))
     # ended: notified by its tool_use id, or stopped by the task id its launch result names
     | select(.id as $id | $ended | index($id) | not)
-    | select(($r.content | text | [capture("ID: (?<t>[A-Za-z0-9]+)").t] | first) as $t
+    | select(($r.content | text | [capture("(?:ID|agentId): (?<t>[A-Za-z0-9]+)").t] | first) as $t
         | $t == null or ($ended | index("task:" + $t) | not))] | length > 0) as $waiting
 | if $replied then "replied" elif $waiting then "waiting" else "idle" end

@@ -2727,6 +2727,8 @@ bg='{"run_in_background":true,"command":"sleep 9"}'
   check waiting 'a background Bash, no notification'
 { turn 1 'Work on ABC-12'; use 2 t1 Bash "$bg"; res 3 t1 'Command running in background with ID: b1'; note 4 t1 completed; done_ 5; } |
   check idle 'a background Bash, completed'
+{ turn 1 'Work on ABC-12'; use 2 t1 Bash '{"command":"make"}'; res 3 t1 'Command was moved to background with ID: b1'; done_ 4; } |
+  check waiting 'a Bash moved to background (the short wording)'
 { turn 1 'Work on ABC-12'; use 2 t1 Monitor '{"command":"tail -f log"}'; res 3 t1 'Monitor started'; done_ 4; } | check waiting 'a pending Monitor'
 { turn 1 'Work on ABC-12'; use 2 t1 Bash "$bg"; res 3 t1 'Permission denied' true; done_ 4; } | check idle 'a failed launch'
 { turn 1 'Work on ABC-12'; use 2 t1 Agent '{"prompt":"x"}'; res 3 t1 'Async agent launched. Running in the background as @a1'; done_ 4; } |
@@ -2748,11 +2750,20 @@ bg='{"run_in_background":true,"command":"sleep 9"}'
 { turn 1 'Work on ABC-12'; use 2 t1 Bash "$bg"; res 3 t1 'Command running in background with ID: b1'
   use 4 t2 Bash "$bg"; res 5 t2 'Command running in background with ID: b2'
   jq -nc --arg c "$(nb t1)$(nb t2)" '{type: "queue-operation", operation: "enqueue", content: $c}'; done_ 6; } | check idle 'two notifications in one enqueue'
-# A failed send isn't a reply; a notification, a compact summary or a slash command after the reply starts no new turn.
+# A failed send isn't a reply; a compact summary or a slash command after the reply starts no new turn, but a
+# notification resumes it: a reply before that doesn't cover what came after.
 { turn 1 'Work on ABC-12'; use 2 t1 SendMessage; res 3 t1 '{"success":false,"message":"No agent named x"}'; done_ 4; } | check idle 'a failed SendMessage'
 { turn 1 'Work on ABC-12'; use 2 t1 mcp__session-orchestration__reply; res 3 t1 'failed' true; done_ 4; } | check idle 'a failed reply'
-{ turn 1 'Work on ABC-12'; use 2 t1 SendMessage; res 3 t1 sent; notes 4 "$(nb t0)"; echo '{"type":"user","isCompactSummary":true,"message":{"content":"Summary"}}'
-  echo '{"type":"user","message":{"content":"<command-name>/reload-plugins</command-name>"}}'; done_ 5; } | check replied 'a reply, then a notification, a summary and /reload-plugins'
+{ turn 1 'Work on ABC-12'; use 2 t1 SendMessage; res 3 t1 sent; echo '{"type":"user","isCompactSummary":true,"message":{"content":"Summary"}}'
+  echo '{"type":"user","message":{"content":"<command-name>/reload-plugins</command-name>"}}'; done_ 5; } | check replied 'a reply, then a summary and /reload-plugins'
+{ turn 1 'Work on ABC-12'; use 2 t1 SendMessage; res 3 t1 sent; notes 4 "$(nb t0)"; done_ 5; } | check idle 'a reply, then a notification, no reply'
+{ turn 1 'Work on ABC-12'; notes 2 "$(nb t0)"; use 3 t1 SendMessage; res 4 t1 sent; done_ 5; } | check replied 'a notification, then a reply'
+# A foreground Bash moved to the background past its timeout; a background Agent stopped by its agentId.
+{ turn 1 'Work on ABC-12'; use 2 t1 Bash '{"command":"make"}'; res 3 t1 'Command did not complete within its 120s timeout and was moved to the background (ID: b1)'; done_ 4; } |
+  check waiting 'a Bash moved to the background past its timeout'
+{ turn 1 'Work on ABC-12'; use 2 t1 Agent '{"prompt":"x","run_in_background":true}'; res 3 t1 'Async agent launched successfully.
+agentId: a1b2 (internal ID)'; use 4 t2 TaskStop '{"task_id":"a1b2"}'; res 5 t2 'Successfully stopped task: a1b2'; done_ 6; } |
+  check idle 'a background Agent stopped'
 # --watch's idle tick: the session files ($tmp/cfg/sessions), each one's transcript in $proj; a live pid (sleep), a
 # dead one. Only a project background session idle for a tick, whose turn neither replied nor waits, is printed.
 sleep 300 & live=$!; trap 'kill $live 2>/dev/null || true; rm -rf "$tmp"' EXIT
@@ -2769,7 +2780,7 @@ sf 03 c replied bg idle; { turn 1 'Work on ABC-12'; use 2 t1 SendMessage; res 3 
 sf 04 d waiting bg idle; { turn 1 'Work on ABC-12'; use 2 t1 Bash "$bg"; res 3 t1 'Command running in background with ID: b1'; done_ 4; } > "$proj/$(uid d).jsonl"
 sf 05 e busy bg busy; sf 06 f shell bg shell; sf 07 g inter interactive idle; sf 08 h dead bg idle "$dead"
 sf 09 i other bg idle "" "" "$root-other"; sf 10 j "$(basename "$root")-coordinator" bg idle; sf 11 k task-prev-1 bg idle
-sf 12 l caller bg idle; sf 13 m fresh bg idle "" "$fresh"
+sf 12 l caller bg idle; sf 13 m fresh bg idle "" "$fresh"; sf 15 o sub-coordinator bg idle "" "" "$root/sub"
 run --changes >/dev/null; out=$(CLAUDE_CODE_SESSION_ID=$(uid l) SESSION_STATUS_TICK_S=1 run --watch --every 30) ||
   { echo "idle tick, exit $?: $out"; exit 1; }
 [ "$out" = "$(printf 'Idle: alpha (aaaaaaaa): Done.\nIdle: beta (bbbbbbbb): Done.')" ] || { echo "idle tick printed: $out"; exit 1; }
