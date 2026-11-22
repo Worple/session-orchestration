@@ -1242,6 +1242,7 @@ fi
 
 if section coordinator; then
 accounts_claude; printf -- '- Replies folder (for reports): `replies/`.\n' > "$root/CLAUDE.md"; mkdir -p "$root/replies"
+echo 'Live: none.' > "$root/replies/coordinator-handover.md"
 # Coordinator handover: old (o) starts its successor (x) as NAME-next; x's Start ends with --await name (the ready
 # mark), o's --await ready sees it, o renames, x's --await name finds NAME free, o's --successor --done, x's --await
 # done ends it (the plain terminal closes nothing). --name-check tells a successor from a second coordinator.
@@ -1256,6 +1257,17 @@ setacct cfg "$(sess "$o" p-coordinator idle 1 interactive)"
 out=$(as "$o" --successor) && rc=0 || rc=$?
 [ "$rc" = 2 ] && grep -qF "  cd $root && CLAUDE_CONFIG_DIR=~/cfg claude --model opus --effort medium -n p-coordinator-next 'Act as a coordinator. You succeed \"p-coordinator\" (0a0a0a0a): " <<<"$out" &&
   grep -qF -- '--await ready` (Bash, run_in_background)' <<<"$out" && ! grep -q 'Claude Code Desktop' <<<"$out" || { echo "--successor, plain terminal: $rc $out"; exit 1; }
+# The handover note missing, or older than the caller's start (a failed Write left the predecessor's): refused, nothing started.
+setacct cfg "$(sess "$o" p-coordinator idle 1 interactive | sed "s/}\$/,\"startedAt\":$(( ($(date +%s) + 3600) * 1000 ))}/")"
+for ep in '' claude-desktop-3p; do
+  out=$(CLAUDE_CODE_ENTRYPOINT=$ep as "$o" --successor) && rc=0 || rc=$?
+  [ "$rc" = 3 ] && grep -qF 'coordinator-handover.md is missing or older than this session' <<<"$out" && ! grep -q 'claude --model\|start_session' <<<"$out" ||
+    { echo "--successor, stale note ($ep): $rc $out"; exit 1; }
+done
+setacct cfg "$(sess "$o" p-coordinator idle 1 interactive)"; rm "$root/replies/coordinator-handover.md"
+out=$(as "$o" --successor) && rc=0 || rc=$?
+[ "$rc" = 3 ] && grep -qF 'is missing or older' <<<"$out" || { echo "--successor, no note: $rc $out"; exit 1; }
+echo 'Live: none.' > "$root/replies/coordinator-handover.md"
 # Per account: the coordinator default is fable/medium under an account fable.accounts lists, opus/medium elsewhere.
 cf=$tmp/.config/session-orchestration/config.json; mkdir -p "${cf%/*}"; rm -f "$cf.bak"; [ ! -f "$cf" ] || mv "$cf" "$cf.bak"
 echo '{"fable": {"accounts": ["~/cfg"]}}' > "$cf"; mkdir -p "$tmp/work"

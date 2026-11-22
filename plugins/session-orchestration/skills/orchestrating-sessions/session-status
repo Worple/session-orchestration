@@ -518,7 +518,8 @@ fi
 #                                 on the model and effort the caller runs on (lib.sh last_model), else config
 #                                 plan.models.coordinator;
 #                                 its own tab is titled NAME first (title_tty), so a NAME-next title left from its
-#                                 own start as a successor doesn't pass for a successor's open tab
+#                                 own start as a successor doesn't pass for a successor's open tab; refused
+#                                 (exit 3) while <replies>/coordinator-handover.md is missing or older than its start
 #   --await ready                 the old one waits until NAME-next has finished its Start (handover/NAME.ready)
 #   --await renamed               the old one, after name_session NAME-prev-K: waits until the listing shows the new name
 #   --await name                  the successor, at the end of its Start: writes NAME.ready, waits until no other live
@@ -609,6 +610,10 @@ if [ "${1:-}" = --successor ]; then
   rm -f "$HO_DIR/$n.ready" "$HO_DIR/$n.done" "$HO_DIR/$n.next"
   # The name goes into a command typed into a shell: only the characters name_session and open_pane give one.
   [[ $n =~ ^[A-Za-z0-9._-]+$ ]] || { echo "\"$n\" has characters a shell would read (a /rename?): not handed over; rename it with name_session first"; exit 2; }
+  # the handover note written since this session started (a failed Write leaves the predecessor's: its state, not ours)
+  rd=$(replies_path); h=${rd:+$rd/coordinator-handover.md}; st=$(ho_field 1 "$id" 5)
+  [ -z "$h" ] || { [ -f "$h" ] && [ "$(mtime "$h")" -ge "${st:-0}" ]; } ||
+    { echo "$(tilde "$h") is missing or older than this session's start: write (or rewrite: a resumed session's start is its resume) your handover note there (handover.md), then run this again. Nothing started."; exit 3; }
   # SESSION_STATUS_CLAUDE: the claude command, for a dev build's successor (`claude --plugin-dir DIR`)
   # the model and effort this coordinator runs on (fable too: the user chose it), else config plan.models.coordinator
   # for the account the successor starts under (fable only where fable.accounts lists it)
