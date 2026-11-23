@@ -2104,6 +2104,21 @@ git -C "$swt" push -q origin "$sb:main" && git -C "$s" pull -q --ff-only origin 
   git -C "$s" worktree remove "$swt" && git -C "$s" branch -q -D "$sb" &&
   grep -qxF 'Shared: origin/main has the team files already: no team PR.' <<<"$(init "$s" --write --shared)" ||
   { echo "init (s1) after the merge: $(git -C "$s" status --short) / $(init "$s" --write --shared)"; exit 1; }
+# (s6) a newcomer: a fresh clone of a shared repo is told so by --check, gets one proposal that asks no repo key and names the
+# team files, and one write that leaves git status clean (the worktrees folder too); --plugin adds the settings file to a team PR.
+n6=$(mkdir -p "$tmp/init/new6" && cd "$tmp/init/new6" && pwd -P); git clone -q "$s" "$n6"; mkdir -p "$n6/.worktrees"
+out=$(init "$n6" --check) || rc=$?; [ "${rc:-0}" = 1 ] && grep -qF 'shared coordination found: run setup' <<<"$out" || { echo "init (s6) check: $out"; exit 1; }
+out=$(init "$n6") && grep -qF 'Shared coordination found: .claude/coordination/coordination.json is committed (team files: section)' <<<"$out" &&
+  grep -qF 'none is asked' <<<"$out" && grep -qF 'Config: tracker=none host=github ' <<<"$out" || { echo "init (s6) proposal: $out"; exit 1; }
+init "$n6" --write >/dev/null && mkdir -p "$n6/.worktrees/x" && echo y > "$n6/.worktrees/x/f" && [ -z "$(git -C "$n6" status --short --untracked-files=all)" ] &&
+  grep -q '^configured: ' <<<"$(init "$n6" --check)" || { echo "init (s6) write: $(git -C "$n6" status --short --untracked-files=all) / $(init "$n6" --check)"; exit 1; }
+rm -rf "$n6/.worktrees"
+sb=coordination/setup-$(date +%F); swt=$s/.worktrees/$sb
+grep -qF 'Option: add --plugin' <<<"$(init "$s" --shared)" || { echo "init (s6) plugin option not offered"; exit 1; }
+out=$(init "$s" --write --shared --plugin) && [ -z "$(git -C "$s" status --short --untracked-files=all)" ] &&
+  [ "$(git -C "$s" diff --name-only origin/main "$sb")" = .claude/settings.json ] &&
+  [ "$(git -C "$s" show "$sb:.claude/settings.json" | jq -r '.enabledPlugins["session-orchestration@session-orchestration"]')" = true ] || { echo "init (s6) --plugin: $out"; exit 1; }
+git -C "$s" worktree remove --force "$swt" && git -C "$s" branch -q -D "$sb"
 # (s2) a committed adapter: proposed for review with its sha256, not run until trusted, then used instead of a
 # local one; a change upstream (or since it was shown) needs a new review.
 c=$(mkdir -p "$tmp/init/team" && cd "$tmp/init/team" && pwd -P); git clone -q "$s" "$c"

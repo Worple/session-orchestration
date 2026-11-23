@@ -13,7 +13,7 @@
 #                                   committed CLAUDE.md's "Coordinated sessions (team)" section (section) (DIR,
 #                                   relative to the root, in a workspace's team repo), read before the person's
 #   session-status --init           the proposal: what it found and what it would write, numbered for one reply
-#   session-status --init --write [--delegate] [--own] [--shared] [--trust=REL@SHA…] [--review-brief] [--retro-brief]
+#   session-status --init --write [--delegate] [--own] [--shared [--plugin]] [--trust=REL@SHA…] [--review-brief] [--retro-brief]
 #                                 [KEY=VALUE…]
 #                                   writes the missing files from templates/ (never over an existing one; the
 #                                   CLAUDE.md section is appended to a CLAUDE.md/CLAUDE.local.md that lacks one),
@@ -63,13 +63,13 @@ tpl=$here/templates
 . "$here/../../lib.sh" || exit 1
 root=$(pwd -P)
 
-mode=propose own= delegate= shared= review_brief= retro_brief= over=() trust=() team_over= move= link= rest=() dry= apply= decline=
+mode=propose own= delegate= shared= plugin= review_brief= retro_brief= over=() trust=() team_over= move= link= rest=() dry= apply= decline=
 for a; do
   case $a in --move) move=1; continue ;; --link) link=1; continue ;; esac
   rest+=("$a")
   case $a in
     --check) mode=check ;; --write) mode=write ;; --migrate) mode=migrate ;; --team-memory) mode=team_memory ;; --dry-run) dry=1 ;;
-    --own) own=1 ;; --delegate) delegate=1 ;; --shared) shared=1 ;;
+    --own) own=1 ;; --delegate) delegate=1 ;; --shared) shared=1 ;; --plugin) plugin=1 ;;
     --trust=?*@?*) trust+=("${a#--trust=}") ;;
     --review-brief) review_brief=1 ;; --retro-brief) retro_brief=1 ;;
     --apply=?*) apply=${a#--apply=} ;; --decline=?*) decline=${a#--decline=} ;;   # above *=*, which takes KEY=VALUE
@@ -79,6 +79,7 @@ for a; do
   esac
 done
 
+[ -z "$plugin" ] || [ -n "$shared" ] || { echo "--plugin goes with --shared (it adds .claude/settings.json to the team PR)"; exit 2; }
 # --- State -------------------------------------------------------------------------------------------------------
 cfg_person=$root/.claude/coordination.local.json
 # A committed one is ignored (lib.sh tracked), and never written to: that would publish it.
@@ -492,11 +493,13 @@ if [ "$mode" = check ]; then
                   echo "[h2 hand] the adapter reads msgraph while messages is none: a session moves that to the msgraph messages module (config messages=msgraph)"
                 exit 0 ;;
     parent) echo "covered by a parent: $parent ($(slug "$(basename "$parent")")-coordinator) covers this folder"; exit 3 ;;
-    partial) m="the CLAUDE.md section naming a replies folder"; [ -n "$adapter" ] || m="the adapter (.claude/session-status-adapter)"
+    partial|unconfigured) [ -z "$replies" ] && [ -z "$noexec" ] && [ -n "$sd" ] && git -C "$sd" ls-files --error-unmatch coordination.json >/dev/null 2>&1 &&
+               { echo "$state: shared coordination found: run setup (committed in ${sd#"$root"/}/; session-status --init proposes only your own files)"; exit 1; }
+             [ "$state" = partial ] || { echo "unconfigured: $root has no adapter and no replies folder line"; exit 1; }
+             m="the CLAUDE.md section naming a replies folder"; [ -n "$adapter" ] || m="the adapter (.claude/session-status-adapter)"
              [ -n "$adapter" ] || [[ " ${review[*]-} " != *" session-status-adapter@"* ]] || m="the committed .claude/coordination/session-status-adapter isn't trusted yet: run setup to review it"
              [ -z "$noexec" ] || m=".claude/session-status-adapter is not executable: chmod +x it"
              echo "partial: $m"; exit 1 ;;
-    *) echo "unconfigured: $root has no adapter and no replies folder line"; exit 1 ;;
   esac
 fi
 # The repo file: the team's or the nearest committed one when there is one, else this folder's. A tracked one is the
@@ -1076,6 +1079,11 @@ section_file=CLAUDE.md
 [ -n "$top" ] && git -C "$root" ls-files --error-unmatch CLAUDE.md >/dev/null 2>&1 && section_file=CLAUDE.local.md
 urls=-   # built after the corrections, from a corrected repo_slug or tracker_url too, unless urls itself is given
 
+# A committed repo file answers the repo keys, in every mode (an explicit tracker= / host= below still wins).
+if [ -n "$repo_tracked" ]; then
+  x=$(jq -r '.tracker // empty' "$cfg_repo" 2>/dev/null); [ -z "$x" ] || tracker=$x
+  x=$(jq -r '.host // empty' "$cfg_repo" 2>/dev/null); [ -z "$x" ] || cfg_host=$x
+fi
 # Corrections from the reply: KEY=VALUE.
 for kv in ${over[@]+"${over[@]}"}; do
   k=${kv%%=*} v=${kv#*=}
@@ -1304,6 +1312,20 @@ if [ "${#review[@]}" -gt 0 ]; then
   shared_lines+="   To trust them as they are now: --trust=$(sed 's/ / --trust=/g' <<<"${review[*]}")$( [[ " ${review[*]} " == *" session-status-adapter@"* ]] && [ -z "$(adapter_path "$root" 2>/dev/null)" ] && printf ' (the committed adapter is then used, no local one written)')"$'\n'
 fi
 [ -z "$shared" ] || shared_lines+="   Shared (a team PR, read by every collaborator once merged): $([ -n "$repo_tracked" ] && printf '%s is committed already, so only ' "$trel/coordination.json" || printf '%s (repo keys only: tracker, host, features.review_inbox) and ' "$trel/coordination.json")the .gitattributes line $gattr$([ -n "$tsec_need" ] && printf ', and a team section "%s" in %sCLAUDE.md (approvals, reserved actions, task names, worktrees; no paths or names)' "${team_head#\#\# }" "$srel"), committed on $tb in a worktree from origin/$tdb. Personal (out of git, this machine only): everything else here."$'\n'
+# A newcomer's clone: the committed repo file answers the repo keys, so none is asked; the team files found are named.
+if [ -n "$repo_tracked" ] && [ "$state" != configured ] && [ "$mode" = propose ]; then
+  tfl=(); for x in "memory.md memory:memory" review-brief.md:review-brief session-status-adapter:adapter; do
+    [ -z "$(git -C "$(dirname "$cfg_repo")" ls-files -- ${x%%:*} 2>/dev/null | head -1)" ] || tfl+=("${x#*:}"); done
+  ! git -C "$root" ls-files --error-unmatch CLAUDE.md >/dev/null 2>&1 || ! grep -qxF "$team_head" "$root/CLAUDE.md" || tfl+=(section)
+  shared_lines+="   Shared coordination found: ${cfg_repo#"$root"/} is committed (team files: ${tfl[*]:-none besides it}), so its repo keys apply as they are and none is asked. Yours: trust, delegation, terminal; written out of git, nothing tracked."$'\n'
+fi
+# --plugin (with --shared): .claude/settings.json in the team PR enables the plugin for whoever trusts the folder.
+sjs=.claude/settings.json plug_need=
+if [ -n "$plugin" ] && [ -n "$shared" ] && [ -n "$trepo" ]; then
+  git -C "$trepo" show "origin/$tdb:${srel}$sjs" 2>/dev/null | jq -e '.enabledPlugins["session-orchestration@session-orchestration"] == true' >/dev/null 2>&1 || plug_need=1
+fi
+[ -z "$shared" ] || [ -n "$plugin" ] || shared_lines+="   Option: add --plugin to also commit .claude/settings.json enabling this plugin for the team (off by default: it offers the plugin to every collaborator)."$'\n'
+[ -z "$plug_need" ] || shared_lines+="   Plugin: ${srel}$sjs enables session-orchestration@session-orchestration and adds its marketplace, in the same team PR."$'\n'
 cfg_line="tracker=$tracker host=$cfg_host features.review_inbox=$review_inbox features.accounts=$accounts terminal=$term_found$cfg_note$term_note"
 if [ "$state" = configured ] && [ "$mode" = propose ]; then
   if [ -z "$miss_repo$miss_person$shared_lines" ] && [ -n "$deleg_set" ]; then
@@ -1396,9 +1418,10 @@ if [ -n "$shared" ]; then
   ga_old=$(git -C "$trepo" show "origin/$tdb:.gitattributes" 2>/dev/null)
   ga_need=$(while IFS= read -r l; do grep -qxF -- "$l" <<<"$ga_old" || echo "$l"; done <<<"$gattr")
   [ -z "$tsec_need" ] || tsec_missing || tsec_need=   # again, on the origin just fetched
+  [ -z "$plug_need" ] || ! git -C "$trepo" show "origin/$tdb:${srel}$sjs" 2>/dev/null | jq -e '.enabledPlugins["session-orchestration@session-orchestration"] == true' >/dev/null 2>&1 || plug_need=
   # An earlier day's setup branch (open or not merged yet) counts too: one team PR at a time.
   prev=$(git -C "$trepo" for-each-ref --format='%(refname:short)' 'refs/heads/coordination/setup-*' 'refs/remotes/origin/coordination/setup-*' | head -1)
-  if [ -n "$tj$ga_need$tsec_need" ] && { [ -n "$prev" ] || [ -e "$wt" ]; }; then
+  if [ -n "$tj$ga_need$tsec_need$plug_need" ] && { [ -n "$prev" ] || [ -e "$wt" ]; }; then
     prev=${prev:-$tb}
     echo "refused: --shared: $prev exists already: open its PR, or remove it (git -C $trepo worktree remove $trepo/.worktrees/${prev#origin/}; git -C $trepo branch -D ${prev#origin/}), then run this again"; exit 1
   fi
@@ -1465,6 +1488,9 @@ if [ -n "$top" ]; then
     git -C "$root" ls-files --error-unmatch "$top$f" >/dev/null 2>&1 && continue   # tracked (shared mode): not ours to hide
     grep -qxF "$f" "$ex" 2>/dev/null || echo "$f" >> "$ex"
   done
+  # the worktree command's folder: a session's worktrees there never show in git status
+  case $worktree_cmd in *"/.worktrees/"*) [ -n "$rel" ] ||   # a subfolder's: the repo's own folder isn't ours to name
+     (cd "$root" && git check-ignore -q .worktrees/x) || grep -qxF "/${rel}.worktrees/" "$ex" 2>/dev/null || echo "/${rel}.worktrees/" >> "$ex" ;; esac
   for w in ${wrote[@]+"${wrote[@]}"}; do
     case $w in *" (section appended)"|.claude/coordination.local*|.claude/coordination/coordination.json*) continue ;; esac   # the user's file / the config, above
     case $w in .claude/coordination/*) [ -n "$shared" ] || continue ;; esac   # under the folder line, unless shared
@@ -1485,7 +1511,7 @@ if [ -n "$shared" ]; then
   echo "Personal: everything above, out of git (.git/info/exclude, $section_file, $P): this machine only."
   [ -z "$tsec_need" ] || [ ! -e "$root/CLAUDE.md" ] || git -C "$root" ls-files --error-unmatch CLAUDE.md >/dev/null 2>&1 ||
     echo "Note: this checkout's CLAUDE.md is untracked and the team PR adds one: move its lines to CLAUDE.local.md before pulling the merge."
-  if [ -z "$tj$ga_need$tsec_need" ]; then echo "Shared: origin/$tdb has the team files already: no team PR."
+  if [ -z "$tj$ga_need$tsec_need$plug_need" ]; then echo "Shared: origin/$tdb has the team files already: no team PR."
   else
     tf=()
     git -C "$trepo" worktree add -q -b "$tb" "$wt" "origin/$tdb" 2>&1 || { echo "Shared: git worktree add failed: no team PR"; exit 1; }
@@ -1502,15 +1528,21 @@ if [ -n "$shared" ]; then
       printf '%s\n' "$ga_need" >> "$wt/.gitattributes" || tfail "writing .gitattributes failed"
       tf+=(".gitattributes ($(paste -sd ';' - <<<"$ga_need" | sed 's/;/; /g'): two people's team memory appends merge on rebase)")
     fi
+    if [ -n "$plug_need" ]; then
+      f=$wt/${srel}$sjs; mkdir -p "$(dirname "$f")" && { [ -s "$f" ] || echo '{}' > "$f"; } &&
+        jq '.enabledPlugins["session-orchestration@session-orchestration"] = true | .extraKnownMarketplaces["session-orchestration"] //= {source: {source: "github", repo: "vargroozzz/session-orchestration"}}' "$f" > "$f.tmp" &&
+        mv "$f.tmp" "$f" || tfail "writing ${srel}$sjs failed"
+      tf+=("${srel}$sjs (enables the plugin for whoever trusts the folder: off unless --plugin)")
+    fi
     if [ -n "$tsec" ]; then
       f=$wt/${srel}CLAUDE.md; mkdir -p "$(dirname "$f")" || tfail "writing ${srel}CLAUDE.md failed"
       [ ! -s "$f" ] || { [ -z "$(tail -c1 "$f")" ] || echo; echo; } >> "$f"
       printf '%s\n' "$tsec" >> "$f" || tfail "writing ${srel}CLAUDE.md failed"
       tf+=("${srel}CLAUDE.md (team section \"${team_head#\#\# }\": approvals, reserved actions, task names, worktrees; no paths or names)")
     fi
-    tmsg="coordination: shared setup ($([ -n "$tj" ] && printf 'repo keys, ')$([ -n "$tsec" ] && printf 'team CLAUDE.md section, ')merge=union for team memory)"
+    tmsg="coordination: shared setup ($([ -n "$tj" ] && printf 'repo keys, ')$([ -n "$tsec" ] && printf 'team CLAUDE.md section, ')$([ -n "$plug_need" ] && printf 'plugin enablement, ')merge=union for team memory)"
     # -f: an ignore rule (this clone's own exclude, or one like .claude/*) would hide the team folder
-    git -C "$wt" add -f -- ${tj:+"$trel/coordination.json"} ${ga_need:+.gitattributes} ${tsec:+"${srel}CLAUDE.md"} &&
+    git -C "$wt" add -f -- ${tj:+"$trel/coordination.json"} ${ga_need:+.gitattributes} ${tsec:+"${srel}CLAUDE.md"} ${plug_need:+"${srel}$sjs"} &&
       git -C "$wt" commit -q -m "$tmsg" || tfail "the commit in $wt failed"
     turl=$(git -C "$trepo" config --get remote.origin.url)
     pr="git -C $wt push -u origin $tb" prnote=

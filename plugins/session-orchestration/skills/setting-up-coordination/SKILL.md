@@ -139,6 +139,11 @@ names "shared"; it never asks. `session-status --init --write --shared` writes t
 checkout's copy of the repo file stays excluded too) and commits the team files that `origin/<default>` lacks on
 `coordination/setup-<date>`, in a worktree of its own (`<repo>/.worktrees/coordination/setup-<date>`, `/.worktrees/`
 excluded) with the person's git identity, so the main checkout stays clean:
+- **A newcomer's clone** (the repo file is committed): `--check` says `shared coordination found: run setup`, and the
+  proposal asks no repo key (tracker and host come from the committed file), names the team files found and asks only
+  trust, delegation and terminal; `--write` writes personal files only, and excludes `/.worktrees/` when the worktree
+  command uses it, so `git status` stays clean. `--shared --plugin` also puts `.claude/settings.json` (the plugin
+  enabled, its marketplace added) in the team PR: off by default, since it offers the plugin to every collaborator.
 - **Shared** (read by every collaborator once merged): `.claude/coordination/coordination.json` (repo keys only:
   tracker, host, features.review_inbox, plus any repo key set in this checkout's file) and the `.gitattributes` lines
   `/.claude/coordination/memory.md merge=union` and `/.claude/coordination/memory/*.md merge=union`, so two people's
