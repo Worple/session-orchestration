@@ -57,7 +57,9 @@ the same settings. Then:
 - A coordinator handover starts the successor as a Desktop session (`start_session`), so it shows in the sidebar and
   takes the old one's pin; a handover the coordinator starts on its own shows a New task card for you to start. Each
   coordinator's sidebar title follows its name (`NAME-prev-K` for the old one), and once the successor holds the name
-  it archives the old one (the app asks you first, except in auto and bypass permissions modes) or says why it can't.
+  it archives the old one (the app asks you first, except in auto and bypass permissions modes) or says why it can't. The old one first
+  detaches the sessions it started, since the app archives a session's idle side sessions with it; one it still holds
+  keeps it unarchived, for you to archive.
   The successor is the only sidebar session the coordinator starts: a hook refuses `start_session` for a task, which
   then starts with `claude --bg` like every task. To watch and answer tasks in the app instead, set
   `"start": {"sidebar": true}` in `.claude/coordination.local.json` (from the release after 0.139.0): the hook

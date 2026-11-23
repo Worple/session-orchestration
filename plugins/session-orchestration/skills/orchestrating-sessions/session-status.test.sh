@@ -1417,7 +1417,8 @@ setacct cfg "$(sess "$o" p-coordinator idle 1 interactive),$(sess "$x" 'New sess
   as "$x" --await name --timeout 2 | grep -q '^"p-coordinator" is free' && as "$o" --successor --done >/dev/null &&
   out=$(CLAUDE_CODE_ENTRYPOINT=claude-desktop as "$x" --await done --timeout 2) &&
   grep -qF 'handover done: the old coordinator (0a0a0a0a, "p-coordinator-prev-1") keeps its row in the app'"'"'s sidebar' <<<"$out" &&
-  grep -qF 'detach_session "self" first' <<<"$out" && grep -qF 'archive_session, reason "handed over to p-coordinator")' <<<"$out" &&
+  grep -qF 'detach_session "self", since archiving it takes you too' <<<"$out" &&
+  grep -qF '(2) Not detached: mcp__ccd_session_mgmt__list_sessions {"linked": true}' <<<"$out" && grep -qF 'archive_session, reason "handed over to p-coordinator")' <<<"$out" &&
   [ ! -e "$tmp/.cache/session-status/handover/p-coordinator.next" ] || { echo "--successor --started, a Desktop successor by id"; exit 1; }
 # The old one no longer listed (exited): its sidebar row stays, pinned and unarchived, so the same Desktop steps.
 setacct cfg "$(sess "$x" p-coordinator idle 1 interactive)"; echo "$o" > "$tmp/.cache/session-status/handover/p-coordinator.done"
@@ -1523,6 +1524,7 @@ rm "$rf"
   ! as "$o" --await renamed --timeout 1 >/dev/null || { echo "--successor --done or --await renamed before the rename"; exit 1; }
 setacct cfg "$(sess "$o" p-coordinator-prev-1 busy 1 interactive),$(sess "$x" p-coordinator-next idle 1 interactive)"
 as "$o" --await renamed | grep -q '^renamed: you are "p-coordinator-prev-1". Now stop your watcher' || { echo "--await renamed"; exit 1; }
+CLAUDE_CODE_ENTRYPOINT=claude-desktop as "$o" --await renamed | grep -qF 'detach each session you started other than your successor' && ! CLAUDE_CODE_ENTRYPOINT=cli as "$o" --await renamed | grep -q 'detach each' || { echo "--await renamed in Desktop"; exit 1; }
 [ "$(as "$x" --name-check p-coordinator)" = "free next" ] && as "$x" --await name | grep -qF '"p-coordinator" is free: call name_session with name p-coordinator' &&
   [ "$(as "$x" --successor --done; echo $?)" = "$(printf '"p-coordinator-next" isn'\''t a renamed old coordinator (NAME-prev-K): no done stamp written\n2')" ] &&
   as "$o" --successor --done | grep -q '^done: ' && [ "$(cat "$tmp/.cache/session-status/handover/p-coordinator.done")" = "$o" ] ||

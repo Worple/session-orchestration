@@ -1028,7 +1028,9 @@ if [ "${1:-}" = --await ]; then
         fi ;;
       # the rename lands when the turn ends, and nothing else would wake the old one after it
       renamed) r=$(ho_field 1 "$id" 2)
-        [ -z "$r" ] || [ "$r" = "$n" ] || { echo "renamed: you are \"$r\". Now stop your watcher (TaskStop), forward to the inbox what you got meanwhile, then \`$SELF --successor --done\` and end your turn."; exit 0; } ;;
+        # Desktop archives a session's idle side sessions with it, and only the session that started one can detach it
+        dk=; [[ ${CLAUDE_CODE_ENTRYPOINT:-} != claude-desktop* ]] || dk=" detach each session you started other than your successor, so archiving you leaves it (mcp__ccd_session_mgmt__list_sessions {\"linked\": true} lists them, then mcp__ccd_session_mgmt__detach_session; one that refuses: name it in an inbox entry for the user),"
+        [ -z "$r" ] || [ "$r" = "$n" ] || { echo "renamed: you are \"$r\". Now stop your watcher (TaskStop), forward to the inbox what you got meanwhile,$dk then \`$SELF --successor --done\` and end your turn."; exit 0; } ;;
       name) h=$(awk -F'\t' -v me="$id" -v n="$n" '$1 != me && $2 == n { print $1; exit }' <<<"$live")
         # its tab drops the NAME-next title, or its own successor's open_view would select this tab
         [ -n "$h" ] || { load_terminal; ho_retitle "$id" "$n"
@@ -1039,9 +1041,10 @@ if [ "${1:-}" = --await ]; then
           # a background one (or one no longer listed) shows in the tab it was moved out of, not its own pid's
           t=; if [[ ${CLAUDE_CODE_ENTRYPOINT:-} == claude-desktop* ]]; then
             # exited or not (no longer listed), its sidebar row stays, pinned, until archived; stop_session only
-            # interrupts a turn, and archiving it takes its side sessions (this one, until detached) with it
+            # interrupts a turn, and archiving it takes its side sessions (this one, until detached) with it; its other
+            # side sessions go too, so the successor looks first
             on=$(awk -F'\t' -v o="$o" '$1 == o { print $2; exit }' <<<"$all")
-            msg="the old coordinator (${o:0:8}${on:+, \"$on\"}) keeps its row in the app's sidebar; finish it with the ccd tools (ToolSearch them). mcp__ccd_session_mgmt__get_session \"self\" gives its id (parentSessionId) and whether you are detached from it; not detached: mcp__ccd_session_mgmt__detach_session \"self\" first, since archiving it takes its side sessions with it. Pinned (get_session on its id): pin yourself (mcp__ccd_sidebar__set_pinned \"self\") and unpin it. Then archive it (mcp__ccd_session_mgmt__archive_session, reason \"handed over to $n\"). Tell the user once when it stays: the archive declined or refused, it is theirs to archive; the detach refused (you share its worktree), never archive it, since that archives you too"
+            msg="the old coordinator (${o:0:8}${on:+, \"$on\"}) keeps its row in the app's sidebar; finish it with the ccd tools (ToolSearch them), in this order. (1) mcp__ccd_session_mgmt__get_session \"self\": its id (parentSessionId), and whether you are detached from it. (2) Not detached: mcp__ccd_session_mgmt__list_sessions {\"linked\": true}; a session it started other than you is archived with it (an idle one, or one in its folder), so with one listed leave the old one unarchived and tell the user which sessions hold it: theirs to archive. (3) Not detached: mcp__ccd_session_mgmt__detach_session \"self\", since archiving it takes you too. (4) Pinned (get_session on its id): pin yourself (mcp__ccd_sidebar__set_pinned \"self\") and unpin it. (5) Unless (2) held it, archive it (mcp__ccd_session_mgmt__archive_session, reason \"handed over to $n\"). Tell the user once when it stays: the archive declined or refused, it is theirs to archive; the detach refused (you share its worktree), never archive it, since that archives you too"
           elif { [ "$(awk -F'\t' -v o="$o" '$1 == o { print $7; exit }' <<<"$all")" != background ] && t=$(ho_tty "$o"); } ||
             t=$(ho_shown_tty "$o"); then
             load_terminal; c=$(close_tty "$t" 2>&1); rc=$?

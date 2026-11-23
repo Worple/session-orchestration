@@ -23,8 +23,9 @@ coordinator's Start reads those, and each restated rule is re-sent on its every 
 2. When `--await ready` wakes you, call `name_session` with what `session-status --prev-name --title` prints
    (`NAME-prev-K`; it titles your tab too, and in Desktop its result names the sidebar title's call), arm `--await renamed` (background) and end your turn: the rename lands
    then.
-3. When `--await renamed` wakes you, stop your watcher (TaskStop), forward what came meanwhile, run
-   `session-status --successor --done` and end. Your terminal closes once you are idle.
+3. When `--await renamed` wakes you, stop your watcher (TaskStop), forward what came meanwhile, in
+   Desktop detach the sessions you started as it says (the app archives a session's idle side sessions with it, and
+   only you can detach yours), run `session-status --successor --done` and end. Your terminal closes once you are idle.
 
 ## The successor
 
@@ -35,7 +36,8 @@ it records your id, so you count as `NAME-next` even when the app named you othe
 2. Arm `--await done`. It closes the old coordinator's tab (only its split, when the tab has others) once that one is
    idle and done forwarding; when it runs in the background, the tab it was moved out of (or a `claude attach` to it).
    Tell the user what was left open, if anything. In Desktop it closes nothing and says how to finish the old one:
-   detach from it, take its pin, archive it.
+   check it holds no other side session (one it still holds keeps it unarchived, for the user), detach from it, take
+   its pin, archive it.
 
 - Any `--await` also wakes you on an unread coordinator inbox entry (exit 3, first line `NOT DONE`): the step isn't
   done. Act on each entry, mark it read (`session-status --inbox --read N`), and arm the same `--await` again.
