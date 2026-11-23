@@ -192,6 +192,11 @@
 #                       `owner KEY` says other or an origin branch naming KEY has another author's commits; the ask
 #                       to put on the pane is its last line. Unassigned (none): `claim KEY`. --anyway (the user's
 #                       start anyway): passes, claims nothing. KEY `#N`: a GitHub issue (no session name carries one)
+#        session-status --launch NAME --kind KIND[:S|M|L] [--anyway] [--at WHEN | --after-reset [ACCOUNT]] [--] 'WHAT' 'WHY' 'DONE-WHEN'
+#                       a task start in one command: --kind, then the brief built from the three texts, started as
+#                       NAME; --at or --after-reset queues it for a running --watch to start then
+#        session-status --launch --list | --cancel NAME | --now NAME [--anyway]   the queued starts; drop one; start
+#                       one at once
 #        session-status --plan FILE [--check | --next | --brief N | --done N]   a design's plan table: waves and chunk
 #                       states, its problems (exit 1), the `claude --bg` lines of the runnable chunks, row N's brief
 #                       skeleton, or (run by chunk N once it landed) its usage chunk line
@@ -279,7 +284,7 @@ if [ "${1:-}" = --kind ]; then
     { echo "usage: session-status --kind design|build|mechanical|review|release|scan|coordinator|retro|research[:S|M|L] [SESSION-NAME [--anyway]]" >&2; exit 2; }
   # Ownership on start (--claim): only its exit 3 stops the start; a failed lookup or claim says so and lets it go.
   if [ $# -ge 3 ] && ! [[ $k =~ ^(review|retro|research|coordinator)$ ]]; then
-    CLAIM_RERUN="session-status --kind $2 $3 --anyway" bash "$0" --claim "$3" ${4:+"$4"} >&2; [ $? != 3 ] || exit 3
+    CLAIM_RERUN="${CLAIM_RERUN:-session-status --kind $2 $3 --anyway}" bash "$0" --claim "$3" ${4:+"$4"} >&2; [ $? != 3 ] || exit 3
   fi
   m=${me%%/*} e=${me#*/}
   case $sz in S) e=$(effort_step "$e" -1) ;; L) e=$(effort_step "$e" 1) ;; esac
@@ -1407,8 +1412,13 @@ idle_check() {
 # shortcut: a fixed 120 s poll (SESSION_STATUS_LINK_POLL_S in tests); make it a config key if someone needs another.
 LINK_POLL_S=${SESSION_STATUS_LINK_POLL_S:-120} link_next=0
 nap() {
-  local left=$1 tick=${SESSION_STATUS_TICK_S:-60} s
+  local left=$1 tick=${SESSION_STATUS_TICK_S:-60} s out
   while [ "$left" -gt 0 ]; do s=$((left < tick ? left : tick)); sleep "$s"; left=$((left - s)); idle_check
+    # scheduled starts (--launch --at | --after-reset): due ones start now, and the result is the wake. Only its
+    # stdout: a warning on stderr with nothing due would end the watcher at every tick.
+    if [ -z "${IDLE_SCOPE:-}" ] && [ -s ~/.cache/session-status/"$ENC.launches" ]; then
+      out=$("$SELF" --launch --due); [ -z "$out" ] || { usage wake wake "$(grep -c . <<<"$out")"; echo "$out"; exit 0; }
+    fi
     if [ -z "${IDLE_SCOPE:-}" ] && [ "$(date +%s)" -ge "$link_next" ] && compgen -G "$LINKS/*.json" >/dev/null; then
       link_next=$(( $(date +%s) + LINK_POLL_S )); [ -z "$("$SELF" --link fetch 2>/dev/null)" ] || return 0
     fi
@@ -1484,6 +1494,108 @@ if [ "${1:-}" = --outbox-done ]; then
   ob=$(fwd_file outbox); [ -f "$ob" ] || exit 0
   printf '%s\n' "$d" > "$ob.done.$$"; inbox_lock "$ob"
   awk -F'\t' 'NR == FNR { done[$2]; next } !($4 in done)' "$ob.done.$$" "$ob" > "$ob.$$" && mv "$ob.$$" "$ob"; rm -f "$ob.done.$$"; exit 0
+fi
+
+# --launch NAME --kind K[:S|M|L] [--anyway] [--at WHEN | --after-reset [ACCOUNT]] [--] 'WHAT' 'WHY' 'DONE-WHEN': a task
+# start in one command. It runs --kind (the claim, the usage start line; its exit 3 and 2 are --launch's, nothing
+# started), builds sessions.md's brief (`Work on KEY: WHAT. Why: WHY. Done when: DONE-WHEN. Read MEMORY first. Keep
+# working until done or blocked. When finished: reply with done and the check that proves it.`; KEY: the task key NAME
+# starts with, else NAME; MEMORY: CLAUDE.md's "Project memory: `PATH`", the sentence left out when it names none) and
+# starts it as --handover does, printing `started "NAME" (ID8) · K M/E`. Not for review (its first line is `Session
+# task: KEY review`, with the review brief) nor coordinator (--successor, --coordinator-of).
+# --at 'HH:MM' (today, tomorrow when past) | 'YYYY-MM-DD HH:MM', or --after-reset [ACCOUNT] (that account's weekly
+# reset, lib.sh weekly_use, plus a minute; ACCOUNT: its config dir, default the caller's): queued as a JSON line in $ENC.launches instead. The
+# watcher's nap starts it when due (--launch --due; --kind runs then, so the model and the claim are that moment's)
+# and wakes with the result; a past-due one starts at the next tick, a successor's watcher included. A start that
+# fails stays queued marked failed: reported once, never retried by the watcher. --now NAME [--anyway] starts a queued
+# one at once (a failed one too; --anyway: the user's start anyway, after --claim stopped it), --cancel NAME drops it,
+# --list prints them (the sweep's Scheduled starts footer).
+# shortcut: --due takes the entries before it starts them, so a watcher killed in between loses that start; mark
+# them firing instead once one is lost.
+# `· failed:`, not `— failed:`: the pane offers what follows `— …: ` as a command to copy (register.tsx leftoverCommand).
+launch_lines() { jq -r '"\(.name) · \(.kind) · \(.due | strflocaltime("%m-%d %H:%M"))\(.label // "" | if . == "" then "" else " · " + . end)\(if .failed then " · failed: " + .failed else "" end)"' 2>/dev/null; }
+# launch_take FILTER [JQ ARGS…]: under the lock, prints the entries FILTER selects and drops them from the file. A file
+# jq can't read gives none: an entry printed but not dropped would start again at every tick.
+launch_take() {
+  local f t; f=$(fwd_file launches); [ -s "$f" ] || return 0
+  ( inbox_lock "$f"; t=$(jq -c "select($1)" "${@:2}" "$f") && jq -c "select(($1) | not)" "${@:2}" "$f" > "$f.$$" && mv "$f.$$" "$f" && printf '%s\n' "$t" || rm -f "$f.$$" )
+}
+# launch_start NAME KIND ANYWAY WHAT WHY DONE: the plain start. Its line on stdout; exit 0 started, else --kind's, or 1.
+launch_start() {
+  local flags rc key mem text out id
+  flags=$(bash "$SELF" --kind "$2" "$1" ${3:+"$3"}); rc=$?; [ "$rc" = 0 ] && [ -n "$flags" ] || return $(( rc ? rc : 1 ))
+  key=$(grep -oE -m1 "^$(key_re "$(adapter_path "$ROOT")")" <<<"$1" | head -1)
+  mem=$(sed -nE 's/^[^`]*[Pp]roject memory[^`]*`([^`]+)`.*/\1/p' CLAUDE.md CLAUDE.local.md 2>/dev/null | head -1)
+  text="Work on ${key:-$1}: ${4%.}. Why: ${5%.}. Done when: ${6%.}.${mem:+ Read $mem first.} Keep working until done or blocked. When finished: reply with done and the check that proves it."
+  # CLAIM_RERUN is --kind's only: the started session's own --kind runs would print this start's rerun line
+  out=$(unset CLAIM_RERUN; bash -c "$(bg_cmd claude) $flags -n \"\$0\" \"\$1\"" "$1" "$text" 2>&1)
+  id=$(grep -oE 'backgrounded · [0-9a-f]{8}' <<<"$out" | tail -1); id=${id##* }
+  [ -n "$id" ] || { echo "\"$1\" didn't start: $(tail -1 <<<"$out")"; return 1; }
+  echo "started \"$1\" ($id) · ${2%%:*} $(sed -E 's/^--model ([^ ]+) --effort ([^ ]+).*/\1\/\2/' <<<"$flags" | tr -d '\\')"
+}
+# launch_fire ENTRY: starts a queued entry: its started line, exit 0. Else it goes back marked failed, the reason printed, exit 1.
+launch_fire() {
+  local e=$1 n r
+  n=$(jq -r .name <<<"$e")
+  r=$(CLAIM_RERUN="session-status --launch --now $n --anyway" launch_start "$n" "$(jq -r .kind <<<"$e")" "$(jq -r .anyway <<<"$e")" "$(jq -r .what <<<"$e")" "$(jq -r .why <<<"$e")" "$(jq -r .done <<<"$e")" 2>&1) &&
+    { tail -1 <<<"$r"; return 0; }
+  r=$(tail -1 <<<"$r"); r=${r#"\"$n\" didn't start: "}; r=${r#not started: }; r=${r:-no reason printed}
+  # the queue keeps 300 characters of it; the line printed keeps it whole (--claim's ends with the start-anyway command)
+  jq -c --arg w "${r:0:300}" '.failed = $w' <<<"$e" | locked_append "$(fwd_file launches)"
+  echo "\"$n\" not started: $r (session-status --launch --now $n tries again, --cancel $n drops it)"; return 1
+}
+if [ "${1:-}" = --launch ]; then
+  u="usage: session-status --launch NAME --kind KIND[:S|M|L] [--anyway] [--at 'HH:MM'|'YYYY-MM-DD HH:MM' | --after-reset [ACCOUNT]] [--] 'WHAT' 'WHY' 'DONE-WHEN' | --launch --list | --cancel NAME | --now NAME [--anyway]"
+  lf=$(fwd_file launches); shift
+  case ${1:-} in
+    --list) [ $# = 1 ] || { echo "$u" >&2; exit 2; }; [ ! -s "$lf" ] || launch_lines < "$lf"; exit 0 ;;
+    --due) t=$(launch_take '.due <= $t and (.failed | not)' --argjson t "$(date +%s)")
+      while read -r e; do [ -n "$e" ] || continue
+        # </dev/null: a command of this start reading stdin would take the entries still to start
+        printf 'Scheduled start (due %s): ' "$(epochfmt "$(jq -r .due <<<"$e")" '%m-%d %H:%M')"; launch_fire "$e" </dev/null
+      done <<<"$t"; exit 0 ;;
+    --cancel|--now) [ -n "${2:-}" ] && { [ $# = 2 ] || { [ "$1 $# ${3:-}" = '--now 3 --anyway' ]; }; } || { echo "$u" >&2; exit 2; }
+      e=$(launch_take '.name == $n' --arg n "$2" | head -1)
+      [ -n "$e" ] || { echo "no scheduled start \"$2\" (session-status --launch --list)" >&2; exit 2; }
+      [ "$1" = --now ] || { echo "cancelled: $(launch_lines <<<"$e")"; exit 0; }
+      launch_fire "$(jq -c --arg a "${3:-}" 'del(.failed) | if $a == "" then . else .anyway = $a end' <<<"$e")"; exit ;;
+  esac
+  name=${1:-}; [ $# -ge 3 ] && [ "$2" = --kind ] && [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]] || { echo "$u" >&2; exit 2; }
+  kind=$3; shift 3; any= at= acct= label= due= hm=
+  while [ $# -gt 0 ]; do case $1 in
+    --anyway) any=--anyway; shift ;;
+    --at) at=${2:-}; [ -n "$at" ] || { echo "$u" >&2; exit 2; }; shift 2 ;;
+    # ACCOUNT is a config dir, so it starts with / or ~ (a WHAT that does goes after --)
+    --after-reset) at=reset; shift; case ${1:-} in /*|\~*) acct=$1; shift ;; esac ;;
+    --) shift; break ;;
+    *) break ;;
+  esac; done
+  [ $# = 3 ] && [ -n "$1" ] && [ -n "$2" ] && [ -n "$3" ] && config "plan.models.${kind%:[SML]}" >/dev/null 2>&1 || { echo "$u" >&2; exit 2; }
+  case ${kind%:[SML]} in review|coordinator)
+    echo "--launch: not for ${kind%:[SML]}: a review's first prompt starts \`Session task: KEY review\` and carries the review brief (sessions.md, Owners), and a coordinator starts by --successor or --coordinator-of" >&2; exit 2 ;; esac
+  if [ -z "$at" ]; then
+    CLAIM_RERUN="session-status --launch $name --kind $kind --anyway -- '<the same three texts>'" launch_start "$name" "$kind" "$any" "$1" "$2" "$3"; exit
+  fi
+  if [ "$at" = reset ]; then
+    wu=$(weekly_use); d=$(head -1 <<<"$wu" | cut -f1)
+    if [ -n "$acct" ]; then a=${acct/#\~/$HOME}; d=$(awk -F'\t' -v a="${a%/}" '$1 == a { print $1; exit }' <<<"$wu"); fi
+    [ -n "$d" ] || { echo "--after-reset: no account $acct here (one of: $(cut -f1 <<<"$wu" | paste -sd' ' -))" >&2; exit 2; }
+    due=$(awk -F'\t' -v d="$d" '$1 == d { print $3; exit }' <<<"$wu")
+    [ -n "$due" ] || { echo "--after-reset: no weekly-limit reading for $(tilde "$d") (none taken yet, or it has reset already): pass --at 'HH:MM' or 'YYYY-MM-DD HH:MM'" >&2; exit 2; }
+    due=$(( due + 60 )); label="after $(tilde "$d")'s weekly reset"
+  else
+    day=$(date +%F); [[ $at =~ ^[0-9]{2}:[0-9]{2}$ ]] && { at="$day $at"; hm=1; }
+    [[ $at =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}$ ]] && due=$(at_epoch "$at") ||
+      { echo "--at: 'HH:MM' or 'YYYY-MM-DD HH:MM', a local time that exists (got '$at')" >&2; exit 2; }
+    [ -z "$hm" ] || [ "$due" -gt "$NOW" ] || due=$(at_epoch "$(dayfmt "$day" %F +1) ${at#* }") || { echo "--at: no such time tomorrow: pass 'YYYY-MM-DD HH:MM'" >&2; exit 2; }
+    [ "$due" -gt "$NOW" ] || { echo "--at: $at is past" >&2; exit 2; }
+  fi
+  [ ! -s "$lf" ] || ! jq -e --arg n "$name" 'select(.name == $n)' "$lf" >/dev/null 2>&1 ||
+    { echo "\"$name\" is scheduled already (session-status --launch --list): --cancel $name first" >&2; exit 2; }
+  jq -cn --argjson due "$due" --arg name "$name" --arg kind "$kind" --arg anyway "$any" --arg what "$1" --arg why "$2" --arg done "$3" --arg label "$label" \
+    '{due: $due, name: $name, kind: $kind, anyway: $anyway, what: $what, why: $why, done: $done, label: $label}' | locked_append "$lf"
+  echo "scheduled \"$name\" · $kind · $(epochfmt "$due" '%m-%d %H:%M')${label:+ · $label}: a running watcher (session-status --watch) starts it then; --launch --now $name starts it at once, --cancel $name drops it"
+  exit 0
 fi
 
 # --changes: print only lines that differ from the previous --changes run (for --watch). Idle/busy and
@@ -3011,6 +3123,10 @@ jq -nr --arg asks "$(cat "$af" 2>/dev/null)" --rawfile entries "$TMP/st.entries"
   [ -n "$h" ] || { h=1; printf '\nSent (session-status --inbox --sent):\n'; }
   printf "  * queued in %s's inbox #%s (%s)%s%s\n" "$(coord_name "$d")" "$n" "$(tilde "$d")" "${w:+, $w}" "${t:+: ${t:0:80}}"
 done; }
+# Scheduled starts (--launch --at | --after-reset) until the watcher starts them. Not under --changes: scheduling one is
+# no news. The title stays short: the pane logs its presses under it (register.tsx USAGE_SECTIONS, 40 characters).
+[ $# != 0 ] || [ -n "${SESSION_STATUS_STRICT:-}" ] || [ ! -s "$(fwd_file launches)" ] ||
+  { printf '\nScheduled starts (--launch --cancel):\n'; launch_lines < "$(fwd_file launches)" | sed 's/^/  * /'; }
 # The open report pages (--report-artifact's registry; features/report-artifacts.md): not under --changes, a page
 # published is no news. `page behind the file`: the file changed since its publish. Only pages published in the last
 # 14 days: the registry keeps every row, and the user deletes pages on claude.ai.

@@ -3262,6 +3262,76 @@ git -C "$c" push -q origin --delete feature/ABC-8-x
 rc=0; run --claim 2>/dev/null || rc=$?; [ "$rc" = 2 ] || { echo "--claim with no key exited $rc"; exit 1; }
 fi
 
+if section launch; then
+# --launch: a task start in one command (--kind, the brief, `claude --bg`), and its scheduled form (--at,
+# --after-reset): queued, listed in the plain sweep's footer and never by --changes, started by --launch --due (the
+# watcher's nap) or --now, dropped by --cancel. The stub logs each `claude --bg` call and fails it while $tmp/bgfail is there.
+cp "$tmp/bin/claude" "$tmp/claude.keep"
+{ echo '#!/bin/sh'; echo "[ \"\$1\" != --bg ] || { echo \"\$*\" >> $tmp/calls; [ -z \"\$CLAIM_RERUN\" ] || echo 'CLAIM_RERUN reached the session' >> $tmp/calls; [ ! -f $tmp/eat ] || cat > /dev/null; [ ! -f $tmp/bgfail ] || { echo 'Workspace not trusted'; exit 1; }; echo 'backgrounded · abcdef12 · x'; exit 0; }"
+  sed 1d "$tmp/claude.keep"; } > "$tmp/bin/claude"
+ss=$tmp/.cache/session-status lf=$ss/$(sed 's/[^A-Za-z0-9]/-/g' <<<"$root").launches started='(abcdef12) · build opus/medium'
+entry() { jq -cn --argjson due "$1" --arg name "$2" '{due: $due, name: $name, kind: "build", anyway: "", what: "do x", why: "w", done: "d", label: ""}'; }
+out=$(run --launch ABC-77-fix --kind build -- 'do x.' 'it breaks y' 'the test passes') && [ "$out" = "started \"ABC-77-fix\" $started" ] &&
+  [ "$(calls)" = '--bg --model opus --effort medium -n ABC-77-fix Work on ABC-77: do x. Why: it breaks y. Done when: the test passes. Keep working until done or blocked. When finished: reply with done and the check that proves it.' ] ||
+  { echo "plain start failed: $out"; exit 1; }
+# no task key in the name: the name; CLAUDE.md names the project memory: read first
+printf 'Notes.\n- Project memory: `/home/u/mem.md`. Read it.\n' > "$root/CLAUDE.md"
+run --launch cleanup --kind mechanical:S 'tidy' 'w' 'd' >/dev/null && [[ $(calls) == *' -n cleanup Work on cleanup: tidy. Why: w. Done when: d. Read /home/u/mem.md first. Keep working '* ]] ||
+  { echo "start without a key, with a memory file, failed"; exit 1; }
+rm "$root/CLAUDE.md"
+for a in 'ABC-77-fix --kind review' 'ABC-77-fix --kind coordinator' 'bad/name --kind build' 'ABC-77-fix --kind nokind' 'ABC-77-fix --kind build --at 25:00' 'ABC-77-fix --kind build --at 2020-01-01'; do
+  rc=0; run --launch $a -- a b c >/dev/null 2>&1 || rc=$?; [ "$rc" = 2 ] || { echo "--launch $a exited $rc"; exit 1; }
+done
+rc=0; run --launch ABC-77-fix --kind build --at '2020-01-01 10:00' -- a b c >/dev/null 2>&1 || rc=$?; [ "$rc" = 2 ] || { echo "a past --at exited $rc"; exit 1; }
+rc=0; run --launch ABC-77-fix --kind build -- a b >/dev/null 2>&1 || rc=$?; [ "$rc" = 2 ] && [ -z "$(calls)" ] && [ ! -s "$lf" ] || { echo "a refused --launch started or queued something ($rc)"; exit 1; }
+# --at: queued, in --list and the plain sweep's footer, no news to --changes; a bare HH:MM that is past is tomorrow's
+tomd=$(. "$here/../../lib.sh" && dayfmt "$(date +%F)" %F +1); tom=${tomd#*-} line="ABC-78-later · build:L · $tom 12:00"
+out=$(run --launch ABC-78-later --kind build:L --at "$tomd 12:00" -- 'do z' 'why' 'done') && [[ $out == "scheduled \"ABC-78-later\" · build:L · $tom 12:00: a running watcher"* ]] &&
+  [ -z "$(calls)" ] && [ "$(run --launch --list)" = "$line" ] && out=$(run) &&
+  grep -qxF 'Scheduled starts (--launch --cancel):' <<<"$out" && grep -qxF "  * $line" <<<"$out" || { echo "--at failed: $out"; exit 1; }
+out=$(run --changes) && ! grep -q 'Scheduled starts' <<<"$out" && [ "$(run --changes)" = "no changes" ] || { echo "--changes reported a scheduled start: $out"; exit 1; }
+rc=0; run --launch ABC-78-later --kind build --at 12:00 -- a b c >/dev/null 2>&1 || rc=$?; [ "$rc" = 2 ] || { echo "the same name was scheduled twice ($rc)"; exit 1; }
+[[ $(run --launch ABC-79-night --kind build --at 00:00 a b c) == "scheduled \"ABC-79-night\" · build · $tom 00:00: "* ]] || { echo "a past HH:MM wasn't tomorrow's"; exit 1; }
+[ "$(run --launch --cancel ABC-78-later)" = "cancelled: $line" ] && [ "$(run --launch --list)" = "ABC-79-night · build · $tom 00:00" ] &&
+  run --launch --cancel ABC-79-night >/dev/null && [ ! -s "$lf" ] && ! run | grep -q 'Scheduled starts' || { echo "--cancel failed: $(cat "$lf")"; exit 1; }
+rc=0; run --launch --cancel ABC-78-later 2>/dev/null || rc=$?; [ "$rc" = 2 ] || { echo "--cancel of none exited $rc"; exit 1; }
+# --due starts the ones whose time has come, once, and leaves the others
+entry 1000 ABC-80-due > "$lf"; entry $(( $(date +%s) + 9999 )) ABC-81-later >> "$lf"
+out=$(run --launch --due) && [[ $out == 'Scheduled start (due '*"): started \"ABC-80-due\" $started" ]] && [[ $(calls) == *' -n ABC-80-due Work on ABC-80: do x. Why: w. Done when: d. Keep '* ]] &&
+  [ "$(jq -r .name "$lf")" = ABC-81-later ] && [ -z "$(run --launch --due)" ] && [ -z "$(calls)" ] || { echo "--due failed: $out"; exit 1; }
+# two due at one tick both start, though the first start's `claude --bg` reads its stdin to the end ($tmp/eat)
+touch "$tmp/eat"; entry 1000 ABC-80-a >> "$lf"; entry 1000 ABC-80-b >> "$lf"
+[ "$(run --launch --due | grep -c ': started ')" = 2 ] && [ "$(calls | grep -c .)" = 2 ] && [ "$(jq -r .name "$lf")" = ABC-81-later ] || { echo "two due at one tick didn't both start: $(cat "$lf")"; exit 1; }
+rm "$tmp/eat"
+# a start that fails stays queued, marked failed: reported once, not retried until --now
+touch "$tmp/bgfail"; entry 1000 ABC-82-bad >> "$lf"
+out=$(run --launch --due) && [[ $out == 'Scheduled start (due '*'): "ABC-82-bad" not started: Workspace not trusted (session-status --launch --now ABC-82-bad tries again, --cancel ABC-82-bad drops it)' ]] &&
+  : > "$tmp/calls" && [ -z "$(run --launch --due)" ] && [ -z "$(calls)" ] && run --launch --list | grep -q '^ABC-82-bad · build · .* · failed: Workspace not trusted$' &&
+  rm "$tmp/bgfail" && [ "$(run --launch --now ABC-82-bad)" = "started \"ABC-82-bad\" $started" ] && [ "$(jq -r .name "$lf")" = ABC-81-later ] || { echo "a failed start: $out / $(cat "$lf")"; exit 1; }
+# --after-reset: the account's weekly reset plus a minute; no reading: says to pass --at
+rc=0; out=$(run --launch ABC-83-reset --kind build --after-reset -- a b c 2>&1) || rc=$?
+[ "$rc" = 2 ] && [[ $out == "--after-reset: no weekly-limit reading for ~/cfg "*"--at 'HH:MM'"* ]] || { echo "--after-reset with no reading: $rc $out"; exit 1; }
+r=$(( $(date +%s) + 3600 )); mkdir -p "$ss/usage"; printf '95\t%s\n' "$r" > "$ss/usage/cfg"
+[[ $(run --launch ABC-83-reset --kind build --after-reset a b c) == 'scheduled "ABC-83-reset" · build · '*" · after ~/cfg's weekly reset: a running watcher"* ]] &&
+  [ "$(jq -r 'select(.name == "ABC-83-reset") | .due' "$lf")" = $(( r + 60 )) ] &&
+  run --launch ABC-84-reset --kind build --after-reset '~/cfg' -- a b c >/dev/null && [ "$(jq -r 'select(.name == "ABC-84-reset") | .due' "$lf")" = $(( r + 60 )) ] || { echo "--after-reset failed: $(cat "$lf")"; exit 1; }
+rc=0; run --launch ABC-85-reset --kind build --after-reset /nope -- a b c >/dev/null 2>&1 || rc=$?; [ "$rc" = 2 ] || { echo "--after-reset of an unknown account exited $rc"; exit 1; }
+# an account and two texts: refused, the account isn't taken for WHAT
+rc=0; run --launch ABC-85-reset --kind build --after-reset '~/cfg' a b >/dev/null 2>&1 || rc=$?; [ "$rc" = 2 ] && ! grep -q ABC-85 "$lf" || { echo "--after-reset ACCOUNT with two texts exited $rc"; exit 1; }
+# the watcher starts a due one at its next tick and wakes with the result
+run --changes >/dev/null; entry 1000 ABC-86-watch > "$lf"; : > "$tmp/calls"
+out=$(SESSION_STATUS_TICK_S=1 run --watch --every 2 2>/dev/null) && [[ $out == 'Scheduled start (due '*"): started \"ABC-86-watch\" $started" ]] && [ ! -s "$lf" ] || { echo "--watch didn't start a due one: $out"; exit 1; }
+# someone else's ticket: --kind's exit 3, nothing started, the ask's run line names --launch; a queued one stays, and
+# --now NAME --anyway is its start anyway
+printf '#!/bin/sh\n[ "$1" = owner ] && printf "%%s\\tother\\n" "$2" || exit 2\n' > "$root/.claude/session-status-adapter"; chmod +x "$root/.claude/session-status-adapter"
+: > "$tmp/calls"; rc=0; out=$(run --launch ABC-7-fix --kind build -- a b c 2>"$tmp/err") || rc=$?
+[ "$rc" = 3 ] && [ -z "$out" ] && [ -z "$(calls)" ] && [[ $(tail -1 "$tmp/err") == *"run: session-status --launch ABC-7-fix --kind build --anyway -- '<the same three texts>'" ]] &&
+  [ "$(run --launch ABC-7-fix --kind build --anyway -- a b c 2>/dev/null)" = "started \"ABC-7-fix\" $started" ] || { echo "another's ticket: rc=$rc $out $(cat "$tmp/err")"; exit 1; }
+: > "$tmp/calls"; entry 1000 ABC-7-fix > "$lf"; out=$(run --launch --due)
+[[ $out == *'"ABC-7-fix" not started: queue the ask (ask_approval: "ABC-7: assigned to someone else'*'on start anyway, run: session-status --launch --now ABC-7-fix --anyway (session-status '* ]] && [ -z "$(calls)" ] &&
+  [ "$(run --launch --now ABC-7-fix --anyway 2>/dev/null)" = "started \"ABC-7-fix\" $started" ] && [ ! -s "$lf" ] || { echo "another's ticket, scheduled: $out"; exit 1; }
+fi
+
 if section link; then
 # --link (features/remote.md, Links): two coordinators under different accounts (alpha, GitHub alice; beta, bob), each
 # with its own state, exchange an ask and an answer through a bare repo standing in for GitHub; the refusals; the

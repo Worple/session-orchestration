@@ -536,7 +536,7 @@ config() {
 
 # The coordinator pane's section slugs (hooks/register.tsx sectionSlug: a title, lowercase, its "(…)" dropped), and
 # the on-you ones, which are never hidden.
-PANE_SLUGS=" waiting-on-you decisions needs-action in-review working landing idle other-sessions leftovers notices stale-prompts stale other-projects pending resolved actions moved waits-on-you you-wait-on new-for-you worked-on tasks sent report-pages "
+PANE_SLUGS=" waiting-on-you decisions needs-action in-review working landing idle other-sessions leftovers notices stale-prompts stale other-projects pending resolved actions moved waits-on-you you-wait-on new-for-you worked-on tasks sent report-pages scheduled-starts "
 PANE_ON_YOU=" waiting-on-you decisions needs-action "
 # pane_sections: config pane.sections, from the project's person file only (a per-project, per-person key), as one
 # JSON object of its valid entries.
@@ -827,12 +827,15 @@ fi
 
 # dayfmt YYYY-MM-DD FORMAT [±N]: that day (local midnight), N days later or earlier, in date's FORMAT; fails on a
 # date that doesn't exist. epoch YYYY-MM-DD: its local midnight in epoch seconds. epochfmt SECONDS FORMAT: that
-# moment, local time, in date's FORMAT.
+# moment, local time, in date's FORMAT. at_epoch 'YYYY-MM-DD HH:MM': that local minute in epoch seconds; fails on one
+# that doesn't exist.
 if date -d @0 +%s >/dev/null 2>&1; then
   dayfmt() { date -d "$1 ${3:-+0} days" +"$2" 2>/dev/null; }
   epochfmt() { date -d "@$1" +"$2"; }
+  at_epoch() { local e; e=$(date -d "$1" +%s 2>/dev/null) && [ "$(epochfmt "$e" '%F %H:%M')" = "$1" ] && echo "$e"; }
 else
   dayfmt() { date -j -v"${3:-+0}"d -f '%F %T' "$1 00:00:00" +"$2" 2>/dev/null; }
   epochfmt() { date -r "$1" +"$2"; }
+  at_epoch() { local e; e=$(date -j -f '%F %T' "$1:00" +%s 2>/dev/null) && [ "$(epochfmt "$e" '%F %H:%M')" = "$1" ] && echo "$e"; }
 fi
 epoch() { dayfmt "$1" %s; }

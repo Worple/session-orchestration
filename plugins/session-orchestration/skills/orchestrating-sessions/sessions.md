@@ -90,9 +90,28 @@ From the project root, after confirming the owner. A live session gets a `SendMe
 closed, retired, too big, stuck on a prompt, a message for later, stopping one): [resuming.md](resuming.md). A task
 too big for one session: [plans.md](plans.md).
 
-A new task: `claude --bg --model <M> --effort <E> -n <KEY>-<short-desc> 'Work on <KEY>: <what>. Why: <who needs it,
-what it unblocks>. Done when: <the end state of the whole job and the check that proves it>. Keep working until done
-or blocked. When finished: reply with done and the check that proves it.'`
+A new task, from the release after one-command starts: `session-status --launch <KEY>-<short-desc> --kind <kind> --
+'<what>' '<who needs it, what it unblocks>' '<the end state of the whole job and the check that proves it>'`, as its
+own call. It runs `--kind` (below), builds the brief, adds "Read <memory file> first." when CLAUDE.md names one,
+starts the session and prints `started "NAME" (ID8) · KIND M/E`. Exit 3 or 2: nothing started, read on. Not for a
+review or a coordinator start (their own first prompts: Owners, [handover.md](handover.md)), nor in Desktop with
+`start.sidebar` on (it runs `claude --bg`, never `start_session`: start that one by hand, below). A started session
+needs no "started" line in your handoff file: the status lists it and `--owner` gives its first prompt.
+
+**Later, not now**: add `--at 'HH:MM'` (today, tomorrow when that is past), `--at 'YYYY-MM-DD HH:MM'` or
+`--after-reset [ACCOUNT]` (a minute after that account's weekly limit resets; ACCOUNT is its config dir, default
+yours) before the `--`. It
+prints `scheduled …` and starts nothing: a running watcher starts it within a minute of its time and wakes you with
+`Scheduled start (due …): started …`, or with why it didn't (then it stays queued, marked failed, until you run
+`session-status --launch --now NAME` or `--cancel NAME`). The queue is yours (a cache file), listed under `Scheduled
+starts` on the pane and by `session-status --launch --list`, and a successor's watcher starts what you left. No
+watcher running (the project's own, not a sub's `--watch KEY`), nothing starts: arm one. It starts under the
+watcher's account, whichever account's reset it waited for.
+
+What it runs, and what you write by hand for a start it doesn't cover: `claude --bg --model <M> --effort <E> -n
+<KEY>-<short-desc> 'Work on <KEY>: <what>. Why: <who needs it, what it unblocks>. Done when: <the end state of the
+whole job and the check that proves it>. Keep working until done or blocked. When finished: reply with done and the
+check that proves it.'`
 - Its closing line stays, for every kind: Sonnet and Haiku sessions (mechanical, scan) skip a done report the brief
   doesn't ask for, and you end up polling and nudging them.
 - `--model`/`--effort`: size the task into a `plan.models` kind with the `choosing-model-effort` skill, run
@@ -103,8 +122,8 @@ or blocked. When finished: reply with done and the check that proves it.'`
 - **`--kind` exits 3, printing nothing: not yours to start** (ownership on start, from the release after it: `--kind`
   runs `session-status --claim` on the key the name starts with). The task is assigned to someone else, or a branch on
   origin naming it has another person's commits. Don't start: queue the ask its stderr names (`ask_approval`: "KEY:
-  REASON: start anyway on a separate branch / leave it"). On "start anyway", run `--kind` again with `--anyway` after
-  the name, and brief the session to work on a new branch of its own; never take over, push to, rebase or force-push
+  REASON: start anyway on a separate branch / leave it"). On "start anyway", run the line it names (`--kind` or
+  `--launch` again with `--anyway`, `--launch --now NAME --anyway` for a scheduled one), and brief the session to work on a new branch of its own; never take over, push to, rebase or force-push
   another person's branch. An unassigned task (the adapter's `owner` says `none`) is assigned to the user as `--kind`
   runs (`claim`), before `claude --bg`: the start is their yes to it, by `start.mode` or their own request; a start
   dropped after that leaves it assigned, so unassign it in the tracker. A GitHub issue (`#N`) can't lead a session

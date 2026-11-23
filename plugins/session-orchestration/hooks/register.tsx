@@ -303,7 +303,7 @@ export const USAGE_EXTRA = ['Stop', 'Run handed','Copy handed', 'Dismiss handed'
 export const SENT = 'Sent (session-status --inbox --sent)'
 // The status footer of published report pages (features/report-artifacts.md): each card links its page.
 export const REPORT_PAGES = 'Report pages'
-export const USAGE_SECTIONS = ['Waiting on you', 'Decisions', 'Needs action', 'In review', 'Working', 'Landing', 'Idle', 'Notices', 'Actions', 'Pending', 'Stale prompts', 'Stale', 'Resolved (idle a week)', 'Other projects', 'Other sessions', 'Leftovers (task finished)', 'Moved', 'Waits on you', 'You wait on', 'New for you', 'Worked on', 'Tasks', 'Sent (session-status --inbox --sent)', 'Report pages']
+export const USAGE_SECTIONS = ['Waiting on you', 'Decisions', 'Needs action', 'In review', 'Working', 'Landing', 'Idle', 'Notices', 'Actions', 'Pending', 'Stale prompts', 'Stale', 'Resolved (idle a week)', 'Other projects', 'Other sessions', 'Leftovers (task finished)', 'Moved', 'Waits on you', 'You wait on', 'New for you', 'Worked on', 'Tasks', 'Sent (session-status --inbox --sent)', 'Report pages', 'Scheduled starts (--launch --cancel)']
 // Its slug: the title, lowercase, its "(…)" dropped; the ones config pane.sections keeps (lib.sh PANE_SLUGS).
 export const sectionSlug = (title: string) => usageName(title.replace(/\s*\(.*$/, ''))
 const ON_YOU = ['waiting-on-you', 'decisions', 'needs-action']
