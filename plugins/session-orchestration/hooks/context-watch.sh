@@ -154,6 +154,9 @@ texts() {   # where the handoff goes, the -prev-K rename, whom to tell, and (chu
   printf -v ss %q "${here%/hooks}/skills/orchestrating-sessions/session-status"
   # The exceptions come first: a coordinator's --escalate is refused once --self has superseded the session.
   local hs=" Then, unless this handoff makes no progress on the one your first prompt's \`Supersedes:\` continued$([ "$kind" != chunk ] || echo " or you are past 2× your brief's est"), hand yourself over: \`$ss --handover --self -- '<next step>'\`, and do what it prints (rename yourself, end your turn); the coordinator needs no message. In those cases, or when that command fails, don't hand over: message it \"handoff ready: $key$([ "$kind" != chunk ] || echo " c$n")\" with why (it decides whether to escalate)."
+  # A handoff naming only files and lines makes the successor re-read them, up to the mark again with nothing edited.
+  # Conditional: the hook can't tell a task that changes nothing (research, a plan awaiting sign-off). Indented: the handoff files are parsed by their `## ` lines.
+  edits=; case $kind in chunk|task) edits=" If your task changes files and you have edited none yet, write the edits you decided on into it as text (per file, the text to replace and the new text, indented so no line of it starts with \`## \`): your successor applies them instead of re-reading what you read." ;; esac
   case $kind in
     chunk) where="\`## c$n: handoff ${sid:0:8}\` (your session id's first 8 characters) appended to $key-build.md in the replies folder"
            tell=$hs ;;
@@ -193,8 +196,8 @@ texts
 k=$(( ctx / 1000 ))K
 if (( ctx > hard )); then
   claim "$s.hard" || exit 0; touch "$s.soft"
-  say "Context is at $k, past the hard stop. Stop now: start nothing else, write the handoff ($where) from what's on disk.$tell Then end your turn."
+  say "Context is at $k, past the hard stop. Stop now: start nothing else, write the handoff ($where) from what's on disk.$edits$tell Then end your turn."
 elif (( ctx > at )) && claim "$s.soft"; then
-  say "Context is at $k: hand off. Reach your stop point: finish the current edit, commit, run the checks, and start no new step. Write the handoff ($where).$tell Then end your turn."
+  say "Context is at $k: hand off. Reach your stop point: finish the current edit, commit, run the checks, and start no new step. Write the handoff ($where).$edits$tell Then end your turn."
 fi
 exit 0

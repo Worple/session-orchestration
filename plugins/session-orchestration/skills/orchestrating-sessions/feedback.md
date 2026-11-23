@@ -90,7 +90,8 @@ footer's `— apply?` is then answered already.
 
 1. `feedback mode` names the mode; `feedback list --plugin` the open cases (never the project's); `feedback repo` the upstream repo (REPO below)
    and `feedback label` an issue's label (LABEL). Write both into the `gh` commands as text: an approval hook can't
-   check a `gh` command built with `$(…)`. Pick the batch: one case each, or related ones together.
+   check a `gh` command built with `$(…)`. Pick the batch: one case each, or related ones together; a case that asks for
+   several separate changes is split first ([features/plugin-coordinator.md](../../features/plugin-coordinator.md), Batches).
 2. Search upstream first: `gh search issues --repo REPO --state open '<title words>'` and the same for
    `gh search prs`. A case already filed: mark it `sent <that url>`, and add a comment there only on the user's yes.
    The exception: a case whose evidence is `upstream: <URL>` came from that issue (features/plugin-coordinator.md),

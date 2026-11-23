@@ -57,7 +57,8 @@ message. A chunk session's report goes to `<TASK>-cN-report.md`, and one that wo
 round of questions, a log entry) updates the status report at its top in the same write: a reader takes the top as
 the state. Keep it to the report and the newest `## Handoff` (under ~8 KB): every successor reads it. Give the
 handoff what the next step needs from what you read (the `file:line` spots, what each open review comment asks, the
-fix decided, a line each, within the ~8 KB), so your successor starts from it rather than reading the same code and
+fix decided, a line each, within the ~8 KB; with no file edited yet, the decided edits' own text, which may pass it:
+Handing off at your context mark), so your successor starts from it rather than reading the same code and
 threads again. When you write
 a new handoff, move the older one and anything past (drafts, settled decisions, logs) to `<TASK>-archive.md` beside
 it, newest first, and name that file in the handoff.
@@ -201,7 +202,10 @@ the file's path. That is a plain-text ask, not a plan approval, so a relay can a
 ## Handing off at your context mark
 
 The context-watch hook's soft line says how (the handoff heading, the command): write the handoff, then hand yourself
-over with `session-status --handover --self -- '<next step>'`, coordinator or not. It starts your successor under
+over with `session-status --handover --self -- '<next step>'`, coordinator or not. On a task that changes
+files, with none edited yet, the handoff holds the edits you decided on as text (per file, the text to replace and the
+new text, indented so no line of it starts with `## `): a successor given only files and lines re-reads them and
+reaches the mark again. The hard line asks the same. `--handover --self` starts your successor under
 your name (with no `--model`/`--effort`, on your plan row's model and effort, else yours); its last line names your
 `-prev-K` rename; then end your turn. You are stopped once idle. Send no message: the coordinator sees the successor
 in its status, and approvals relayed to you still verify for it. Don't hand over when this handoff makes no progress on

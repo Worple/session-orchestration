@@ -243,14 +243,15 @@ watcher or opened the pane), `Session task: KEY review` a review (no messages), 
 `Work on KEY` start a task.
 
 - **Soft** (past `handoff.at.<kind>`): once, "hand off": reach your stop point, write the handoff (a chunk: `## cN: handoff ID8`
-  appended to `KEY-build.md`; a task: `## Handoff` in its replies file), then hand itself over with
+  appended to `KEY-build.md`; a task: `## Handoff` in its replies file; either, when its task changes files
+  and it has edited none yet, with the edits it decided on as text), then hand itself over with
   `session-status --handover --self` (coordinator or not), rename itself to the `-prev-K` name it prints and end the
   turn. It doesn't hand over, and messages the coordinator `handoff ready: KEY[ cN]` instead, when the handoff makes no
   progress or a chunk is past 2× its est (the coordinator may escalate), and when `--self` fails. A coordinator is told to write its handover note and start its successor with
   `session-status --successor`, then follow what it prints ([handover.md](handover.md)): it hands itself over without the
   user, and the coordinator inbox holds what workers send meanwhile.
 - **Hard** (past `handoff.hard_after` further, never closer than `handoff.stop_room` to the compaction): once, "stop now",
-  from what's on disk.
+  from what's on disk, and a task or chunk's decided edits as the soft line asks.
 - **Window mismatch**: the thresholds assume `compact.window`. The session's actual window is `$CLAUDE_CODE_AUTO_COMPACT_WINDOW`,
   else `autoCompactWindow` in the project's `.claude/settings.local.json`, its `.claude/settings.json`, then the user's
   `settings.json` (SOURCE `env`, `project`, `settings`); when it differs, one line (`This session's window is W from SOURCE; expected X.`)
