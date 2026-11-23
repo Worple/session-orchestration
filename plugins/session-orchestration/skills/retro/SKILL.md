@@ -218,7 +218,8 @@ and no heading.
      cases, most seen first) and offers the apply (feedback.md, "Applying"). With a plugin coordinator (`feedback
      coordinator` exits other than 2), it names them as that coordinator's instead, with no offer.
 
-   Then `python3 -I retro.py html <R>/retro-<scope>-<N>.md <R>/retro-<scope>-<N>.html`. When `session-status
+   Then `python3 -I retro.py html <R>/retro-<scope>-<N>.md <R>/retro-<scope>-<N>.html`, `open` the `.html` once,
+   and say in step 6's message whether it opened (`opened: yes` or `opened: no`). When `session-status
    --config features.report_artifacts` lists `retro`, publish the `.md` as a private page by
    [report-artifacts.md](../../features/report-artifacts.md) and pass its link in step 6's message (`reply`'s `artifact`).
    A published page always gets its own message, even when nobody would get it (`reply` then queues it) and under

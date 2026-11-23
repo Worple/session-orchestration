@@ -33,7 +33,9 @@ Every coordinator session, before anything else; the user shouldn't have to ask.
 2. Call `open_pane`. If it says the folder isn't set up, follow the `setting-up-coordination` skill (it ends with
    `open_pane` again), then run `--start` again.
 3. When `--start` finishes (its completion notice; don't poll it), read its output: the status, the handoff file,
-   the last handover note, the replies written since, and one line per enabled feature. Then:
+   the last handover note, the replies written since, and one line per enabled feature. Its status is bounded (at
+   most 5 Leftovers and 5 Other sessions lines; the plain status command shows them all), and its approvals are
+   only the ones not relayed yet (`session-status --approvals` lists every live one). Then:
    - do each feature line's start step, and whatever the project's coordinator doc adds;
    - prune the handoff file against the status (Handoff file);
    - act on each unread coordinator inbox entry it lists, then mark it read (`session-status --inbox --read N`);
@@ -206,6 +208,9 @@ without asking the user: they signed in for it.
 - **Nor is a session's progress.** Tell the user what finished, what's blocked and what waits on them; a progress
   update a session sends anyway stays with you.
 - **Check a session's wording against the project docs before repeating it** to the user.
+- **Open a report a session wrote** (an HTML file, a page) only when its reply says `opened: no` or says nothing
+  about opening it: on `opened: yes` that session opened it already. Either way, give the user its path, and say it
+  is open only once one of you opened it.
 
 ## When to read what
 

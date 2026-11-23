@@ -68,6 +68,10 @@ threads again. When you write
 a new handoff, move the older one and anything past (drafts, settled decisions, logs) to `<TASK>-archive.md` beside
 it, newest first, and name that file in the handoff.
 
+**A report for the user to read** (an HTML file, a page): you open it, once, and your report names its path and
+says whether it opened (`opened: yes`, or `opened: no` when `open` failed or you couldn't run it); the coordinator
+opens it only on `opened: no`, or when the report doesn't say.
+
 **A report you send unasked:** only when you're done, blocked, a decision waits on the user, or a `handoff ready`
 (Handing off). Never a progress update ("batch 3 of 8 ready", "2 agents running"): the coordinator would pass it on
 as noise. `reply` without `to`. It tries this project's live coordinators, newest first, until

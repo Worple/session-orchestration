@@ -1055,6 +1055,12 @@ rm "$root/replies/coordinator-handover.md"; printf '## Handoff\nx\n## Log 11-03:
 grep -qx "## Replies written in the last day ($root/replies), newest first" <<<"$out" && ! grep -q 'ABC-48' <<<"$out" &&
   grep -qx '[0-9-]* [0-9:]*  ABC-49.md: ABC-49 · proj · done · last section: Log 11-03: merged' <<<"$out" ||
   { echo "--start, no handover: $out"; exit 1; }
+# --start keeps 5 lines of Other sessions and counts the rest; the plain status lists all 7.
+setacct cfg "$(for i in 1 2 3 4 5 6 7; do printf '%s,' "$(sess "c$i$i$i$i$i$i$i-2222-3333-4444-555555555555" "ABC-9$i-review" '' 1)"; done | sed 's/,$//')"
+out=$(run --start); o=$(sed -n '/^Other sessions:/,/^$/p' <<<"$out")
+[ "$(grep -c '^  "ABC-9' <<<"$o")" = 5 ] && grep -qxF "  (and 2 more: $here/session-status prints them all)" <<<"$o" &&
+  [ "$(run | grep -c '^  "ABC-9')" = 7 ] || { echo "--start, bounded Other sessions: $out"; exit 1; }
+setacct cfg ""
 rm "$root/replies/ABC-48.md" "$root/replies/ABC-49.md"
 # --start lists the failed sessions (ended while the background service was off) that still have an open task: the
 # owner of a status row (e1), or named by key in the handoff file (e2). Not one with no open task (e3), nor one a
@@ -1442,7 +1448,7 @@ setacct cfg "$(sess "$o" p-coordinator idle 1 interactive),$(sess "$x" 'New sess
   { as "$o" --successor || [ $? = 3 ]; } | grep -qF '"p-coordinator-next" (0b0b0b0b) runs already' &&
   ! as "$x" --await name --timeout 1 >/dev/null && as "$o" --await ready --timeout 2 | grep -q '^ready: "p-coordinator-next" (0b0b0b0b)' &&
   setacct cfg "$(sess "$o" p-coordinator-prev-1 idle 1 interactive),$(sess "$x" 'New session' idle 1 interactive)" &&
-  as "$x" --await name --timeout 2 | grep -q '^"p-coordinator" is free' && as "$o" --successor --done >/dev/null &&
+  { as "$x" --await name --timeout 2 || :; } | grep -qF '("p-coordinator" is free: call name_session with name p-coordinator first)' && as "$o" --successor --done >/dev/null &&
   out=$(CLAUDE_CODE_ENTRYPOINT=claude-desktop as "$x" --await done --timeout 2) &&
   grep -qF 'handover done: the old coordinator (0a0a0a0a, "p-coordinator-prev-1") keeps its row in the app'"'"'s sidebar' <<<"$out" &&
   grep -qF 'detach_session "self", since archiving it takes you too' <<<"$out" &&
@@ -1478,7 +1484,8 @@ setacct cfg "$(sess "$o" p-coordinator idle 1 interactive),$(sess "$x" p-coordin
 [ "$(as "$o" --await ready --timeout 1; echo $?)" = "$(printf -- '--await ready: nothing after 1s; check the other coordinator (session-status --activity) and arm it again or hand over by hand\n1')" ] ||
   { echo "--await ready before the successor's Start"; exit 1; }
 as "$x" --await name --timeout 1 >/dev/null && { echo "--await name while the old one holds the name"; exit 1; }
-as "$o" --await ready | grep -q '^ready: "p-coordinator-next" (0b0b0b0b) has finished its Start. Now: rename yourself' || { echo "--await ready"; exit 1; }
+as "$o" --await ready | grep -q '^ready: "p-coordinator-next" (0b0b0b0b) has finished its Start. Now stop your watcher (TaskStop), forward to the inbox what you got meanwhile, run `'"$here/session-status"' --successor --done`, then, last, rename yourself' ||
+  { echo "--await ready"; exit 1; }
 # A message meanwhile: the reply tool's backstop (--inbox-add) wakes the successor's wait; --start and --changes show it.
 [ "$(printf 'PROJ-1 · done\n# not a heading' | as "$z" --inbox-add "$o")" = "$root/replies/coordinator-inbox.md #1" ] &&
   printf 'second' | as "$z" --inbox-add --from 'w (12345678), forwarded' >/dev/null && { out=$(as "$x" --await name --timeout 5); [ $? = 3 ]; } &&
@@ -1553,12 +1560,20 @@ rf=$root/replies/p-fix-thing.md
   [ "$(printf 'x' | as "$z" --report-file "$z" 'fix login' 2>&1; echo $?)" = "$(printf 'key "fix login": letters, digits, . _ - only (a keyless task: its session name)\n2')" ] &&
   [ "$(printf '' | as "$z" --report-file "$z" 2>/dev/null; echo $?)" = 2 ] || { echo "--report-file without a name or a report"; exit 1; }
 rm "$rf"
-[ "$(as "$o" --successor --done; echo $?)" = "$(printf 'you still hold "p-coordinator": rename first (name_session with what --prev-name prints)\n3')" ] &&
-  ! as "$o" --await renamed --timeout 1 >/dev/null || { echo "--successor --done or --await renamed before the rename"; exit 1; }
+# The old one, still holding NAME, writes the done stamp once NAME-next finished its Start (its ready stamp), then
+# renames itself last; with no ready stamp, nothing is written.
+setacct cfg "$(sess "$o" p-coordinator idle 1 interactive),$(sess "$x" p-coordinator-next idle 1 interactive)"
+hd=$tmp/.cache/session-status/handover; mv "$hd/p-coordinator.ready" "$hd/ready.bak"
+[ "$(as "$o" --successor --done; echo $?)" = "$(printf 'no live "p-coordinator-next" has finished its Start (`%s --await ready` wakes when one has): no done stamp written\n3' "$here/session-status")" ] &&
+  [ ! -e "$hd/p-coordinator.done" ] && mv "$hd/ready.bak" "$hd/p-coordinator.ready" &&
+  as "$o" --successor --done | grep -q '^done: now, last, rename yourself (name_session with the name `' && [ "$(cat "$hd/p-coordinator.done")" = "$o" ] &&
+  rm "$hd/p-coordinator.done" && ! as "$o" --await renamed --timeout 1 >/dev/null || { echo "--successor --done or --await renamed before the rename"; exit 1; }
+# An old one on the earlier steps renames first, then waits (--await renamed) and writes the stamp after.
 setacct cfg "$(sess "$o" p-coordinator-prev-1 busy 1 interactive),$(sess "$x" p-coordinator-next idle 1 interactive)"
 as "$o" --await renamed | grep -q '^renamed: you are "p-coordinator-prev-1". Now stop your watcher' || { echo "--await renamed"; exit 1; }
 CLAUDE_CODE_ENTRYPOINT=claude-desktop as "$o" --await renamed | grep -qF 'detach each session you started other than your successor' && ! CLAUDE_CODE_ENTRYPOINT=cli as "$o" --await renamed | grep -q 'detach each' || { echo "--await renamed in Desktop"; exit 1; }
-[ "$(as "$x" --name-check p-coordinator)" = "free next" ] && as "$x" --await name | grep -qF '"p-coordinator" is free: call name_session with name p-coordinator' &&
+[ "$(as "$x" --name-check p-coordinator)" = "free next" ] && { out=$(as "$x" --await name --timeout 1); [ $? = 1 ]; } &&
+  grep -qF '("p-coordinator" is free: call name_session with name p-coordinator first)' <<<"$out" &&
   [ "$(as "$x" --successor --done; echo $?)" = "$(printf '"p-coordinator-next" isn'\''t a renamed old coordinator (NAME-prev-K): no done stamp written\n2')" ] &&
   as "$o" --successor --done | grep -q '^done: ' && [ "$(cat "$tmp/.cache/session-status/handover/p-coordinator.done")" = "$o" ] ||
   { echo "--await name after the rename, or --successor --done"; exit 1; }
@@ -1568,6 +1583,14 @@ setacct cfg "$(sess "$o" p-coordinator-prev-1 idle 1 interactive),$(sess "$x" p-
 out=$(as "$x" --await done --timeout 2)
 [ "$out" = "handover done: the old coordinator (0a0a0a0a) has no terminal: left running; tell the user to close it." ] &&
   [ ! -e "$tmp/.cache/session-status/handover/p-coordinator.done" ] || { echo "--await done: $out"; exit 1; }
+# One wake for the successor: its --await name, once NAME is free and the old one idle with its stamp, closes the old
+# one's terminal and owes only the name_session. NAME.next stays: --name-check knows a Desktop successor only by it.
+echo "$x" > "$hd/p-coordinator.next"; echo "$o" > "$hd/p-coordinator.done"; setacct cfg "$(sess "$o" p-coordinator-prev-1 idle 1 interactive),$(sess "$x" 'New session' idle 1 interactive)"
+out=$(as "$x" --await name --timeout 2)
+[ "$out" = "handover done: the old coordinator (0a0a0a0a) has no terminal: left running; tell the user to close it. Now call name_session with name p-coordinator." ] &&
+  [ ! -e "$hd/p-coordinator.done" ] && [ "$(as "$x" --name-check p-coordinator)" = "free next" ] ||
+  { echo "--await name through done: $out"; exit 1; }
+rm -f "$hd/p-coordinator.next"
 # A backgrounded old coordinator, done (no longer listed): its tab is the interactive `claude -n NAME` it left, never
 # a listed session's pid; a `claude attach` to it wins; two unlisted `-n NAME` tabs: neither is closed.
 mkdir -p "$tmp/fakeps"; printf '%s\n' '#!/usr/bin/env bash' 'case "$*" in' "'-axo pid=,args=') cat \"\${0%/*}/list\" ;;" \
@@ -2048,7 +2071,7 @@ echo '{"features":{"retro":true},"retro":{"scope":"both","schedule":"mon 12:00"}
 # pane.sections: from the project's person file only, bad entries dropped with a warning, hidden read as line for what
 # needs you; --pane-section writes it there (made when missing), refuses hidden for those and a committed file; the
 # repo file and the person-wide file can't set it.
-pss() { (cd "$1" && shift && XDG_CONFIG_HOME=$tmp/xdg "$here/session-status" "$@"); }
+pss() { (cd "$1" && shift && HOME=$tmp XDG_STATE_HOME=$tmp/state XDG_CONFIG_HOME=$tmp/xdg "$here/session-status" "$@"); }
 # lib.sh PANE_SLUGS is register.tsx USAGE_SECTIONS' slugs (sectionSlug), so the two can't drift.
 want=$(grep '^export const USAGE_SECTIONS = ' "$here/../../hooks/register.tsx" | grep -o "'[^']*'" | tr -d "'" |
   sed -E 's/ *\(.*$//' | tr 'A-Z' 'a-z' | sed -E 's/[^a-z0-9]+/-/g; s/^-|-$//g' | sort | tr '\n' ' ')
@@ -3040,7 +3063,8 @@ ABC-11: Yes, merge ABC-11. Asked: Merge PR #5? · 21h left · not relayed
 ABC-11: No. Asked: Merge PR #5? · 20h left · not relayed
 ABC-31: Yes. Asked: Push ABC-31? · 19h left · relayed: push ABC-31 to w3'
 [ "$(ap --approvals)" = "$want" ] || { echo "--approvals: $(ap --approvals)"; exit 1; }
-out=$(ap --start) || :; [[ $out == *$'\n## Approvals (relay one: session-status --relay KEY ACTION)\n'"$want"$'\n'* ]] || { echo "--start, approvals: $out"; exit 1; }
+out=$(ap --start) || :; [[ $out == *$'\n## Approvals not relayed yet (relay one: session-status --relay KEY ACTION)\n'"$(grep -v ' · relayed: ' <<<"$want")"$'\n(2 relayed already: session-status --approvals lists them)\n'* ]] ||
+  { echo "--start, approvals: $out"; exit 1; }
 # The newest live answer, an answer in the predecessor: verified, then relayed as is.
 out=$(ap --relay ABC-11 'merge PR #5' 2>"$tmp/err") && [ "$out" = "$(blk 'ABC-11: Yes, merge ABC-11. Asked: Merge PR #5?' 'merge PR #5' "$cid")" ] &&
   grep -q 'ABC-11 has 1 older live answer' "$tmp/err" || { echo "--relay: $out $(cat "$tmp/err")"; exit 1; }

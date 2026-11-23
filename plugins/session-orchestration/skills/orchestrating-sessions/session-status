@@ -945,14 +945,18 @@ fi
 #                                 its own tab is titled NAME first (title_tty), so a NAME-next title left from its
 #                                 own start as a successor doesn't pass for a successor's open tab; refused
 #                                 (exit 3) while <replies>/coordinator-handover.md is missing or older than its start
-#   --await ready                 the old one waits until NAME-next has finished its Start (handover/NAME.ready)
-#   --await renamed               the old one, after name_session NAME-prev-K: waits until the listing shows the new name
-#   --await name                  the successor, at the end of its Start: writes NAME.ready, waits until no other live
-#                                 session holds NAME (the old one renamed itself)
-#   --successor --done            the old one, renamed and done forwarding: writes NAME.done
+#   --await ready                 the old one waits until NAME-next has finished its Start (handover/NAME.ready); then
+#                                 it forwards, runs --successor --done and renames itself (name_session) last
+#   --await renamed               the earlier steps: the old one, after name_session NAME-prev-K, waits until the
+#                                 listing shows the new name
+#   --await name                  the successor, at the end of its Start, its one wait: writes NAME.ready, waits until
+#                                 no other live session holds NAME (the old one renamed itself), then goes on as --await
+#                                 done and ends by telling it to call name_session NAME
+#   --successor --done            the old one, done forwarding, still NAME once NAME.ready names a live NAME-next (or
+#                                 renamed, the earlier steps): writes NAME.done
 #   --successor --started NAME    a Desktop successor, first thing: writes its own id to NAME.next, so it counts as
 #                                 NAME-next whatever name start_session's title gave it
-#   --await done                  the successor, named NAME: once NAME.done is there and the old session idle, closes
+#   --await done                  the successor (the earlier steps: named NAME): once NAME.done is there and the old session idle, closes
 #                                 the old one's terminal (close_tty: its tab, or only its split beside others); in
 #                                 Desktop it says how to detach from the old one, take its pin and archive it
 #   --name-check NAME             `free|held next|other [HOLDER_ID]`: whether a live session other than the caller holds
@@ -1023,8 +1027,14 @@ if [ "${1:-}" = --successor ]; then
   [ -n "$id" ] && [ -n "$me" ] || { echo "this session isn't listed (CLAUDE_CODE_SESSION_ID ${id:-unset}): hand over by hand"; exit 2; }
   n=$(ho_base "$me"); mkdir -p "$HO_DIR"
   if [ -n "$fin" ]; then
-    [ "$me" != "$n" ] || { echo "you still hold \"$n\": rename first (name_session with what --prev-name prints)"; exit 3; }
-    # the done stamp names the session whose terminal the successor closes: only the renamed old one writes it
+    # the done stamp names the session whose terminal the successor closes: only the old one writes it, renamed
+    # (NAME-prev-K), or still NAME once its NAME-next has finished its Start (it renames itself last)
+    if [ "$me" = "$n" ]; then s=$(cat "$HO_DIR/$n.ready" 2>/dev/null)
+      [ -n "$s" ] && [ "$(ho_name "$s")" = "$n-next" ] ||
+        { echo "no live \"$n-next\" has finished its Start (\`$SELF --await ready\` wakes when one has): no done stamp written"; exit 3; }
+      echo "$id" > "$HO_DIR/$n.done"
+      echo "done: now, last, rename yourself (name_session with the name \`$SELF --prev-name --title\` prints; it also titles your tab) and end your turn; the successor takes \"$n\" and closes this session's terminal once it is idle."; exit 0
+    fi
     [[ $me =~ -prev-[0-9]+$ ]] || { echo "\"$me\" isn't a renamed old coordinator (NAME-prev-K): no done stamp written"; exit 2; }
     echo "$id" > "$HO_DIR/$n.done"
     echo "done: end your turn; the successor closes this session's terminal once it is idle (forward anything still arriving first)."; exit 0
@@ -1096,29 +1106,31 @@ if [ "${1:-}" = --await ]; then
   n=$(ho_base "$me"); mkdir -p "$HO_DIR"
   [ "$what" = ready ] || [ "$what" = renamed ] || [ "$me" != "$n" ] || [ "$what" = done ] || { echo "you are \"$me\", not \"$n-next\": no handover to wait on"; exit 2; }
   [ "$what" != name ] || echo "$id" > "$HO_DIR/$n.ready"
+  # aw: the step armed (a successor's `name` goes on to `done` once NAME is free); nm: the name_session line it then owes
+  aw=$what nm=
+  # Desktop archives a session's idle side sessions with it, and only the session that started one can detach it
+  dk=; [[ ${CLAUDE_CODE_ENTRYPOINT:-} != claude-desktop* ]] || dk=" detach each session you started other than your successor, so archiving you leaves it (mcp__ccd_session_mgmt__list_sessions {\"linked\": true} lists them, then mcp__ccd_session_mgmt__detach_session; one that refuses: name it in an inbox entry for the user),"
   while :; do
     if [ -z "$live" ]; then :   # this poll's listing failed: nothing is known, wait for the next
     elif [ "$what" != ready ] && [ "$what" != renamed ] && u=$(inbox_unread) && [ -n "$u" ]; then
       # exit 3 and a first line saying so: a successor took an exit-0 inbox wake for the step being done
-      echo "NOT DONE: --await $what woke on the inbox, not on its step. Act on each entry, mark it read (\`$SELF --inbox --read N\`), then arm \`$SELF --await $what\` again (Bash, run_in_background):"
+      echo "NOT DONE: --await $aw woke on the inbox, not on its step.${nm:+$nm First:} Act on each entry, mark it read (\`$SELF --inbox --read N\`), then arm \`$SELF --await $aw\` again (Bash, run_in_background):"
       echo "$u"; exit 3
     else case $what in
       ready) s=$(cat "$HO_DIR/$n.ready" 2>/dev/null)
         if [ -n "$s" ] && [ "$(ho_name "$s")" = "$n-next" ]; then
-          echo "ready: \"$n-next\" (${s:0:8}) has finished its Start. Now: rename yourself (name_session with the name \`$SELF --prev-name --title\` prints; it also titles your tab), arm \`$SELF --await renamed\` (Bash, run_in_background) and end your turn."
+          echo "ready: \"$n-next\" (${s:0:8}) has finished its Start. Now stop your watcher (TaskStop), forward to the inbox what you got meanwhile,$dk run \`$SELF --successor --done\`, then, last, rename yourself (name_session with the name \`$SELF --prev-name --title\` prints; it also titles your tab) and end your turn."
           exit 0
         fi ;;
       # the rename lands when the turn ends, and nothing else would wake the old one after it
       renamed) r=$(ho_field 1 "$id" 2)
-        # Desktop archives a session's idle side sessions with it, and only the session that started one can detach it
-        dk=; [[ ${CLAUDE_CODE_ENTRYPOINT:-} != claude-desktop* ]] || dk=" detach each session you started other than your successor, so archiving you leaves it (mcp__ccd_session_mgmt__list_sessions {\"linked\": true} lists them, then mcp__ccd_session_mgmt__detach_session; one that refuses: name it in an inbox entry for the user),"
         [ -z "$r" ] || [ "$r" = "$n" ] || { echo "renamed: you are \"$r\". Now stop your watcher (TaskStop), forward to the inbox what you got meanwhile,$dk then \`$SELF --successor --done\` and end your turn."; exit 0; } ;;
       name) h=$(awk -F'\t' -v me="$id" -v n="$n" '$1 != me && $2 == n { print $1; exit }' <<<"$live")
         # its tab drops the NAME-next title, or its own successor's open_view would select this tab
-        [ -n "$h" ] || { load_terminal; ho_retitle "$id" "$n"
-          echo "\"$n\" is free: call name_session with name $n, then arm \`$SELF --await done\` (Bash, run_in_background)."; exit 0; } ;;
+        # then on to `done` in the same wait: the old one wrote its stamp before renaming (an older one's comes after)
+        [ -n "$h" ] || { load_terminal; ho_retitle "$id" "$n"; what=done nm=" Now call name_session with name $n."; continue; } ;;
       done) o=$(cat "$HO_DIR/$n.done" 2>/dev/null); st=; [ -z "$o" ] || st=$(ho_field 1 "$o" 8)
-        if [ "$o" = "$id" ]; then echo "the done stamp names you (${id:0:8}), not the old coordinator: nothing closed"; exit 2
+        if [ "$o" = "$id" ]; then echo "the done stamp names you (${id:0:8}), not the old coordinator: nothing closed.$nm"; exit 2
         elif [ -n "$o" ] && [ "$st" != busy ] && [ "$st" != waiting ]; then
           # a background one (or one no longer listed) shows in the tab it was moved out of, not its own pid's
           t=; if [[ ${CLAUDE_CODE_ENTRYPOINT:-} == claude-desktop* ]]; then
@@ -1140,10 +1152,11 @@ if [ "${1:-}" = --await ]; then
           elif [ -z "$(ho_field 1 "$o" 1)" ]; then msg="the old coordinator (${o:0:8}) has exited: nothing to close"
           else msg="the old coordinator (${o:0:8}) has no terminal: left running; tell the user to close it"
           fi
-          rm -f "$HO_DIR/$n.ready" "$HO_DIR/$n.done" "$HO_DIR/$n.next"; echo "handover done: $msg."; exit 0
+          # NAME.next stays until name_session lands: --name-check knows a Desktop successor only by it (--successor clears it)
+          rm -f "$HO_DIR/$n.ready" "$HO_DIR/$n.done"; [ -n "$nm" ] || rm -f "$HO_DIR/$n.next"; echo "handover done: $msg.$nm"; exit 0
         fi ;;
     esac; fi
-    [ "$(date +%s)" -lt "$end" ] || { echo "--await $what: nothing after ${tmo}s; check the other coordinator (session-status --activity) and arm it again or hand over by hand"; exit 1; }
+    [ "$(date +%s)" -lt "$end" ] || { echo "--await $aw: nothing after ${tmo}s${nm:+ (\"$n\" is free: call name_session with name $n first)}; check the other coordinator (session-status --activity) and arm it again or hand over by hand"; exit 1; }
     sleep "$every"; ho_live 2>/dev/null || live=
   done
 fi
@@ -1232,7 +1245,12 @@ if [ "${1:-}" = --start ]; then
   # an older setup's layout made current first, so the reads below see the moved files; shown when it did or asks something
   mg=$("$SELF" --init --migrate 2>&1) || :
   ! grep -qE '^\[|failed' <<<"$mg" || printf '## Migration (answer an ask: session-status --init --migrate --apply=ID or --decline=ID)\n%s\n\n' "$mg"
-  echo '## Status';"$SELF" "$@" | tee "$TMP/rows"; rc=${PIPESTATUS[0]}
+  # Bounded: every task row and actionable footer, but at most 5 lines of Leftovers (the watcher stops those) and of
+  # Other sessions; the plain status prints them whole.
+  echo '## Status';"$SELF" "$@" | tee "$TMP/rows" | awk -v cmd="$SELF${*:+ $*}" '
+    function more() { if (k > 5) printf "  (and %d more: %s prints them all)\n", k - 5, cmd; k = 0; cap = 0 }
+    cap && /^  / { if (++k <= 5) print; next } { more() }
+    $0 == "Leftovers (task finished):" || $0 == "Other sessions:" { cap = 1 } { print } END { more() }'; rc=${PIPESTATUS[0]}
   pf=$(config pending.file 2>/dev/null); printf '\n## Handoff file%s\n' "${pf:+ ($pf)}"
   prc=0; pend=$("$SELF" --pending) || prc=$?; [ -z "$pend" ] || printf '%s\n' "$pend"
   [ "$prc" = 0 ] || echo '(none: the adapter gives no pending text)'
@@ -1258,8 +1276,11 @@ if [ "${1:-}" = --start ]; then
   [ ! -s "$TMP/ids" ] || echo "Resume them one at a time, after one ask (approvals.md): session-status --resume-ended $(sed 's/ $//' "$TMP/ids")"
   if [ -n "$h" ] && [ -f "$h" ]; then printf '\n## Handover (%s, written %s)\n' "$h" "$(epochfmt "$(mtime "$h")" '%m-%d %H:%M')"; cat "$h"
   else printf '\n## Handover\n(none%s)\n' "${h:+: no $h}"; fi
+  # only the answers not relayed yet: the relayed ones are done (--approvals lists them all)
   [ -z "${CLAUDE_CODE_SESSION_ID:-}" ] || { ap=$("$SELF" --approvals 2>/dev/null) && [ -n "$ap" ] &&
-    printf '\n## Approvals (relay one: session-status --relay KEY ACTION)\n%s\n' "$ap"; }
+    { nr=$(grep -c ' · relayed: ' <<<"$ap"); ap=$(grep -v ' · relayed: ' <<<"$ap"); [ -n "$ap" ]; } &&
+    { [ "$nr" = 0 ] || ap="$ap"$'\n'"($nr relayed already: session-status --approvals lists them)"; } &&
+    printf '\n## Approvals not relayed yet (relay one: session-status --relay KEY ACTION)\n%s\n' "$ap"; }
   u=$(inbox_unread)
   [ -z "$u" ] || printf '\n## Coordinator inbox, unread (%s): act on each, then mark it read: %s --inbox --read N\n%s\n' "$(inbox_file)" "$SELF" "$u"
   # Other coordinators find this one by its purpose (--coordinators); the registry holds this root from now on.

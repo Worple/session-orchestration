@@ -21,24 +21,21 @@ coordinator's Start reads those, and each restated rule is re-sent on its every 
    yourself takes it with you). Then arm `--await ready` (Bash, background) and end your turn. From here act
    on no message: forward each, text on stdin, with `session-status --inbox-add --from '<name> (<id8>)'`, run by its
    full path with a quoted heredoc (`<<'EOF'`), so the approval hook reads the text as text even when it quotes a merge.
-2. When `--await ready` wakes you, call `name_session` with what `session-status --prev-name --title` prints
-   (`NAME-prev-K`; it titles your tab too, and in Desktop its result names the sidebar title's call), arm `--await renamed` (background) and end your turn: the rename lands
-   then.
-3. When `--await renamed` wakes you, stop your watcher (TaskStop), forward what came meanwhile, in
-   Desktop detach the sessions you started as it says (the app archives a session's idle side sessions with it, and
-   only you can detach yours), run `session-status --successor --done` and end. Your terminal closes once you are idle.
+2. When `--await ready` wakes you: stop your watcher (TaskStop), forward what came meanwhile, in Desktop detach the
+   sessions you started as it says (the app archives a session's idle side sessions with it, and only you can detach
+   yours), and run `session-status --successor --done`. Last, call `name_session` with what
+   `session-status --prev-name --title` prints (`NAME-prev-K`; it titles your tab too, and in Desktop its result names
+   the sidebar title's call) and end your turn: the rename lands then, and your terminal closes once you are idle.
 
 ## The successor
 
 Your name is `NAME-next`. In Desktop your first prompt says to run `session-status --successor --started NAME` first:
-it records your id, so you count as `NAME-next` even when the app named you otherwise. Run Start as usual (`open_pane` keeps your name while the old one holds `NAME`), then:
-
-1. Arm `--await name`. It wakes you when `NAME` is free: call `name_session` with `NAME`.
-2. Arm `--await done`. It closes the old coordinator's tab (only its split, when the tab has others) once that one is
-   idle and done forwarding; when it runs in the background, the tab it was moved out of (or a `claude attach` to it).
-   Tell the user what was left open, if anything. In Desktop it closes nothing and says how to finish the old one:
-   check it holds no other side session (one it still holds keeps it unarchived, for the user), detach from it, take
-   its pin, archive it.
+it records your id, so you count as `NAME-next` even when the app named you otherwise. Run Start as usual (`open_pane` keeps your name while the old one holds `NAME`), then
+arm `--await name` (Bash, background), your one wait. It wakes you when `NAME` is free and the old coordinator is idle and done forwarding,
+having closed its tab (only its split, when the tab has others; when it runs in the background, the tab it was moved
+out of, or a `claude attach` to it). Then call `name_session` with `NAME`, as its last line says, and tell the user
+what was left open, if anything. In Desktop it closes nothing and says how to finish the old one: check it holds no
+other side session (one it still holds keeps it unarchived, for the user), detach from it, take its pin, archive it.
 
 - Any `--await` also wakes you on an unread coordinator inbox entry (exit 3, first line `NOT DONE`): the step isn't
   done. Act on each entry, mark it read (`session-status --inbox --read N`), and arm the same `--await` again.
