@@ -76,7 +76,11 @@ user a command).
     again; if you do, the same key and question replaces the waiting ask (same id), never a second one. One queued
     over 24h ago is marked OLD: still answerable (its answer verifies from the click). Recheck each OLD ask yourself
     at Start (the PR or ticket may have moved) and tell the user which still apply, so they never have to; check
-    again before you act on its answer. When the decision no longer applies (a PR
+    again before you act on its answer. So queue an ask that applies while a GitHub PR no board row shows
+    is open with `still_applies: "OWNER/REPO#N"` (a row's PR named in the question is flagged already). Every
+    full status run (the pane's refresh, `--start`, the sweep, `--stale`) looks it up (10 s cap) and the Stale
+    section flags the ask `acme/app#45 merged (its still_applies)` once it is merged or closed, so that recheck is
+    done by machine; a gh error or timeout flags nothing. When the decision no longer applies (a PR
     merged first, the task closed), cancel it, and for a review finding note `Dropped` in the review's file header
     and tell the reviewer session.
   - **Several merges at once**: a chat line naming no key ("I approve all the merges from the pane") verifies for

@@ -1426,6 +1426,36 @@ test('ask_approval with no pane in this session and no project store is refused:
   expect(r.deny).toContain('no coordinator pane shows an ask from here')
 })
 
+test('ask_approval stores still_applies trimmed on the ask, and refuses one that isn\'t a PR ref', async ($, on) => {
+  mock.clock(on)
+  mock.env(on, { HOME: '/h' })
+  let store: string | undefined
+  on('fs.read', async () => {
+    if (store === undefined) throw new Error('ENOENT')
+    return { value: store }
+  })
+  on('fs.write', async (_, e) => {
+    store = e.text
+    return { value: undefined }
+  })
+  on('session.id', async () => ({ value: 'sess-c' }))
+  on('process.run', async (_, e) => {
+    const stdout = e.argv.includes('--check') ? 'configured: /work (work-coordinator)\n' : e.argv.includes('--root') ? '/work' : ''
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  await $.tool.call({ tool: 'mcp__session-orchestration__open_pane' })
+  const ask = (still_applies: unknown) => $.tool.call({ tool: 'mcp__session-orchestration__ask_approval', key: 'PROJ-1', question: 'merge app#5', options: ['Yes', 'No'], still_applies })
+  for (const bad of ['true', 'acme/app#5; rm -rf ~', 'app#5', 'acme/app#5\nx', 42]) expect((await ask(bad)).deny).toBe('ask_approval: still_applies is a GitHub PR, OWNER/REPO#N.')
+  expect((await ask('  acme/app#5 ')).deny).toBeUndefined()
+  expect(parseAsks(store ?? '[]')?.map(a => a.still_applies)).toEqual(['acme/app#5'])
+  // A hand-edited store: a bad still_applies drops that field, the ask stays.
+  const a = { id: '1', key: 'PROJ-1', question: 'q', options: ['Yes', 'No'], at: 1 }
+  expect(parseAsks(JSON.stringify([{ ...a, still_applies: 'false' }, { ...a, id: '2', still_applies: 'acme/app#7' }]))).toEqual([a, { ...a, id: '2', still_applies: 'acme/app#7' }])
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS }) // lets the pane's first refresh finish in this test
+  await ui.unmount()
+})
+
 test('stale flags: the section splits into asks, handoff entries and the rest; a fold takes 2 or more', async () => {
   const s = staleOf(parseStatus('Stale:\n  * ask 7 ABC-1: ticket done; recheck: queued over 3d\n  * pending "deploy window": recheck: unchanged over 7d\n  * session "s" (abcd1234) ABC-7: decision not on the pane'))
   expect([...s.asks]).toEqual([['7', 'ticket done; recheck: queued over 3d']])

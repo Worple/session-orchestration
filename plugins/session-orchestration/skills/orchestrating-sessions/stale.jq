@@ -5,7 +5,8 @@
 #   session "NAME" (ID8)[ KEY]: decision not on the pane
 # A reason starting "recheck:" is age alone: the weakest signal, never a cancel or archive by itself.
 # shortcut: age ignores whether the key's row changed since (the design's 7th signal in full); add once it misfires.
-# shortcut: PR states come from the rows only, no lookup of a PR no row names; add an adapter call if they're missed.
+# shortcut: a PR named in the text gets its state from the rows only; a PR no row shows is looked up only as an ask's
+# still_applies ($settled). Add an adapter call if others are missed.
 # jq -nr, every input a string:
 #   $asks    the asks store (JSON list; "" none)
 #   $entries pending entries, LABEL<TAB>SLUG<TAB>LINE<TAB>LAST (the entry history's last change, YYYY-MM-DD HH:MM)
@@ -13,6 +14,7 @@
 #   $gone    8-hex session ids named somewhere and gone (stopped, done or unlisted, with a transcript), one a line
 #   $wtgone  worktree paths named somewhere that don't exist    $asking ID8<TAB>NAME<TAB>KEY whose last turn asks the user
 #   $keyre   the task key ERE    $now   epoch seconds
+#   $settled REF<TAB>STATE: the asks' still_applies PRs (OWNER/REPO#N) that are MERGED or CLOSED
 def ls($s): $s | split("\n") | map(select(length > 0));
 def tsv($s): ls($s) | map(split("\t"));
 def keys_in: [scan("(?<![A-Za-z0-9])(" + $keyre + ")(?![0-9])") | .[0]];
@@ -45,7 +47,9 @@ def ago($t): ($now | tonumber) - $t;
     | "worktree \(.) gone"];
   ($A | map(.id)) as $ids
   | [ ($A[] | . as $a | ([.question, .target // ""] | join(" ")) as $t
+        # 9. the PR it applies while open (still_applies) is merged or closed.
         | (r_done($a.key) + ($t | r_prs) + ($t | r_gone) + ($t | r_wt)
+           + [tsv($settled)[] | select(.[0] == $a.still_applies) | "\(.[0]) \(.[1] | ascii_downcase) (its still_applies)"]
            + (if ($a.at | type) == "number" and ago($a.at / 1000) > 72 * 3600 then ["recheck: queued over 3d"] else [] end)) as $why
         | select($why | length > 0) | "ask \($a.id) \($a.key): \($why | join("; "))"),
       (tsv($entries)[] | . as [$label, $slug, $line, $last]

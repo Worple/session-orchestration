@@ -2975,23 +2975,24 @@ if section stale; then
 # (reword while another is open), 3 a session it names gone, 4 a worktree it names gone, 5 an ask it names not queued,
 # 6 its key's ask queued, 7 age alone as "recheck:", 8 a session asking with no ask queued. The rest flag nothing.
 sj() { jq -nr --arg asks "$1" --arg entries "$2" --arg rows "$3" --arg done "$4" --arg gone "$5" --arg wtgone "$6" \
-  --arg asking "$7" --arg keyre '[A-Z][A-Z0-9]+-[0-9]+' --arg now "$now" -f "$here/stale.jq"; }
+  --arg asking "$7" --arg settled "${8:-}" --arg keyre '[A-Z][A-Z0-9]+-[0-9]+' --arg now "$now" -f "$here/stale.jq"; }
 now=$(date +%s); old=$(( (now - 4 * 86400) * 1000 )); fresh=$(( now * 1000 )); today=$(date '+%Y-%m-%d %H:%M')
 asks='[{"id":"41","key":"ABC-1","question":"Remove worktree .claude/worktrees/gone-wt?","options":["y","n"],"at":'$fresh'},
 {"id":"35","key":"ABC-2","question":"Merge #322 and repo#323?","options":["y","n"],"at":'$fresh'},
 {"id":"49","key":"ABC-3","question":"Stop 40a5565a?","options":["y","n"],"at":'$old'},
 {"id":"50","key":"ABC-4","question":"Post the comment on repo#323?","options":["y","n"],"at":'$fresh'},
-{"id":"51","key":"ABC-9","question":"Ship it?","options":["y","n"],"at":'$fresh'},
+{"id":"51","key":"ABC-9","question":"Ship it?","options":["y","n"],"at":'$fresh',"still_applies":"acme/app#9"},
 {"id":"52","key":"ABC-10","question":"Rebase .claude/worktrees/gone-wt-ui?","options":["y","n"]}]'
 # Not flagged either: ask 52 names a worktree whose path only starts with a gone one's (and has no time), ABC-8's
 # entry has a history time that doesn't parse.
 entries=$(printf 'ABC-3\tABC-3\t2026-10-27 ABC-3: waits on its stop\t%s\nworktree-cleanup\tworktree-cleanup\tworktree-cleanup: asks 41 and 22\t2026-10-01 10:00\nABC-5\tABC-5\tABC-5: deploy\t%s\nABC-6\tABC-6\tABC-6: see ask 50, session 51ab51ab\t%s\nABC-8\tABC-8\tABC-8: fine\tjunk\n' \
   "$today" "$today" "$today")
 rows=$(printf 'ABC-2\tIn Review\tt\trepo#322 MERGED repo#323 OPEN\nABC-9\tDone\tt\trepo#9 OPEN\n')
-out=$(sj "$asks" "$entries" "$rows" "$(printf 'ABC-1\nABC-5')" 40a5565a .claude/worktrees/gone-wt "$(printf 'abcd1234\tfix it\tABC-7\nbcde2345\tother\tABC-4')")
+out=$(sj "$asks" "$entries" "$rows" "$(printf 'ABC-1\nABC-5')" 40a5565a .claude/worktrees/gone-wt "$(printf 'abcd1234\tfix it\tABC-7\nbcde2345\tother\tABC-4')" "$(printf 'acme/app#9\tMERGED')")
 [ "$out" = 'ask 41 ABC-1: ticket done; worktree .claude/worktrees/gone-wt gone
 ask 35 ABC-2: reword: #322 merged
 ask 49 ABC-3: names 40a5565a, gone; recheck: queued over 3d
+ask 51 ABC-9: acme/app#9 merged (its still_applies)
 pending "ABC-3": = ask 49
 pending "worktree-cleanup": reword: names ask 22, not queued; recheck: unchanged over 7d
 pending "ABC-5": ticket done
@@ -3010,6 +3011,23 @@ out=$(run --stale | grep -v '^session ')   # earlier fixtures' sessions asking: 
 [ "$out" = 'ask 7 ABC-12: worktree .claude/worktrees/nope gone
 pending "ABC-12": reword: names ask 99, not queued; = ask 7' ] && grep -qxF '  * ask 7 ABC-12: worktree .claude/worktrees/nope gone' <<<"$(run)" &&
   [ "$(run --changes | grep -c '^now:   \* ask 7 ')" = 1 ] && [ "$(run --changes | grep -c 'ask 7')" = 0 ] || { echo "Stale section failed: $out"; exit 1; }
+# still_applies, a PR looked up once with gh pr view: open (not flagged), merged by two asks (flagged, one lookup),
+# closed (flagged), gh failing (not flagged); a hand-edited one that isn't a PR ref is never run.
+[ ! -e "$tmp/bin/gh" ] || mv "$tmp/bin/gh" "$tmp/gh.saved"
+printf '#!/bin/sh\necho "$*" >> "%s"\n[ "$1 $2" = "pr view" ] || exit 1\ncase $3 in 8) echo OPEN ;; 9) echo MERGED ;; 11) echo CLOSED ;; *) exit 1 ;; esac\n' "$tmp/gh.log" > "$tmp/bin/gh"
+chmod +x "$tmp/bin/gh"; : > "$tmp/gh.log"
+echo '[{"id":"8","key":"ABC-13","question":"a","options":["y","n"],"at":'$fresh',"still_applies":"acme/app#8"},
+{"id":"9","key":"ABC-13","question":"b","options":["y","n"],"at":'$fresh',"still_applies":"acme/app#9"},
+{"id":"10","key":"ABC-14","question":"c","options":["y","n"],"at":'$fresh',"still_applies":"acme/app#9"},
+{"id":"11","key":"ABC-13","question":"d","options":["y","n"],"at":'$fresh',"still_applies":"acme/app#10"},
+{"id":"12","key":"ABC-13","question":"e","options":["y","n"],"at":'$fresh',"still_applies":"acme/app#11"},
+{"id":"13","key":"ABC-13","question":"f","options":["y","n"],"at":'$fresh',"still_applies":"acme/app#8; touch pwned"}]' > "$af"
+out=$(run --stale | grep '^ask ')
+[ "$out" = 'ask 9 ABC-13: acme/app#9 merged (its still_applies)
+ask 10 ABC-14: acme/app#9 merged (its still_applies)
+ask 12 ABC-13: acme/app#11 closed (its still_applies)' ] && [ "$(grep -c '^pr view 9 -R acme/app ' "$tmp/gh.log")" = 1 ] &&
+  ! grep -q pwned "$tmp/gh.log" && [ ! -e "$root/pwned" ] || { echo "still_applies failed: $out"; cat "$tmp/gh.log"; exit 1; }
+rm "$tmp/bin/gh" "$tmp/gh.log"; [ ! -e "$tmp/gh.saved" ] || mv "$tmp/gh.saved" "$tmp/bin/gh"
 rm -r "$af" "$root/pend.md" "$root/.claude/coordination.local.json"; run --changes >/dev/null
 fi
 

@@ -3162,7 +3162,15 @@ done > "$TMP/st.wtgone"
 # Leftovers' call answered its candidates already: ask only about the others.
 cut -f1 "$TMP/done" 2>/dev/null > "$TMP/st.done"; touch "$TMP/cand"; grep -vxF -f "$TMP/cand" "$TMP/st.keys" > "$TMP/st.ask" || true
 [ ! -s "$TMP/st.ask" ] || adapter done $(cat "$TMP/st.ask") 2>/dev/null | cut -f1 >> "$TMP/st.done"
+# The asks' still_applies PRs (ask_approval), each looked up once under a 10 s cap: REF<TAB>STATE of those merged or
+# closed. Re-checked here (the store is anyone's to write) and run as argv; a gh error or timeout flags nothing.
+jq -r '[.[]? | .still_applies | select(type == "string" and test("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#[0-9]+$"))] | unique[]' "$af" 2>/dev/null |
+  while IFS= read -r r; do
+    s=$(perl -e 'alarm 10; exec @ARGV' gh pr view "${r#*#}" -R "${r%#*}" --json state -q .state </dev/null 2>/dev/null) || continue
+    case $s in MERGED|CLOSED) printf '%s\t%s\n' "$r" "$s" ;; esac
+  done > "$TMP/st.settled"
 jq -nr --arg asks "$(cat "$af" 2>/dev/null)" --rawfile entries "$TMP/st.entries" --rawfile rows "$TMP/tasks" --rawfile done "$TMP/st.done" \
+  --rawfile settled "$TMP/st.settled" \
   --rawfile gone "$TMP/st.gone" --rawfile wtgone "$TMP/st.wtgone" --rawfile asking "$TMP/asking" --arg keyre "$KEYRE" --arg now "$NOW" \
   -f "$(dirname "$SELF")/stale.jq" > "$TMP/st.out" 2>/dev/null || echo "stale.jq failed" > "$TMP/st.out"
 [ -s "$TMP/st.out" ] && printf '\nStale:\n' && sed 's/^/  * /' "$TMP/st.out"

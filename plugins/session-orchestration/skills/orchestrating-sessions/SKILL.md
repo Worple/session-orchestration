@@ -107,8 +107,8 @@ Waking a session makes it re-read its whole context, often hundreds of thousands
 The project names a handoff file (e.g. `pending.md`), shown by `--start` and the pane. It holds only what would
 otherwise live in your conversation alone, so the next coordinator can pick it up:
 - Three kinds of entry, one dated `- ` line each: decisions waiting on the user off the pane, instructions you
-  drafted but haven't sent, and open requests to sessions. Nothing the status or the pane holds, no copied status
-  or quoted approvals. Name the session's id when there is one. Write "on you", "the user" or "your call" in an
+  drafted but haven't sent, and open requests to sessions. Nothing the status or the pane holds: no ask queued on
+  the pane restated (the pane keeps it across handovers), no copied status or quoted approvals. Name the session's id when there is one. Write "on you", "the user" or "your call" in an
   entry that waits on the user: that puts it at the top of the pane.
 - Write an entry the moment only your conversation holds it, as one short line: what waits, on whom. Add it among
   the others, above any heading after them: the pane reads entries only up to the first heading, so one appended at

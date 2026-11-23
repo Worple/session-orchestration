@@ -810,13 +810,21 @@ let storeText: string | undefined // the store as this session last read or wrot
 let storeError = '' // the last write's failure: the asks then live only in this session
 let asksQueue: Promise<unknown> = Promise.resolve()
 const isStr = (v: unknown): v is string => typeof v === 'string' && clean(v) === v
+// An ask's still_applies: a GitHub PR, OWNER/REPO#N (session-status re-checks it with the same pattern).
+const isPrRef = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+#[0-9]+$/.test(v)
+// A bad still_applies (the file is anyone's to write) drops that field, not the whole ask.
+function withoutBadRef(v: unknown): unknown {
+  if (!v || typeof v !== 'object' || !('still_applies' in v) || isPrRef(v.still_applies)) return v
+  const { still_applies: _, ...rest } = v
+  return rest
+}
 function isAsk(v: unknown): v is Ask {
   if (!v || typeof v !== 'object') return false
   const a: Record<string, unknown> = { ...v }
   const opt = (x: unknown) => x === undefined || isStr(x)
   const b: Record<string, unknown> | undefined = a.body && typeof a.body === 'object' ? { ...a.body } : undefined
   return isStr(a.id) && isStr(a.key) && /^\S+$/.test(a.key) && isStr(a.question) && typeof a.at === 'number' &&
-    Array.isArray(a.options) && a.options.length >= 2 && a.options.every(isStr) && opt(a.details) && opt(a.target) &&
+    Array.isArray(a.options) && a.options.length >= 2 && a.options.every(isStr) && opt(a.details) && opt(a.target) && (a.still_applies === undefined || isPrRef(a.still_applies)) &&
     (a.kind === undefined || isKind(a.kind)) && (a.seen === undefined || a.seen === true) && (a.sending === undefined || typeof a.sending === 'number') &&
     (a.body === undefined || (!!b && isStr(b.path) && isStr(b.text) && typeof b.sha256 === 'string' && /^[0-9a-f]{64}$/.test(b.sha256) && typeof b.cut === 'number'))
 }
@@ -829,7 +837,7 @@ export function parseAsks(text: string): Ask[] | undefined {
   } catch {
     return
   }
-  return Array.isArray(o) ? o.filter(isAsk) : undefined
+  return Array.isArray(o) ? o.map(withoutBadRef).filter(isAsk) : undefined
 }
 // Every write of asks goes through here, one at a time: the store's list (else this session's) in, the result back
 // to both. A failed write keeps the change in this session (storeError says so) rather than losing it.
@@ -948,6 +956,7 @@ const ASK_SCHEMA = {
     target: { type: 'string', description: 'Optional: where the action lands, e.g. "app#282 src/a.ts:42" for an inline comment, "app#282 general", "PROJ-5195" for a Jira comment.' },
     kind: { type: 'string', enum: KINDS, description: 'Optional, with body_file only: a PR review finding\'s kind: issue (the code is wrong), suggestion (it works but could be better), question (scope or intent the author or PO decides). The pane shows it as a badge and sorts issues first.' },
     body_file: { type: 'string', description: 'Optional absolute path of a comment body file, prepared before asking. The pane reads it now and shows its text (as markdown) and sha256; the question must name this sha256; any other sha256 it names must be that of a file it names by absolute path (a Teams send\'s attachment).' },
+    still_applies: { type: 'string', description: 'Optional GitHub PR, OWNER/REPO#N (e.g. "acme/app#45"): the ask applies while that PR is open. Every full session-status run (the pane\'s refresh, Start, the sweep, --stale) looks it up (10 s cap) and its Stale section flags the ask once the PR is merged or closed, so an old ask is rechecked by machine, not by hand. For a PR no board row shows: a row\'s PR named in the question is flagged already.' },
   },
   required: ['key', 'question', 'options'],
 }
@@ -1956,8 +1965,11 @@ export const register: Register = on => {
     if ([key, question, ...labels].some(x => clean(x) !== x)) {
       return { deny: 'ask_approval: key, question and options may not hold control or bidi characters (but tab and newline).' }
     }
-    const { details, target, body_file, kind } = e
+    const { details, target, body_file, kind, still_applies } = e
     const opt = (v: unknown) => (typeof v === 'string' && v.trim() ? v : undefined)
+    if (still_applies !== undefined && !(typeof still_applies === 'string' && isPrRef(still_applies.trim()))) {
+      return { deny: 'ask_approval: still_applies is a GitHub PR, OWNER/REPO#N.' }
+    }
     if ((details !== undefined && typeof details !== 'string') || (target !== undefined && typeof target !== 'string') ||
         (body_file !== undefined && (typeof body_file !== 'string' || !body_file.startsWith('/')))) {
       return { deny: 'ask_approval: details and target are strings; body_file is an absolute path.' }
@@ -2005,6 +2017,7 @@ export const register: Register = on => {
       ...(opt(target) ? { target: oneLine(clean(String(target))) } : {}),
       ...(body ? { body } : {}),
       ...(isKind(kind) ? { kind } : {}),
+      ...(typeof still_applies === 'string' ? { still_applies: still_applies.trim() } : {}),
     }, a => a.key === key && a.question === question, at)
     const { isPlaced } = await open($)
     await syncStatus($)

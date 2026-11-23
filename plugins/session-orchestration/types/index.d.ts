@@ -8,6 +8,8 @@ export type AskBody = { path: string; sha256: string; text: string; cut: number 
 export type Ask = {
   id: string; key: string; question: string; options: string[]; at: number
   details?: string; target?: string; body?: AskBody; kind?: AskKind; seen?: true; sending?: number
+  // A GitHub PR, OWNER/REPO#N: the ask applies while it is open (session-status's Stale section looks it up).
+  still_applies?: string
 }
 // The project state the pane shows: the status command's output, the adapter's `pending` and `urls` text, and
 // the sessions the sweep saw (session-status --agents).
