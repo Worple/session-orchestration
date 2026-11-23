@@ -62,7 +62,7 @@ the same settings. Then:
   keeps it unarchived, for you to archive.
   The successor is the only sidebar session the coordinator starts: a hook refuses `start_session` for a task, which
   then starts with `claude --bg` like every task. To watch and answer tasks in the app instead, set
-  `"start": {"sidebar": true}` in `.claude/coordination.local.json` (from the release after 0.139.0): the hook
+  `"start": {"sidebar": true}` in `.claude/coordination.local.json`: the hook
   lets the coordinator start tasks as sidebar sessions, which then get no status row, idle notice, resume after a
   restart or stop, and you answer their questions in the app rather than through the coordinator.
 
@@ -167,9 +167,12 @@ plugin depends on.
 
 - `skills/setting-up-coordination/SKILL.md`: setup, the config keys, shared mode.
 - `skills/orchestrating-sessions/SKILL.md`: the coordinator's playbook, with `approvals.md`, `resuming.md`,
-  `sessions.md`, `handover.md`, `plans.md`, `pane.md` and `memory-rules.md` beside it, each read when its event comes up; `worker.md`: the rules
+  `sessions.md`, `handover.md`, `plans.md`, `pane.md`, `memory-rules.md`, `feedback.md`, `subcoordinator.md` and `review-inbox.md` beside it, each read when its event comes up; `worker.md`: the rules
   for a session that receives messages (`hooks/reply-card.txt` is its short form); `status-reference.md`: the status
   command, the adapter contract, writing your own terminal module.
+- `features/`, `terminals/` and `messages/`: one doc per optional feature, terminal module and messages module, each
+  named by `session-status --start` when it's on.
+- `skills/retro/SKILL.md` and `skills/research/SKILL.md`: the retro run and the research run.
 - `skills/choosing-model-effort/SKILL.md`: sizing work into a `plan.models` kind, for a session start, a subagent or
   a retro.
 - Tests: every `*.test.sh` prints `ok`.

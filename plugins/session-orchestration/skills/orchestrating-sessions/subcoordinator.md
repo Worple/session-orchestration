@@ -1,8 +1,7 @@
 # Sub-coordinator: one big task under its own coordinator
 
 Read this whole when your first line is `Coordinate KEY: …`: you are KEY's sub-coordinator, a background session
-named `KEY-coordinator` that the project's coordinator (the **parent**) started to run KEY for it (from the release
-after sub-coordinator stage 3). [SKILL.md](SKILL.md)'s Start doesn't apply to you; its other sections do, as far as
+named `KEY-coordinator` that the project's coordinator (the **parent**) started to run KEY for it. [SKILL.md](SKILL.md)'s Start doesn't apply to you; its other sections do, as far as
 this file leaves them. A first line `Coordinate KEY: continue; read <replies>/KEY-coordinator.md` is the same job,
 restarted: read that file first and go on from its `## Handoff`.
 

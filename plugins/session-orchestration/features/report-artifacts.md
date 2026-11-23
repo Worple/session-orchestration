@@ -6,7 +6,7 @@
 > features.report_artifacts` prints anything; the user asks to publish reports as pages, or about a report page, its
 > comments or the `Report pages` footer.
 
-From the release after report artifacts. Off by default. With it on, a session that finishes a long report also
+Off by default. With it on, a session that finishes a long report also
 publishes the report's `.md` as a private claude.ai page and puts the link in its done report. The user reads the
 rendered page and can comment on it. The `.md` in the replies folder stays the record that every other session reads.
 

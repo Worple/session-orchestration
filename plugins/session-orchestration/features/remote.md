@@ -1,9 +1,9 @@
 # Feature: remote coordinators (your other computers)
 
-> **Start**: check that ListAgents lists your other computers' coordinators; `session-status --remote add` one it lists that `--coordinators` doesn't.
+> **Start**: check that ListAgents lists your other computers' coordinators; `session-status --remote add` one it lists, once it has said its purpose, that `--coordinators` doesn't.
 > **Read when**: the user wants a coordinator on another of their computers, under another of their accounts or another person's to reach this one, or a message to or from one went missing.
 
-Off by default, from the release after remote coordinators. On when `features.remote` is `true`
+Off by default. On when `features.remote` is `true`
 in the person's `.claude/coordination.local.json` or the person-wide `~/.config/session-orchestration/config.json` (a
 person key: the repo file can't set it), on each computer: `{"features": {"remote": true}}`.
 

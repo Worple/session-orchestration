@@ -6,7 +6,7 @@ one, and on a `handoff ready: KEY cN` (a chunk) or `handoff ready: KEY` (a task)
 
 A multi-step task becomes chunks run by separate sessions, so none outgrows its context.
 
-**Three chunks or more: propose a sub-coordinator instead** (from the release after sub-coordinator stage 3). When
+**Three chunks or more: propose a sub-coordinator instead**. When
 your size estimate would split a task into 3 or more chunks (over about 3 × L), don't plan it yourself: queue one
 `ask_approval`, the same ask that would start the task, "Start KEY under its own coordinator (coordinator: M/E):
 <what>. It plans the chunks and asks you for the plan here.", and on the yes start it ([sessions.md](sessions.md),

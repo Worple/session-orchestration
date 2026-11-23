@@ -82,10 +82,9 @@ and no heading.
   share reaching `reply … done`, handovers, nudges (every cross-session message in, answers and approvals too),
   minutes to done and escalations (`--handover --escalate`); an S or L start (`--kind build:L`) is its own row, and
   so is a start with an advisor (config `plan.advisor.KIND`, as `build+fable`), with `advisor_calls_median` and
-  `advisor_usd` (its subagents' calls too, which `usd` leaves out: it isn't a share of `usd`; from the release after
-  plan.advisor).
-  Every command's cost uses each request's model's list rates (from the release after the `kinds`
-  report; before it, all at Opus rates): to compare with a run from before that, rerun its window with `--until`.
+  `advisor_usd` (its subagents' calls too, which `usd` leaves out: it isn't a share of `usd`).
+  Every command's cost uses each request's model's list rates (an older run used Opus rates for all): to compare with
+  one, rerun its window with `--until`.
 - Replies folder: the one the project's `CLAUDE.md` names (its "Replies folder" line). None named: stop and
   say so. Below, `<R>` is that folder.
 - Reports, one series per scope, each with its own number, baselines and "Next run" section:
@@ -97,7 +96,7 @@ and no heading.
   `retro-project-<N>.md` and `rnd-run-<N>.md`, and its baseline is that highest report (an `rnd-run-<N>` is never
   renamed). The plugin series starts at 1 with no baseline: its first run measures two windows (Steps, 2) so
   its table still has a "last run" column. Its baseline after that is the highest `retro-plugin-<N>.md`.
-- Refusals logged by the plugin's hook: `~/.cache/session-status/denied.jsonl` (from 0.22.0 on), one JSON line per
+- Refusals logged by the plugin's hook: `~/.cache/session-status/denied.jsonl`, one JSON line per
   refusal with `time`, `session` and `cwd`.
 
 ## Steps
@@ -124,7 +123,7 @@ and no heading.
      the window when it covers it (project scope: the lines whose `cwd` is the root or under it), else from `deny`
      rows in `events.tsv` whose `test` column is empty (`-p`/`dontAsk`: headless permission tests); say which
      source was used. A denial whose text (a deny row's `detail2`, after `source/reasonType: `) starts "Background
-     session: this compound command" is the plugin's split hint (0.36.0+), not a refusal: count those separately,
+     session: this compound command" is project-memory's split hint, not a refusal: count those separately,
      and leave them and the retry after each out of the refusal and retry-waste counts, so runs stay comparable.
      The classifier's no-verdict denials (`denied.jsonl` logs them as "Classifier unavailable") get their cause from
      `events.txt`'s `noverdict` line: report it beside the count. `hook_changed` and `sibling_changed` come from a

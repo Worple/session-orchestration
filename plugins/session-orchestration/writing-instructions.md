@@ -1,7 +1,7 @@
 # Writing instructions
 
 The plugin's skills, feature docs and the reply card are prompts: Claude follows them. Write them by Anthropic's
-prompting guides, Agent Skills pages and the Claude Code docs on memory, skills, subagents and hooks.
+prompting guides, Agent Skills pages and the pages listed below.
 
 Last reviewed 2026-11-20 against: prompt-engineering/overview,
 prompt-engineering/claude-prompting-best-practices, agent-skills/overview, agent-skills/quickstart,

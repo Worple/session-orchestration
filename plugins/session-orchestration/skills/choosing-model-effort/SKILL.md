@@ -19,7 +19,7 @@ takes what it would without fable, then fable again once the limit resets. No Fa
 only shows once a session on that account hit the limit. Never pick `fable` yourself beyond that unless the user
 names it.
 
-**An advisor** (from the release after plan.advisor) is a trial, off by default: config `plan.advisor.<kind>`
+**An advisor** is a trial, off by default: config `plan.advisor.<kind>`
 (`fable`, `opus` or `sonnet`; unset means off) gives that kind's task starts an advisor model the session consults.
 `session-status --kind` prints it as ` --advisor A` after `--effort E`: paste the whole line. It pairs only at or above
 the main model: an opus session takes fable or opus, sonnet and haiku take any, a fable session takes none. A fable
@@ -57,9 +57,11 @@ change is the kind's or an escalation's (`session-status --handover --escalate`,
 
 ## Use it
 
-- **A session (`claude --bg`)**: run `session-status --kind <kind>[:S|M|L] <session-name>` as its own call (`<session-name>` is
-  the `-n` value: letters, digits, `.`, `_`, `-`, at most 80) and paste the `--model M --effort E` it prints onto the
-  start line. Exit 2 means a wrong kind or name: fix it, and don't start without the flags. Exit 3: the task isn't the user's to
+- **A task start (`claude --bg`)**: `session-status --launch <session-name> --kind <kind>[:S|M|L] …` (sessions.md) runs
+  `--kind` itself and logs the start once; don't run `--kind` first, which logs it twice and double-counts retro's `kinds`.
+  Run `session-status --kind <kind>[:S|M|L] <session-name>` alone, as its own call, only for a start `--launch` doesn't
+  cover (`<session-name>` is the `-n` value: letters, digits, `.`, `_`, `-`, at most 80), and paste the
+  `--model M --effort E` it prints onto the start line. Exit 2 means a wrong kind or name: fix it, and don't start without the flags. Exit 3: the task isn't the user's to
   start (someone else's ticket or branch): don't start, queue the ask its stderr names. It logs the start for retro,
   so run it once per task: a handover or fresh restart of the same task reuses the flags. `session-status` is in this
   plugin's `skills/orchestrating-sessions/` (`../orchestrating-sessions/session-status` from this skill's folder) and

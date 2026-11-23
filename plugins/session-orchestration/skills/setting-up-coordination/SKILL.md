@@ -13,7 +13,7 @@ coordinator has nothing to read. `open_pane` checks (`session-status --init --ch
 
 `session-status --init --check`, from the folder: one line, exit 0 configured, 1 unconfigured or partial, 3 covered
 by a parent. Configured adds:
-- `active: tracker=… host=… delegate=on|off pr_create=on|off start=…[,feedback_apply:…] terminal=… messages=… features=…|none`: the config in effect, then an
+- `active: tracker=… host=… delegate=on|off pr_create=on|off start=…[,feedback_apply:…][,sidebar] terminal=… messages=… features=…|none`: the config in effect, then an
   indented line per doc of the terminal, the messages module and each feature that's on: `  <name>: <start step> Read
   <doc> when <events>`, from the doc's `> **Start**:` and `> **Read when**:` lines (`  <name>: read <doc> now` when
   it has none). `session-status --start` shows them to the coordinator. With review_inbox on, `  review_inbox url:
@@ -21,7 +21,7 @@ by a parent. Configured adds:
   config dir), which open_pane watches;
 - `detected <terminal>: run setup to record it (…)` when it runs in a terminal it has a module for and `terminal` is
   unset;
-- `second account found, accounts off: run setup (session-status --init --write)` when another Claude account shares
+- `[m2 ask] second account found, accounts off: …` when another Claude account shares
   this one's transcripts and `features.accounts` is off;
 - `committed code new or changed upstream: REL…: run setup to review it` (shared mode, below);
 - `team[ (DIR)]: section, memory, review-brief, adapter (trusted|not trusted[, local wins])`: not a warning, the team files git

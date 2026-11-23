@@ -87,7 +87,7 @@ newer engines), `busy` (mid-turn); `--activity` prints it. Read the session's la
 ## Sub-coordinators
 
 A task that would take 3 or more chunks runs under its own coordinator, `KEY-coordinator`, on the user's yes
-([plans.md](plans.md)); from the release after sub-coordinator stage 3. Unlike a subproject's coordinator
+([plans.md](plans.md)). Unlike a subproject's coordinator
 (interactive, in another root, driven by its user), a sub runs in the background in this root, you start it, and its
 approvals come only from you; it has no pane, and its asks show on yours keyed KEY. Subprojects stays the answer for
 a subfolder with its own setup. What the sub does: [subcoordinator.md](subcoordinator.md).
@@ -113,7 +113,7 @@ From the project root, after confirming the owner. A live session gets a `SendMe
 closed, retired, too big, stuck on a prompt, a message for later, stopping one): [resuming.md](resuming.md). A task
 too big for one session: [plans.md](plans.md).
 
-A new task, from the release after one-command starts: `session-status --launch <KEY>-<short-desc> --kind <kind> --
+A new task: `session-status --launch <KEY>-<short-desc> --kind <kind> --
 '<what>' '<who needs it, what it unblocks>' '<the end state of the whole job and the check that proves it>'`, as its
 own call. It runs `--kind` (below), builds the brief, adds "Read <memory file> first." when CLAUDE.md names one,
 starts the session and prints `started "NAME" (ID8) · KIND M/E`. Exit 3 or 2: nothing started, read on. Not for a
@@ -142,7 +142,7 @@ check that proves it.'`
   (exit 2: a wrong kind or name; fix it, don't start without them). It logs the start for retro. `fable` only as `--kind` prints it
   (config `fable.accounts`, `choosing-model-effort`) or when the user names it: then set it by hand. A handover or fresh restart of that task takes the same flags without running `--kind` again, so the task logs
   one start.
-- **`--kind` exits 3, printing nothing: not yours to start** (ownership on start, from the release after it: `--kind`
+- **`--kind` exits 3, printing nothing: not yours to start** (ownership on start: `--kind`
   runs `session-status --claim` on the key the name starts with). The task is assigned to someone else, or a branch on
   origin naming it has another person's commits. Don't start: queue the ask its stderr names (`ask_approval`: "KEY:
   REASON: start anyway on a separate branch / leave it"). On "start anyway", run the line it names (`--kind` or

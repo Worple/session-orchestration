@@ -7,7 +7,7 @@ description: Answer a question from sources outside the project (the web, docs, 
 
 A run answers one question from outside sources and writes a report. It differs from a `scan` (local state only) by
 the judgement: which sources are reliable, and what of it applies to this project. Start a research session with
-`session-status --kind research <name>` (choosing-model-effort).
+`session-status --launch <name> --kind research …` (choosing-model-effort).
 
 ## Rules
 

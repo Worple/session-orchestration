@@ -95,7 +95,7 @@ Waking a session makes it re-read its whole context, often hundreds of thousands
 - One ask per message to a session. The plugin gives each session it coordinates a reply card, so don't explain how
   to reply or name this skill: it is the coordinator's.
 - The watcher reports a project background session that goes idle without replying or waiting on a background task
-  (`Idle: NAME (ID8): its last line`, from the release after idle notices); it may be a wait on an approval, not the
+  (`Idle: NAME (ID8): its last line`); it may be a wait on an approval, not the
   finish: check its status. Set `notify_when_idle: true` only for a session the watcher doesn't cover: an interactive
   one, or one outside the project folder. Never poll `ListAgents`, and never send "are you done?".
 - Never pass large content between sessions through your own context. Point to a file or a branch.

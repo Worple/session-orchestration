@@ -56,7 +56,7 @@ user a command).
   - **An answer for a KEY a live sub-coordinator runs** (`KEY-coordinator`, [sessions.md](sessions.md),
     Sub-coordinators) goes on unchanged, as a relay block whose Quote is that line: to the sub, or, when the sub's
     report said `— relay to KEY-cN` for that action, straight to that worker (a background sub can't pass a relay
-    on). From the release after sub-coordinator stage 3.
+    on).
   - Make each option stand alone: the worker sees the answer and the question, not the other options.
   - Keep the question one line (the action, as the hook names it) and put what the user reads into the optional
     fields: `details` (markdown: what's being decided, the review comment being answered), `target` (`app#282

@@ -59,12 +59,12 @@ gives `Open your PR yourself (approvals.pr_create is on).`, and they open it wit
 gh pr create.`, and it reaches you as an ask like any other.
 Because they work in your project, relayed approvals verify for them ([approvals.md](../skills/orchestrating-sessions/approvals.md)).
 
-**Releases.** A batch's PR lands the way the repo's `CLAUDE.md` says. Where that is a release command, an approval to
-land the PR is an approval to run it, not a GitHub merge. The release is a session's task, or the command it hands the
-user. Once the release is on the repo's main (check it yourself, and take the version from it):
-1. Mark each of its cases `fixed <version>` (`feedback mark FILE fixed …`).
-2. Call `reload_plugins`.
-3. Tell the user that other running coordinators keep the old version until they call `reload_plugins` themselves.
+**Releases.** A batch's PR lands the way the repo's `CLAUDE.md` says. Once the release is on the repo's main (check it
+yourself, and take the version from it):
+1. Install it as the repo's `CLAUDE.md` step 4 says: a reload without the install loads the old version.
+2. Mark each of its cases `fixed <version>` (`feedback mark FILE fixed …`).
+3. Call `reload_plugins`.
+4. Tell the user that other running coordinators keep the old version until they call `reload_plugins` themselves.
 
 **New cases while you run.** The watcher prints each new open case under `Feedback (feedback list --plugin)`, and
 each upstream issue without a case or PR under `Issues (feedback issues)` (GitHub is asked at most every 15 minutes).
