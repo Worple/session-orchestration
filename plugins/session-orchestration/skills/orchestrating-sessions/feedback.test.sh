@@ -93,6 +93,11 @@ rm .claude/coordination.local.json; printf '# x\n- broke on ABC-4654 rows\n' > "
 grep -qF ': a task key:' <<<"$("$FB" scrub "$dirty")" || fail "scrub missed the default task key"
 printf '# x\n- Pat saw it fail\n' > "$dirty"
 grep -qF ': names a local name:' <<<"$("$FB" scrub "$dirty")" || fail "scrub missed a part of the name"
+# A config value that is the plugin's own word (a replies folder, a model) is no name.
+echo '{"history": {"dirs": ["replies"]}, "coordinator": {"model": "fable"}}' > .claude/coordination.local.json
+printf '# x\n- the replies folder; Fable runs it\n' > "$dirty"
+[ -z "$("$FB" scrub "$dirty")" ] || fail "plugin words flagged: $("$FB" scrub "$dirty")"
+rm .claude/coordination.local.json
 # Project cases: this project's own store, any --where, deduped within it; list, count and footer show both scopes.
 P=$XDG_STATE_HOME/session-orchestration/feedback-projects/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')
 pc=$("$FB" add features 'Sign-in to the dev host expires hourly' --where /opt/x/login.sh --found 'a task session; deploy' --evidence e --project)

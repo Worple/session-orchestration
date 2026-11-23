@@ -3346,6 +3346,69 @@ lx 'link alice closed by the other side' 0 b --link fetch
 [ -z "$(lk b --link fetch)" ] || { echo "--link: the close reported twice"; exit 1; }
 lx 'link alice is closed by the other side' 2 b --link send alice --kind note "$tmp/a.md"
 fi
+if section report-artifacts; then
+# Report pages (features/report-artifacts.md): --report-publish's gates (kind, account, file, markers), the key read from
+# the project's person file only, --report-artifact's registry row, and the board's Report pages footer.
+rp=$tmp/rp-replies; mkdir -p "$rp"; echo "Replies folder: \`$rp\`" > "$root/CLAUDE.local.md"
+printf '# Retry limits\n\nThree options, see ~/notes.md.\n' > "$rp/PROJ-1.md"
+pf() { echo "$1" > "$root/.claude/coordination.local.json"; }
+rx() { local rc=0 o w=$1 c=$2; shift 2; o=$(run "$@" 2>&1) || rc=$?; [ "$rc" = "$c" ] && [[ $o == *"$w"* ]] || { echo "($w): rc=$rc $o"; exit 1; }; }
+pf '{}'; rx 'publish: no (off in this project' 1 --report-publish "$rp/PROJ-1.md" --kind research
+rx 'usage: session-status --report-publish' 2 --report-publish "$rp/PROJ-1.md" --kind memo
+# the key in the person-wide file, or in a committed repo file, is never read
+mkdir -p "$tmp/xdg/session-orchestration" "$root/.claude/coordination"
+echo '{"features": {"report_artifacts": ["research"]}}' | tee "$tmp/xdg/session-orchestration/config.json" > "$root/.claude/coordination/coordination.json"
+git -C "$root" add .claude/coordination && gc "$root" -m 'team config'
+o=$(cd "$root" && XDG_CONFIG_HOME=$tmp/xdg HOME=$tmp XDG_STATE_HOME=$tmp/state CLAUDE_CONFIG_DIR=$tmp/cfg PATH=$tmp/bin:$PATH "$here/session-status" --report-publish "$rp/PROJ-1.md" --kind research) && { echo "key outside the person file: $o"; exit 1; }
+[[ $o == *'off in this project'* ]] || { echo "key outside the person file: $o"; exit 1; }
+pf '{"features": {"report_artifacts": ["research", "retro"]}}'
+[ "$(run --config features.report_artifacts)" = $'research\nretro' ] || { echo "--config: $(run --config features.report_artifacts)"; exit 1; }
+rx 'publish: yes' 0 --report-publish "$rp/PROJ-1.md" --kind research
+rx "kind design isn't in config" 1 --report-publish "$rp/PROJ-1.md" --kind design
+pf '{"features": {"report_artifacts": "research"}}'; rx 'is not a list of research' 1 --report-publish "$rp/PROJ-1.md" --kind research
+pf '{"features": {"report_artifacts": ["research"], "accounts": true}}'; rx 'report_artifacts.account names no account' 1 --report-publish "$rp/PROJ-1.md" --kind research
+mkdir -p "$tmp/other"; pf "{\"features\": {\"report_artifacts\": [\"research\"]}, \"report_artifacts\": {\"account\": \"$tmp/other\"}}"
+rx 'and report_artifacts.account is ~/other' 1 --report-publish "$rp/PROJ-1.md" --kind research
+pf '{"features": {"report_artifacts": ["research"], "accounts": true}, "report_artifacts": {"account": "~/cfg/"}}'
+rx 'publish: yes' 0 --report-publish "$rp/PROJ-1.md" --kind research
+# a set but invalid account refuses, even with features.accounts off
+pf '{"features": {"report_artifacts": ["research"]}, "report_artifacts": {"account": "~/nowhere"}}'
+rx 'is not an absolute folder' 1 --report-publish "$rp/PROJ-1.md" --kind research
+pf '{"features": {"report_artifacts": ["research"]}}'
+# only a report in the replies folder, by an absolute path; never a post draft or a chunk's report
+printf '# x\n' > "$tmp/elsewhere.md"; printf '# x\n' > "$rp/PROJ-1-reply.body.md"; printf '# x\n' > "$rp/PROJ-1-c2-report.md"
+rx "isn't in the replies folder" 1 --report-publish "$tmp/elsewhere.md" --kind research
+rx "isn't an absolute path" 1 --report-publish PROJ-1.md --kind research
+rx 'is a draft, a status, handoff or coordinator file' 1 --report-publish "$rp/PROJ-1-reply.body.md" --kind research
+rx 'is a draft, a status, handoff or coordinator file' 1 --report-publish "$rp/PROJ-1-c2-report.md" --kind research
+printf '# x\n' > "$rp/PROJ-1-c2.md"; printf '# x\n' > "$rp/PROJ-1-coordinator.md"
+rx 'is a draft, a status, handoff or coordinator file' 1 --report-publish "$rp/PROJ-1-c2.md" --kind research
+rx 'is a draft, a status, handoff or coordinator file' 1 --report-publish "$rp/PROJ-1-coordinator.md" --kind research
+# personal markers: a home path, a session id, two on one line; an artifact link's id passes; a path or a hyphenated
+# name isn't a token, an AWS or Anthropic key is; --allow-markers skips the scrub
+printf '# R\n\nsee /home/u/notes.md\nsession %s\nhttps://claude.ai/code/artifact/%s\nsam@other.example in /home/u/x\n/opt/data/notes/retro-run-2-DRAFT.md by acme-widgets-builder-step-pr2-cN\nkey wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\nkey sk-ant-api03-Ab1Cd2Ef3Gh4Ij5Kl6Mn7Op8\n' "$sid" "$cid" > "$rp/PROJ-2.md"
+o=$(run --report-publish "$rp/PROJ-2.md" --kind research) && { echo "markers passed: $o"; exit 1; }
+[[ $o == *'publish: no (personal markers'*":3: a home path"*":4: a session id"* ]] && [[ $o != *':5:'* && $o != *':7:'* ]] &&
+  [[ $o == *":8: a token-like string"* && $o == *":9: a token-like string"* ]] &&
+  [[ $o == *":6: an email address"* && $o == *":6: a home path"* ]] || { echo "markers: $o"; exit 1; }
+rx 'publish: yes' 0 --report-publish "$rp/PROJ-2.md" --kind research --allow-markers
+# the registry: one row per page, a republish replaces it; a bad link or version is refused
+u=https://claude.ai/code/artifact/0a1b2c3d
+rx "$rp/report-artifacts.tsv" 0 --report-artifact "$sid" PROJ-1 research "$rp/PROJ-1.md" "$u" v1
+rx "$rp/report-artifacts.tsv" 0 --report-artifact "$sid" PROJ-1 research "$rp/PROJ-1.md" "$u" v2
+[ "$(wc -l < "$rp/report-artifacts.tsv")" -eq 1 ] && [ "$(cut -f1,2,3,9,10 "$rp/report-artifacts.tsv")" = "$u"$'\tPROJ-1\tresearch\tv2\topen' ] ||
+  { echo "registry: $(cat "$rp/report-artifacts.tsv")"; exit 1; }
+rx "isn't a claude.ai artifact link" 2 --report-artifact "$sid" PROJ-1 research "$rp/PROJ-1.md" https://example.com/x v1
+rx 'version id' 2 --report-artifact "$sid" PROJ-1 research "$rp/PROJ-1.md" "$u" 'v 1'
+rx 'no session id' 2 --report-artifact '' PROJ-1 research "$rp/PROJ-1.md" "$u" v1
+# the board lists it; an edit after the publish shows the page behind
+o=$(run 2>/dev/null); [[ $o == *$'\nReport pages:\n  * PROJ-1 · research · Retry limits · '"$u · ~/cfg"$'\n'* || $o == *$'\nReport pages:\n  * PROJ-1 · research · Retry limits · '"$u · ~/cfg" ]] || { echo "board: $o"; exit 1; }
+echo more >> "$rp/PROJ-1.md"
+o=$(run 2>/dev/null); [[ $o == *"Retry limits · $u · ~/cfg · page behind the file"* ]] || { echo "board, behind: $o"; exit 1; }
+# a row published over 14 days ago leaves the board
+awk -F'\t' 'BEGIN { OFS = "\t" } { $7 = 1000; print }' "$rp/report-artifacts.tsv" > "$tmp/rp.tsv" && mv "$tmp/rp.tsv" "$rp/report-artifacts.tsv"
+o=$(run 2>/dev/null); [[ $o != *'Report pages:'* ]] || { echo "board, old row: $o"; exit 1; }
+fi
 if section land; then
 # --land: from a linked worktree, fast-forwards the branch the main checkout has out, files included; refuses a
 # dirty checkout and a non-fast-forward.

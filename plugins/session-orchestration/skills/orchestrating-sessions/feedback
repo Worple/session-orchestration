@@ -188,7 +188,8 @@ scrub)
       (cd "$d" && "$a" key-pattern 2>/dev/null) >> "$keys"   # the adapter contract: cwd = its project root
       grep -oE 'https?://[A-Za-z0-9.-]+' "$a" | sed 's#.*://##'
     done <<<"$roots"
-  } | grep -E '^.{3,}$' | grep -vxiE 'session-orchestration|claude-plugins|github\.com|none|true|false|main|master|src|repo' | sort -u > "$lit"
+  # The plugin's own words a config value can be (a replies folder, a model, a docs host): public, and in every report.
+  } | grep -E '^.{3,}$' | grep -vxiE 'session-orchestration|claude-plugins|github\.com|none|true|false|main|master|src|repo|replies|haiku|sonnet|opus|fable|(code|platform|docs)\.claude\.com|claude\.ai' | sort -u > "$lit"
   # Login and each part of the name, however short: "Pat saw it" names the person too.
   { id -un; git config user.name | tr -s ' ' '\n'; } | grep . >> "$lit"
   k=$(grep -E . "$keys" | sort -u); printf '%s\n' "$k" > "$keys"   # no empty line: it would match every line

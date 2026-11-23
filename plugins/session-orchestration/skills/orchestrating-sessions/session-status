@@ -166,6 +166,11 @@
 #        session-status --report-file SESSION_ID [KEY] < REPORT   the reply tool's report: the top of
 #                       <replies>/<KEY>.md (no KEY: that session's name), its `## Handoff` kept; a chunk's goes to
 #                       <KEY>-cN-report.md, and one over a plan without a plan heading to <KEY>-report.md
+#        session-status --report-publish FILE --kind KIND [--allow-markers]   may this session publish the report FILE
+#                       as a private claude.ai page: `publish: yes` or `publish: no (why)`, exit 1
+#                       (features/report-artifacts.md)
+#        session-status --report-artifact SESSION_ID KEY KIND FILE URL VERSION_ID   the reply tool's artifact: the
+#                       page's row in <replies>/report-artifacts.tsv; the sweep's Report pages footer lists open rows
 #        session-status --init [--check | --write …]   set this folder up for coordination: the setting-up-coordination
 #                       skill's session-init documents the modes; runs in the cwd, not the root
 #        session-status --land TARGET   fast-forward TARGET, checked out in another worktree, to HEAD (a worker's
@@ -220,6 +225,7 @@ SS_LIB=$(cd "$(dirname "$0")/../.." && pwd)/lib.sh SS_FLAG=${1:-}; [[ $SS_FLAG =
 exit_fault() {
   case $1 in 0|3|4|12[89]|1[3-9][0-9]|2[0-9][0-9]) return ;; esac
   case $SS_FLAG in --urls|--pending|--agents|--plan|--coordinator-of|--address|--successor|--handover|--resume-ended|--relay|--watch) return ;; esac
+  [ "$SS_FLAG:$1" != --report-publish:1 ] || return   # its "publish: no" is an answer; a usage error (2) is logged
   [ -n "${SESSION_STATUS_PEEK:-}${SESSION_STATUS_FORWARD:-}" ] ||
     bash -c '. "$1" && usage session-status error "$2" "$3"' _ "$SS_LIB" "$1" "${SS_FLAG:-skills/orchestrating-sessions/session-status}" </dev/null >/dev/null 2>&1
 }
@@ -632,10 +638,70 @@ link_commit() {
 link_scrub() {
   bash "$(dirname "$SELF")/feedback" scrub "$1" 2>/dev/null | grep -E '^.*:[0-9]+: names a local name: '
   grep -nE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' "$1" | sed "s|^\([0-9]*\):|$1:\1: an email address: |"
-  grep -noE '[A-Za-z0-9+/=_-]{24,}' "$1" | grep -E '^[0-9]+:.*[A-Z]' | grep -E '^[0-9]+:.*[a-z]' | grep -E '^[0-9]+:.*[0-9]' | sed "s|^\([0-9]*\):.*|$1:\1: a token-like string|"
+  # A token has a piece (between / - _) of 4+ characters with a lowercase letter before a capital, digits between (wJalrXUtn, Ab1Cd2):
+  # a path or a hyphenated name (notes/retro-run-2-DRAFT, proj-…-pr2-cN) has none.
+  grep -noE '[A-Za-z0-9+/=_-]{24,}' "$1" | awk '{ n = split(substr($0, index($0, ":") + 1), s, "[/_-]")
+    for (i = 1; i <= n; i++) if (length(s[i]) >= 4 && s[i] ~ /[a-z][0-9]*[A-Z]/) { print; next } }' | grep -E '^[0-9]+:.*[A-Z]' | grep -E '^[0-9]+:.*[a-z]' | grep -E '^[0-9]+:.*[0-9]' | sed "s|^\([0-9]*\):.*|$1:\1: a token-like string|"
   grep -nE '/(home|[U]sers)/[A-Za-z0-9._-]+|[A-Za-z]:\\[U]sers\\' "$1" | sed "s|^\([0-9]*\):|$1:\1: a home path: |"
   return 0
 }
+# Report pages (features/report-artifacts.md): a finished report published as a private claude.ai page.
+# --report-publish FILE --kind KIND [--allow-markers]: may this session publish FILE? `publish: yes` (exit 0) or
+# `publish: no (why)` (exit 1), the script's call, not the session's: the kind is listed in this project's person file
+# (config features.report_artifacts; review only with no review inbox), FILE is a report in the replies folder (not a
+# post draft nor the inbox), the session runs under report_artifacts.account, and FILE has no personal marker
+# (link_scrub's, and session ids; --allow-markers: the user's yes to that file skips this).
+if [ "${1:-}" = --report-publish ]; then
+  u="usage: session-status --report-publish FILE --kind research|retro|design|review [--allow-markers]"
+  f=${2:-} k= am=; shift 2 2>/dev/null || { echo "$u" >&2; exit 2; }
+  while [ $# -gt 0 ]; do case $1 in --kind) k=${2:-}; shift 2 2>/dev/null || { echo "$u" >&2; exit 2; } ;; --allow-markers) am=1; shift ;; *) echo "$u" >&2; exit 2 ;; esac; done
+  [ -n "$f" ] && [[ $k =~ ^(research|retro|design|review)$ ]] || { echo "$u" >&2; exit 2; }
+  no() { echo "publish: no ($1)"; exit 1; }
+  kinds=$(config features.report_artifacts)   # an invalid value warns on stderr
+  [ -n "$kinds" ] || no "off in this project: config features.report_artifacts"
+  grep -qx "$k" <<<"$kinds" || no "kind $k isn't in config features.report_artifacts"
+  [ "$k" != review ] || [ "$(config features.review_inbox 2>/dev/null)" != true ] || no "the review inbox takes review findings"
+  rd=$(replies_path); [ -n "$rd" ] && rd=$(cd "$rd" 2>/dev/null && pwd -P) || no "no replies folder"
+  [[ $f == /*.md ]] && [ -f "$f" ] || no "$f isn't an absolute path to a .md file"
+  p=$(cd "$(dirname "$f")" && pwd -P)/$(basename "$f")
+  [[ $p == "$rd"/* ]] || no "$f isn't in the replies folder"
+  # The files the check can tell by name; a task's <KEY>.md status file it can't (the doc says never to run it there).
+  case ${p##*/} in *.body.md|coordinator-inbox.md|coordinator-handover.md|*-report.md|*-archive.md|*-build.md|*-coordinator.md|*-c[0-9].md|*-c[0-9][0-9].md) no "${p##*/} is a draft, a status, handoff or coordinator file, never published" ;; esac
+  pf=$(pending_path 2>/dev/null) && [ -n "$pf" ] && [ "$(cd "$(dirname "$pf")" 2>/dev/null && pwd -P)/${pf##*/}" = "$p" ] && no "${p##*/} is the coordinator's handoff file, never published"
+  # A set but invalid account must refuse, not drop the account gate.
+  aw=$(config report_artifacts.account 2>&1 >/dev/null); [ -z "$aw" ] || no "${aw#warning: }"
+  a=$(config report_artifacts.account 2>/dev/null); me=${CLAUDE_CONFIG_DIR:-$HOME/.claude}; me=${me%/}
+  [ -n "$a" ] || [ "$(config features.accounts 2>/dev/null)" != true ] || no "features.accounts is on and report_artifacts.account names no account"
+  [ -z "$a" ] || [ "$a" = "$me" ] || no "this session runs under $(tilde "$me"), and report_artifacts.account is $(tilde "$a")"
+  if [ -z "$am" ]; then
+    hits=$({ link_scrub "$p"
+      # a session id (an artifact link's own id passes)
+      grep -noE '(artifact/)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "$p" | grep -v ':artifact/' | sed "s|^\([0-9]*\):.*|$p:\1: a session id|"
+    } | sort -t: -k2,2n | uniq)
+    [ -z "$hits" ] || { echo "publish: no (personal markers; --allow-markers once the user says yes to this file)"; sed 's/^/  /' <<<"$hits"; exit 1; }
+  fi
+  echo "publish: yes"; exit 0
+fi
+# --report-artifact SESSION_ID KEY KIND FILE URL VERSION_ID: the reply tool's `artifact`, a published report's row in
+# <replies>/report-artifacts.tsv (personal, never committed), one per page (a republish replaces it):
+# url key kind file account session epoch sha256 version_id state. Prints the registry's path.
+if [ "${1:-}" = --report-artifact ]; then
+  u="usage: session-status --report-artifact SESSION_ID KEY research|retro|design|review FILE URL VERSION_ID"
+  [ $# = 7 ] || { echo "$u" >&2; exit 2; }
+  for v in "${@:2}"; do [[ $v != *[$'\t\n\r']* ]] || { echo "--report-artifact: no tabs or newlines in a field" >&2; exit 2; }; done
+  [ -n "$2" ] || { echo "--report-artifact: no session id" >&2; exit 2; }   # an empty field shifts the tab-split row
+  [[ $3 =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "--report-artifact: key \"$3\": letters, digits, . _ - only" >&2; exit 2; }
+  [[ $4 =~ ^(research|retro|design|review)$ ]] || { echo "$u" >&2; exit 2; }
+  [[ $5 == /* ]] && [ -f "$5" ] || { echo "--report-artifact: no file $5 (an absolute path)" >&2; exit 2; }
+  [[ $6 =~ ^https://claude\.ai/(code/)?artifact/[A-Za-z0-9-]+$ ]] || { echo "--report-artifact: $6 isn't a claude.ai artifact link" >&2; exit 2; }
+  [[ $7 =~ ^[A-Za-z0-9._-]{1,100}$ ]] || { echo "--report-artifact: version id \"$7\": letters, digits, . _ - only" >&2; exit 2; }
+  rd=$(replies_path); [ -n "$rd" ] || { echo "$ROOT/CLAUDE.md names no replies folder" >&2; exit 3; }
+  p=$(cd "$(dirname "$5")" && pwd -P)/$(basename "$5")
+  me=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
+  tsv_put "$rd/report-artifacts.tsv" "$6" "$(printf '%s\t' "$6" "$3" "$4" "$p" "${me%/}" "$2" "$(date +%s)" "$(sha256_of "$p")" "$7")open" ||
+    { echo "couldn't write $rd/report-artifacts.tsv" >&2; exit 1; }
+  echo "$rd/report-artifacts.tsv"; exit 0
+fi
 # link_peer_json PEER [CLOSED]: this side's peer.json, from its config, into a temp file (printed).
 link_peer_json() {
   local o; o=$(mktemp) || return 1
@@ -2937,6 +3003,17 @@ jq -nr --arg asks "$(cat "$af" 2>/dev/null)" --rawfile entries "$TMP/st.entries"
   [ -n "$h" ] || { h=1; printf '\nSent (session-status --inbox --sent):\n'; }
   printf "  * queued in %s's inbox #%s (%s)%s%s\n" "$(coord_name "$d")" "$n" "$(tilde "$d")" "${w:+, $w}" "${t:+: ${t:0:80}}"
 done; }
+# The open report pages (--report-artifact's registry; features/report-artifacts.md): not under --changes, a page
+# published is no news. `page behind the file`: the file changed since its publish. Only pages published in the last
+# 14 days: the registry keeps every row, and the user deletes pages on claude.ai.
+[ $# != 0 ] || [ -n "${SESSION_STATUS_STRICT:-}" ] || [ -z "$RD" ] || [ ! -s "$RD/report-artifacts.tsv" ] ||
+  { h=; old=$(( $(date +%s) - 14 * 86400 )); while IFS=$'\t' read -r url k kd f a _ ep sha _ st; do
+    [ "$st" = open ] && [[ $ep =~ ^[0-9]+$ ]] && [ "$ep" -ge "$old" ] || continue
+    [ -n "$h" ] || { h=1; printf '\nReport pages:\n'; }
+    t=$(grep -m1 '^# ' "$f" 2>/dev/null); t=${t#\# }; t=${t:0:80}; [ -n "$t" ] || t=${f##*/}
+    b=; if [ ! -f "$f" ]; then b=' · file gone'; elif [ "$(sha256_of "$f")" != "$sha" ]; then b=' · page behind the file'; fi
+    printf '  * %s · %s · %s · %s · %s%s\n' "$k" "$kd" "$t" "$url" "$(tilde "$a")" "$b"
+  done < "$RD/report-artifacts.tsv"; }
 
 if [ -n "$NPID" ]; then
   end=$((SECONDS + 60)); while kill -0 "$NPID" 2>/dev/null && [ "$SECONDS" -lt "$end" ]; do sleep 1; done

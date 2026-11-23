@@ -1,7 +1,7 @@
 import type { On, ToolCallResult } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { HIDDEN_BY_MARKDOWN, overdueAsks, parseAsks, queuedText, byKind, kindCounts, attachFor, clip, fixesOf, groupOf, keyIn, leftoverCommand, notice, wrapText, facts, orderTasks, parsePending, parseStatus, parseTask, pendingOf, prsOf, BUILTIN_KEYS, USAGE_EXTRA, USAGE_SECTIONS, usageName, GROUPS, RESOLVED, STALE, STALE_ITEMS, OTHER_PROJECTS, SENT, staleOf, weakStale, pendingLabel, foldOf, LEFTOVERS, OTHER, cancelText, onYouOf, sectionSlug, sectionState, parseSections, nativePath } from './register'
+import { HIDDEN_BY_MARKDOWN, overdueAsks, parseAsks, queuedText, byKind, kindCounts, attachFor, clip, fixesOf, groupOf, keyIn, leftoverCommand, notice, wrapText, facts, orderTasks, parsePending, parseStatus, parseTask, pendingOf, prsOf, BUILTIN_KEYS, USAGE_EXTRA, USAGE_SECTIONS, usageName, GROUPS, RESOLVED, STALE, STALE_ITEMS, OTHER_PROJECTS, SENT, REPORT_PAGES, staleOf, weakStale, pendingLabel, foldOf, LEFTOVERS, OTHER, cancelText, onYouOf, sectionSlug, sectionState, parseSections, nativePath } from './register'
 
 test('status rows parse whatever the columns hold', async () => {
   const pad = (k: string, st: string) => `${k.padEnd(9)} ${st.padEnd(14)} `
@@ -1153,7 +1153,7 @@ test('a tool the engine retracted mid-session is registered again at the turn\'s
 
 test('usage names: fixed words lib.sh usage accepts', () => {
   const names = [...Object.values(BUILTIN_KEYS), ...USAGE_EXTRA, ...USAGE_SECTIONS.flatMap(s => [`fold ${s}`, `unfold ${s}`, `card ${s}`])].map(usageName)
-  expect([...GROUPS, RESOLVED, STALE, STALE_ITEMS, OTHER_PROJECTS, OTHER, LEFTOVERS, SENT].filter(s => !USAGE_SECTIONS.includes(s))).toEqual([])
+  expect([...GROUPS, RESOLVED, STALE, STALE_ITEMS, OTHER_PROJECTS, OTHER, LEFTOVERS, SENT, REPORT_PAGES].filter(s => !USAGE_SECTIONS.includes(s))).toEqual([])
   expect(usageName('Attach in tab')).toBe('attach-in-tab')
   expect(names.every(n => /^[a-z0-9-]{1,40}$/.test(n))).toBe(true)
 })
@@ -1322,6 +1322,46 @@ test('reply with report writes it to the replies file first; not written, nothin
   file = { exitCode: 0, stdout: '/work/docs/replies/PROJ-1-fix.md\n', stderr: '' }
   await reply({ text: 'spike done', report: 'see /home/u/notes.md', done: 'report' })
   expect(checked).toEqual(['/home/u/notes.md'])
+})
+
+test('reply with artifact records the page first and links it; not recorded, nothing is sent', async ($, on) => {
+  on('session.cwd', async () => ({ value: '/work/proj/.worktrees/PROJ-1' }))
+  on('session.id', async () => ({ value: 'sess-3' }))
+  let rec = { exitCode: 0, stdout: '/work/docs/replies/report-artifacts.tsv\n', stderr: '' }
+  const ran: unknown[] = []
+  on('process.run', async (_, e) => {
+    if (e.argv[2] === '--report-artifact') ran.push([e.argv.slice(2), e.init?.cwd])
+    const r = e.argv[2] === '--report-artifact' ? rec : { exitCode: 0, stdout: 'proj-coordinator\n', stderr: '' }
+    return { value: { ...r, isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  const sent: string[] = []
+  on('session.send', async (_, e) => { sent.push(e.text); return { isDelivered: true } })
+  const reply = (input: Record<string, unknown>) => $.tool.call({ tool: 'mcp__session-orchestration__reply', ...input })
+  const url = 'https://claude.ai/code/artifact/0a1b2c3d'
+  const artifact = { url, version_id: 'v-2', file: '/work/docs/replies/PROJ-1.md', kind: 'research' }
+  expect((await reply({ text: 'PROJ-1 done', artifact })).deny).toBe('reply: artifact needs key, the report\'s task key.')
+  expect((await reply({ text: 'PROJ-1 done', key: 'PROJ-1', artifact: { url } })).deny).toBe('reply: artifact needs url, version_id, file and kind.')
+  expect((await reply({ text: 'PROJ-1 done', key: 'PROJ-1', artifact })).result).toBe('Sent to proj-coordinator. Page recorded.')
+  expect(ran).toEqual([[['--report-artifact', 'sess-3', 'PROJ-1', 'research', '/work/docs/replies/PROJ-1.md', url, 'v-2'], '/work/proj']])
+  await reply({ text: `PROJ-1 done: ${url}`, key: 'PROJ-1', artifact })
+  rec = { exitCode: 2, stdout: '', stderr: '--report-artifact: x isn\'t a claude.ai artifact link\n' }
+  expect((await reply({ text: 'PROJ-1 done', key: 'PROJ-1', artifact })).deny)
+    .toBe('reply: not sent, the page wasn\'t recorded (--report-artifact: x isn\'t a claude.ai artifact link). Fix that and reply again.')
+  expect(sent).toEqual([`PROJ-1 done\nPage: ${url}`, `PROJ-1 done: ${url}`])
+})
+
+test('Report pages: a row\'s card links its page', async ($, on) => {
+  mock.clock(on)
+  const url = 'https://claude.ai/code/artifact/0a1b2c3d'
+  const item = `PROJ-1 · research · Retry limits · ${url} · ~/.claude`
+  sweep(on, `${STATUS}\n${REPORT_PAGES}:\n  * ${item}`)
+  await $.tool.call({ tool: 'mcp__session-orchestration__open_pane' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS })
+  await ui.press({ key: 'refresh' })
+  expect((await ui.find({ type: 'Button', key: 'sec-Report pages' }))?.text).toMatch(/REPORT PAGES 1 /)
+  await ui.press({ key: `${REPORT_PAGES}-${item}` })
+  expect((await ui.find({ type: 'Link', text: 'Open the page' }))?.props.href).toBe(url)
+  await ui.unmount()
 })
 
 test('a done reply is sent only once its kind holds: clean, pushed, a PR on the board without failing checks; a report\'s files exist', async ($, on) => {

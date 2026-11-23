@@ -45,6 +45,11 @@ same way a hook's exit 2 sends you back. The kinds:
 - `pushed`: clean and pushed, no PR (a branch someone else lands, e.g. by a release command you hand over).
 - `report`: research or a report, no code: every file path the text names (`/…` or `~/…` with an extension) exists.
 
+**A report page.** When `session-status --config features.report_artifacts` prints anything and you finish a
+research, retro, design or review report, follow `../../features/report-artifacts.md`: run its check, publish the
+`.md` only on `publish: yes`, and pass the link as `reply`'s `artifact` with `done: report`. On a `no`, the report
+stays local and the done report says why.
+
 git runs in the session's cwd; pass `worktree` (absolute) when the task's worktree is elsewhere. What the board can't
 show (no adapter, a failed lookup) isn't held against you. If a check is still wrong (the board's PR words are
 stale), say so in the report and send it without `done`.

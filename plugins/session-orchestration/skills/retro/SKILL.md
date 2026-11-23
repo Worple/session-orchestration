@@ -218,17 +218,21 @@ and no heading.
      cases, most seen first) and offers the apply (feedback.md, "Applying"). With a plugin coordinator (`feedback
      coordinator` exits other than 2), it names them as that coordinator's instead, with no offer.
 
-   Then `python3 -I retro.py html <R>/retro-<scope>-<N>.md <R>/retro-<scope>-<N>.html`.
+   Then `python3 -I retro.py html <R>/retro-<scope>-<N>.md <R>/retro-<scope>-<N>.html`. When `session-status
+   --config features.report_artifacts` lists `retro`, publish the `.md` as a private page by
+   [report-artifacts.md](../../features/report-artifacts.md) and pass its link in step 6's message (`reply`'s `artifact`).
+   A published page always gets its own message, even when nobody would get it (`reply` then queues it) and under
+   `both` (one message per page): `artifact` records one page per reply.
 6. Send the coordinator at most 5 lines with the `reply` tool, no `to` (ToolSearch
    `mcp__session-orchestration__reply`; it finds the live coordinator at send time): the report path, the top 2–3
    proposals, a research run when the scan is due, and anything that needs the user. With `both`, one message after
-   both runs, naming both reports. Nobody gets it: skip the message; the report is enough.
+   both runs, naming both reports. Nobody gets it: skip the message; the report is enough, unless step 5 published a page (its reply records it).
 
 ## Done when
 
 `retro-<scope>-<N>.md` and `.html` exist for each scope this run took, every section `retro.py sections` printed
 has its rows filled (or "no data" and why) and no other section appears, a plugin run has its "Other tools: last
-scanned" line, and the coordinator message is sent or skipped for a stated reason.
+scanned" line, and the coordinator message is sent or skipped for a stated reason (never skipped when a page was published).
 
 ## Scheduling the weekly run
 

@@ -70,7 +70,7 @@ user_config() { echo "${XDG_CONFIG_HOME:-$HOME/.config}/session-orchestration/co
 # person_keys_drop [MODULE]: the jq filter that drops the person keys (and MODULE's messages block) from a repo file;
 # coord_json reads the repo file through it, and --shared refuses a team file it would change.
 person_keys_drop() {
-  echo "del(.approvals, .terminal, .messages, .msgraph, .trusted, .team, .feedback, .telemetry, .handoff, .compact, .pending, .history, .fable, .start, .retro, .docs_watch, .pane, .coordinator$( [[ ${1:-} =~ ^[A-Za-z0-9_-]+$ ]] && echo ", .[\"$1\"]")) | if .features | type == \"object\" then del(.features.accounts, .features.accounts_weekly_switch, .features.notify, .features.retro, .features.remote, .features.docs_watch) else . end"
+  echo "del(.approvals, .terminal, .messages, .msgraph, .trusted, .team, .feedback, .telemetry, .handoff, .compact, .pending, .history, .fable, .start, .retro, .docs_watch, .pane, .coordinator, .report_artifacts$( [[ ${1:-} =~ ^[A-Za-z0-9_-]+$ ]] && echo ", .[\"$1\"]")) | if .features | type == \"object\" then del(.features.accounts, .features.accounts_weekly_switch, .features.notify, .features.retro, .features.remote, .features.docs_watch, .features.report_artifacts) else . end"
 }
 
 coord_memo=   # never inherited: valid only for the cwd its caller built it in
@@ -193,6 +193,26 @@ coord_purpose() {
   ( [ -z "${1:-}" ] || cd "$1" 2>/dev/null || exit 0
     local f; f=$(person_file 2>/dev/null) && [ -f "$f" ] || exit 0
     jq -r '.coordinator.purpose | strings | split("\n")[0] // empty | .[0:200] | select(length > 0)' "$f" 2>/dev/null )
+}
+# report_artifacts_cfg KEY: config features.report_artifacts (the kinds, one per line) or report_artifacts.account (an
+# absolute config dir, ~ expanded), from this project's person file only (features/report-artifacts.md): what may
+# leave the machine is set per project and per person. Unset or invalid prints nothing (off).
+report_artifacts_cfg() {
+  local f v
+  f=$(person_file 2>/dev/null) && [ -f "$f" ] || return 0
+  if [ "$1" = features.report_artifacts ]; then
+    v=$(jq -c '.features.report_artifacts // []' "$f" 2>/dev/null) || return 0
+    jq -r 'if type == "array" and all(.[]; IN("research", "retro", "design", "review")) then .[] else error end' <<<"$v" 2>/dev/null ||
+      echo "warning: config features.report_artifacts=$v is not a list of research, retro, design, review: off" >&2
+  else
+    v=$(jq -r '.report_artifacts.account // empty | strings' "$f" 2>/dev/null)
+    [ -n "$v" ] || return 0
+    [[ $v == '~'/* ]] && v=$HOME/${v#'~/'}
+    v=${v%/}
+    [[ $v == /* ]] && [ -d "$v" ] && echo "$v" ||
+      echo "warning: config report_artifacts.account=$v is not an absolute folder: unset" >&2
+  fi
+  return 0
 }
 # purpose_set TEXT: writes coordinator.purpose to this project's person file (session-status --purpose).
 purpose_set() {
@@ -328,6 +348,11 @@ detect_host() {
 #   coordinator.purpose one line (at most 200 characters) on what this project's coordinator is for, which other
 #                       coordinators route matters by (session-status --coordinators, --purpose writes it). Read from
 #                       this project's .claude/coordination.local.json only (coord_purpose)    default empty
+#   features.report_artifacts  JSON list of report kinds (research retro design review) a session may publish as a
+#                       private claude.ai page (features/report-artifacts.md), printed one per line. This project's
+#                       .claude/coordination.local.json only (report_artifacts_cfg)    default empty: off
+#   report_artifacts.account  the Claude config dir (~ expanded) whose sessions publish them; needed when
+#                       features.accounts is on. The same file only     default empty
 #   pending.file        the coordinator's handoff file, *.md, relative to the project root, ~ or absolute (pending_path): its entries' history
 #                       and archive (skills/orchestrating-sessions/pending); person only    default empty (none)
 #   history.dirs        JSON list of folders (relative to the root, ~ or absolute) the Stop hook keeps a local git
@@ -447,7 +472,8 @@ config() {
     handoff.at.chunk|handoff.at.task|handoff.at.coordinator|handoff.hard_after|handoff.stop_room|compact.window) ;;
     pane.sections) pane_sections; return 0 ;;
     coordinator.purpose) coord_purpose; return 0 ;;
-    *) echo "unknown config key: ${key:-(none)} (one of tracker host key_pattern approvals.delegate approvals.pr_create features.accounts features.accounts_weekly_switch features.review_inbox features.notify start.mode start.kinds.feedback_apply start.sidebar features.retro features.remote retro.scope retro.schedule retro.account retro.sections features.docs_watch docs_watch.files docs_watch.pattern terminal messages feedback.mode feedback.repo_dir feedback.project_dir telemetry pending.file history.dirs fable.accounts coordinator.purpose plan.enabled plan.max_parallel plan.models.{design,build,mechanical,review,release,scan,coordinator,retro,research} plan.advisor.{design,build,mechanical,review,release,scan,coordinator,retro,research} handoff.at.{chunk,task,coordinator} handoff.hard_after handoff.stop_room compact.window pane.sections)" >&2; return 2 ;;
+    features.report_artifacts|report_artifacts.account) report_artifacts_cfg "$key"; return 0 ;;
+    *) echo "unknown config key: ${key:-(none)} (one of tracker host key_pattern approvals.delegate approvals.pr_create features.accounts features.accounts_weekly_switch features.review_inbox features.notify start.mode start.kinds.feedback_apply start.sidebar features.retro features.remote retro.scope retro.schedule retro.account retro.sections features.docs_watch docs_watch.files docs_watch.pattern terminal messages feedback.mode feedback.repo_dir feedback.project_dir telemetry pending.file history.dirs fable.accounts coordinator.purpose plan.enabled plan.max_parallel plan.models.{design,build,mechanical,review,release,scan,coordinator,retro,research} plan.advisor.{design,build,mechanical,review,release,scan,coordinator,retro,research} handoff.at.{chunk,task,coordinator} handoff.hard_after handoff.stop_room compact.window pane.sections features.report_artifacts report_artifacts.account)" >&2; return 2 ;;
   esac
   v=$(coord_json | jq -r --arg k "$key" 'getpath($k | split(".")) | if . == null then empty else tostring end')
   [ -n "$v" ] && case $key in
@@ -510,7 +536,7 @@ config() {
 
 # The coordinator pane's section slugs (hooks/register.tsx sectionSlug: a title, lowercase, its "(…)" dropped), and
 # the on-you ones, which are never hidden.
-PANE_SLUGS=" waiting-on-you decisions needs-action in-review working landing idle other-sessions leftovers notices stale-prompts stale other-projects pending resolved actions moved waits-on-you you-wait-on new-for-you worked-on tasks sent "
+PANE_SLUGS=" waiting-on-you decisions needs-action in-review working landing idle other-sessions leftovers notices stale-prompts stale other-projects pending resolved actions moved waits-on-you you-wait-on new-for-you worked-on tasks sent report-pages "
 PANE_ON_YOU=" waiting-on-you decisions needs-action "
 # pane_sections: config pane.sections, from the project's person file only (a per-project, per-person key), as one
 # JSON object of its valid entries.
