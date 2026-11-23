@@ -1087,9 +1087,12 @@ touch -t 202001010000 "$proj/$hid.jsonl"; out=$(run --handover "$hid" 'Do X.') &
 # A last message that ended the turn: handed over at once, though a /rename's reminder or a message wrote there since.
 printf '%s\n' '{"type":"user","message":{"content":"x"}}' '{"type":"assistant","message":{"stop_reason":"end_turn"}}' \
   '{"type":"system","subtype":"local_command"}' '{"type":"user","isMeta":true,"message":{"content":"renamed"}}' '{"type":"queue-operation"}' >> "$proj/$hid.jsonl"
+# (Its newest report kept off a plan, ABC-40-report.md, is the one continued from.)
+touch -t 202001010000 "$root/replies/ABC-40.md"; echo report > "$root/replies/ABC-40-report.md"
 [ "$(run --handover "${hid:0:8}" -- 'Do X.')" = 'handed ABC-40 over: "fix it" (88888888) stopped, superseded by "ABC-40-fix-it" (abcdef12)' ] &&
-  [ "$(calls | grep -v ' agents ')" = "$(printf 'cfg stop 88888888\ncfg --bg -n ABC-40-fix-it Work on ABC-40: continue from replies/ABC-40.md. Do X. Supersedes: %s (transcript %s; read only the parts you need, never whole).' "$hid" "$proj/$hid.jsonl")" ] ||
+  [ "$(calls | grep -v ' agents ')" = "$(printf 'cfg stop 88888888\ncfg --bg -n ABC-40-fix-it Work on ABC-40: continue from replies/ABC-40-report.md. Do X. Supersedes: %s (transcript %s; read only the parts you need, never whole).' "$hid" "$proj/$hid.jsonl")" ] ||
   { echo "handover failed"; calls; exit 1; }
+rm "$root/replies/ABC-40-report.md"
 # One under the other account is stopped there, and its successor starts under this one (that one may be at its
 # weekly limit, and only this account's sessions can message the coordinator).
 oid=bbbbbbbb-2222-3333-4444-555555555555
@@ -2979,6 +2982,9 @@ rc=0; out=$(ap --relay ABC-12 'merge acme/app#6 (abc-fix)' 2>&1) || rc=$?
 stub p-coordinator
 out=$(ap --relay ABC-12 'merge acme/app#6 (p-ABC-12)' 2>&1) && [[ $out == *$'\nAction: merge acme/app#6 (p-ABC-12)\n'* ]] ||
   { echo "--relay, short key: $out"; exit 1; }
+# A name holding a tracker key (KEY-fix, KEY-cN) stays as given too: the hook takes the key from it.
+out=$(ap --relay ABC-12 'merge acme/app#6 (ABC-12-fix)' 2>&1) && [[ $out == *$'\nAction: merge acme/app#6 (ABC-12-fix)\n'* ]] ||
+  { echo "--relay, tracker key in the name: $out"; exit 1; }
 stub coord
 # Stopped since (no coordinator listed): the worker's check finds the relay in its transcript.
 printf '#!/bin/sh\necho []\n' > "$tmp/bin/claude"

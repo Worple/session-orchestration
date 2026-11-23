@@ -138,7 +138,8 @@ user a command).
   `<project>-issue-templates`, the prefix of your own `<project>-coordinator`) verifies the same way. When the yes that started the session was given under another key and speaks of its landing (a
   design task's pane answer "start stage 1 as its own PR; landing it is approved with it"), run
   `session-status --relay <that key> 'merge OWNER/REPO#ID (<session name>)'`: it adds `, approved under <that key>`
-  to the Action itself (refusing an answer that doesn't speak of landing or merging), so your command makes no
+  to the Action itself (refusing an answer whose own words, not its `Asked:` question, don't speak of landing or
+  merging; a session name holding a tracker key, or the short name above, stays as given), so your command makes no
   approval claim; the hook verifies the quote with that key, within 24h of the answer. A project that lands by fast-forward instead: `Action: merge <branch> (<session
   name>)` for the worker's `session-status --land <branch>`. The check reads the source's transcript for its send of
   that whole relay first (no session listing for a send within 24h), so a relay whose source has since stopped still

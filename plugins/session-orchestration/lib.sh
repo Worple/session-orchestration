@@ -729,7 +729,7 @@ list_sessions() {
       | "\(.sessionId)\t\(.name)\t\($st)\t\($pre)\t\((.startedAt // 0) / 1000 | floor)\t\(.cwd)\t\(.kind // "")\t\(.status // "")\t\(.pid // "")\t\(.waitingFor // "" | tostring | gsub("[\t\n\r]"; " ") | .[:80])"' <<<"$out"
   done < <(list_accounts) |
     # one row per id across accounts: the owning account's (a live process, else not done) beats a stale copy; ties keep the first (this account)
-    awk -F'\t' '{ r = $9 != "" ? 2 : $3 != "done" } !($1 in b) { o[++n] = $1; b[$1] = $0; k[$1] = r; next }
+    awk -F'\t' '{ r = $9 != "" ? 2 : $3 !~ /^(done|stopped|failed)$/ } !($1 in b) { o[++n] = $1; b[$1] = $0; k[$1] = r; next }
       r > k[$1] { b[$1] = $0; k[$1] = r } END { for (i = 1; i <= n; i++) print b[o[i]] }'
 }
 

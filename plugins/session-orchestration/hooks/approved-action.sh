@@ -560,7 +560,7 @@ while IFS= read -r r; do
     nm=${BASH_REMATCH[1]} under=${BASH_REMATCH[3]}
     [ -n "$me" ] || me=$(jq -r 'select(.type == "agent-name") | .agentName // empty' "$tp" 2>/dev/null | tail -1)
     # Under another key, the yes itself must speak of the landing: a yes to start some task approves no merge.
-    if [ -n "$under" ] && ! jq -r .quote <<<"$r" | grep -qiE 'land|merg'; then
+    if [ -n "$under" ] && ! jq -r .quote <<<"$r" | sed 's/ Asked:.*//' | grep -qiE '(^|[^a-z])(land|merg)'; then
       tried="the quote approved under $under doesn't speak of landing or merging"; fault not-landing relay; continue; fi
     [ "$nm" != "$me" ] || key=${under:-$me}
     # A coordinator may have asked under the name without its project prefix (the "<project>-" of its own
@@ -584,13 +584,14 @@ while IFS= read -r r; do
   [[ $v == verified* ]] || v=${v1:-$v}
   # One use per relay: a rerun (the CLI timed out after the server took it) needs a new approval.
   # ponytail: used up when allowed, not when the command succeeds; the deny says to check before asking again. A gh
-  # merge whose PR is still open with no auto-merge queued (gh refused it: --auto on a clean PR) didn't use it.
+  # merge whose PR is still open with no auto-merge queued (gh refused it: --auto on a clean PR) didn't use it, while
+  # the PR's head is the one the first run saw (the used stamp holds it): new commits need a new approval.
   used=~/.cache/session-status/approved/$(printf '%s|%s|%s' "$(jq -r .tp <<<"$r")" "$action" "$(jq -c "del(.tp)" <<<"$r")" | shasum -a 256 | cut -c1-32)
   case "$v" in
-    verified*) [ ! -e "$used" ] || { [ "$kind" = merge ] && [ "$host" = gh ] &&
-                 gh pr view "$target" -R "$repo" --json state,autoMergeRequest 2>/dev/null | jq -e '.state == "OPEN" and .autoMergeRequest == null' >/dev/null 2>&1; } ||
+    verified*) pr=; [ "$kind" != merge ] || [ "$host" != gh ] || pr=$(gh pr view "$target" -R "$repo" --json state,autoMergeRequest,headRefOid 2>/dev/null) || pr=
+               [ ! -e "$used" ] || jq -e --arg h "$(cat "$used")" '$h != "" and .headRefOid == $h and .state == "OPEN" and .autoMergeRequest == null' <<<"${pr:-null}" >/dev/null 2>&1 ||
                  { tried="this relay was used once already: check whether that run landed before asking again"; fault used-once relay; continue; }
-               mkdir -p "${used%/*}" && touch "$used" || exit 1
+               mkdir -p "${used%/*}" && { jq -r '.headRefOid // empty' <<<"${pr:-null}" 2>/dev/null || :; } > "$used" || exit 1
                # This exact command, also handed to the user (hand_command): withdrawn, or the pane's Run posts it again.
                w=
                [ -z "$sid" ] || for c in ~/.cache/session-status/commands/*.json; do
