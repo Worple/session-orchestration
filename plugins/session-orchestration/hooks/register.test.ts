@@ -1255,7 +1255,8 @@ test('the model\'s SendMessage by a name the engine refused goes to the socket o
   // failed listing (exit 3), anyone else nobody's (exit 2).
   const asked: unknown[] = []
   const exits: Record<string, [number, string]> = { 'other-coord': [0, ''], 'here-coord': [4, 'here-coord is live under this account'],
-    down: [3, 'an account\'s session listing failed, so who carries down is unknown: try again'] }
+    down: [3, 'an account\'s session listing failed, so who carries down is unknown: try again'],
+    'lap-coordinator': [5, 'lap-coordinator is your coordinator on another computer: SendMessage reaches it only while this session is connected to Remote Control (/remote-control)'] }
   on('process.run', async (_, e) => {
     asked.push([e.argv.slice(2), e.init?.cwd])
     const [rc, err] = exits[String(e.argv[3])] ?? [2, `no live session ${e.argv[3]} in any listed account`]
@@ -1277,14 +1278,16 @@ test('the model\'s SendMessage by a name the engine refused goes to the socket o
   expect(await send('here-coord')).toEqual({ isDelivered: false, reason: 'nobody by that name' })
   expect(await send('nobody')).toEqual({ isDelivered: false, reason: 'nobody by that name' })
   expect(await send('down')).toEqual({ isDelivered: false, reason: 'nobody by that name; under another account: an account\'s session listing failed, so who carries down is unknown: try again' })
+  // a remote.tsv name (exit 5): why, without the other-account framing
+  expect(await send('lap-coordinator')).toEqual({ isDelivered: false, reason: 'nobody by that name; lap-coordinator is your coordinator on another computer: SendMessage reaches it only while this session is connected to Remote Control (/remote-control)' })
   // an address and a plugin's send pass as they came, unasked
   await send('uds:/tmp/cc-socks/7.sock'); await send('gone', 'plugin')
   // a Remote Control or cloud session's id, refused: the engine's answer as it came, unasked
   expect(await send('session_01ShfF3a6rxrqysVCp7fzgiV')).toEqual({ isDelivered: false, reason: 'nobody by that name' })
-  expect(asked.length).toBe(4)
+  expect(asked.length).toBe(5)
   up = false
   expect(await send('other-coord')).toEqual({ isDelivered: false, reason: 'other-coord, live under another account at uds:/tmp/cc-socks/42.sock: nobody by that name' })
-  expect(sent).toEqual(['mine', 'other-coord', 'uds:/tmp/cc-socks/42.sock', 'here-coord', 'nobody', 'down',
+  expect(sent).toEqual(['mine', 'other-coord', 'uds:/tmp/cc-socks/42.sock', 'here-coord', 'nobody', 'down', 'lap-coordinator',
     'uds:/tmp/cc-socks/7.sock', 'gone', 'session_01ShfF3a6rxrqysVCp7fzgiV', 'other-coord', 'uds:/tmp/cc-socks/42.sock'])
 })
 

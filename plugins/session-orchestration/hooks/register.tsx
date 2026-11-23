@@ -1907,9 +1907,10 @@ export const register: Register = on => {
     const r = await runBash($, [`${$.plugin.root}/skills/orchestrating-sessions/session-status`, '--address', e.to, '--other'], { cwd, timeoutMs: 30_000 }).catch(() => undefined)
     const to = r?.exitCode === 0 ? r.stdout.trim() : ''
     // exit 4 (this account's) and 2 with no other session by the name: the engine's own answer; else why not, after it.
+    // Exit 5: a name in the person's remote.tsv (features/remote.md), which needs Remote Control or a link, not an account.
     if (!to.startsWith('uds:') || to.includes('\n')) {
       const why = r && r.exitCode !== 4 && !/^no live session .* in any listed account$/.test(oneLine(r.stderr)) ? oneLine(r.stderr) : ''
-      return why ? { isDelivered: false, reason: `${sent.reason}; under another account: ${why}` } : sent
+      return why ? { isDelivered: false, reason: `${sent.reason}; ${r?.exitCode === 5 ? '' : 'under another account: '}${why}` } : sent
     }
     const again = await $.session.send({ to, text: e.text })
     return again.isDelivered ? again : { isDelivered: false, reason: `${e.to}, live under another account at ${to}: ${again.reason}` }

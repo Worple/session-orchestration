@@ -41,11 +41,13 @@
 # config, node …/dist/index.js) isn't gated. Read the config's cli name here if a project uses one.
 # TODO: GitLab. glab mr merge|note|approve and glab issue note pass ungated; gate them like gh (glab has no body-file
 # flag: -m "$(cat /abs/file)").
+# A link message to another person's coordinator (session-status --link send), and a renew of such a link, run only on
+# the user's Yes in this session's own pane naming it (below, before coordinated()).
 # The other gated way to post: skills/orchestrating-sessions/review-inbox/post-approved.sh, whose CLI call this hook
 # doesn't see. It posts only review-inbox rows the user approved on the page, each checked by verify-row.sh.
 input=$(cat)
 # (The raw JSON: a newline before gh is the two characters \n.)
-pre='session-status[[:space:]]+--land|bitbucketdc-cli|forgejo-cli|jiradc-cli|msgraph|\$[^[:space:]]*[[:space:]]+(message|mail|calendar|file)[[:space:]]|(^|[^A-Za-z0-9_.-]|\\[nrt])gh([^A-Za-z0-9_.-]|$)'
+pre='session-status[[:space:]]+--land|--link|bitbucketdc-cli|forgejo-cli|jiradc-cli|msgraph|\$[^[:space:]]*[[:space:]]+(message|mail|calendar|file)[[:space:]]|(^|[^A-Za-z0-9_.-]|\\[nrt])gh([^A-Za-z0-9_.-]|$)'
 [[ $input =~ $pre ]] || exit 0
 
 done=
@@ -96,6 +98,51 @@ coordinated() {
   fi
   [ -z "$c" ] || echo "$sz" > "$c"; return 1
 }
+# A link message (session-status --link send, features/remote.md, Links) leaves for another person's coordinator, and
+# a renew keeps that link open: each runs alone, and only on the user's Yes in this session's own pane (no relay: the
+# coordinator acts itself), whose question names the action ("send link message FILE to PEER (sha256 SHA)", "renew
+# link PEER for DAYS days"), within 24 h, once. --check sends nothing, and a send to your own other account (--link
+# kind: self) carries no one else's data, so both pass. A session-status --link send|renew that isn't that one plain
+# call is denied: a quoted path, a quoted word, a wrapper. Text that only mentions one (a grep, a commit message) passes. Checked before coordinated(): a link is only ever
+# a coordinator's.
+kpre='session-status["'"'"']?[[:space:]]+["'"'"']?--link[^A-Za-z0-9]+(send|renew)([^A-Za-z0-9]|$)'
+kone='^[[:space:]]*(bash[[:space:]]+)?([^[:space:];&|<>`$"'"'"'\\]*/)?session-status[[:space:]]+--link[[:space:]]+send[[:space:]]+([A-Za-z0-9][A-Za-z0-9._-]*)[[:space:]]+--kind[[:space:]]+[a-z]+([[:space:]]+--re[[:space:]]+[0-9]+)?[[:space:]]+(/[^[:space:];&|<>`$\\"'"'"']+)([[:space:]]+--check)?[[:space:]]*$'
+rone='^[[:space:]]*(bash[[:space:]]+)?([^[:space:];&|<>`$"'"'"'\\]*/)?session-status[[:space:]]+--link[[:space:]]+renew[[:space:]]+([A-Za-z0-9][A-Za-z0-9._-]*)([[:space:]]+([0-9]{1,3}))?[[:space:]]*$'
+if [[ $raw =~ $kpre ]]; then
+  if [[ $raw =~ $kone ]]; then
+    peer=${BASH_REMATCH[3]} file=${BASH_REMATCH[5]}
+    [ -z "${BASH_REMATCH[6]}" ] || pass
+    [ "$(cd "${cwd:-.}" 2>/dev/null && "$here/../skills/orchestrating-sessions/session-status" --link kind "$peer" 2>/dev/null)" != self ] || pass
+    [ -f "$file" ] || decide deny "Blocked: no file $file."
+    action="send link message $file to $peer (sha256 $(shasum -a 256 "$file" | cut -d' ' -f1))"
+    how="ask your user on your pane: ask_approval with key link-$peer, body_file $file, the question naming exactly \"$action\" (session-status --link send … --check prints it) and a first option starting Yes; on their Yes, run the same command again"
+  elif [[ $raw =~ $rone ]]; then
+    peer=${BASH_REMATCH[3]}
+    action="renew link $peer for $((10#${BASH_REMATCH[5]:-14})) days"
+    how="ask your user on your pane: ask_approval with key link-$peer, the question naming exactly \"$action\" and a first option starting Yes; on their Yes, run the same command again"
+  else
+    decide deny "Blocked: run session-status --link send PEER --kind K [--re N] /abs/FILE (or --link renew PEER [DAYS]) alone, as its own plain command, so the approval hook can name it."
+  fi
+  # The pane's click: a row this plugin submitted (the engine sets that origin; no other plugin or session can), its
+  # option a yes, its question naming the action.
+  row=$([ -f "$tp" ] && jq -rn --arg a "$action" --argjson since "$(( $(date +%s) - 86400 ))" '
+    def pane: (. // {}) | .kind == "plugin" and .name == "session-orchestration";
+    inputs | . as $e
+    | (if .type == "user" and (.origin | pane) then (.message.content | if type == "string" then . else ([.[]? | .text? // empty] | join(" ")) end)
+       elif .type == "attachment" and .attachment.type == "queued_command" and (.attachment.origin | pane) then .attachment.prompt | tostring
+       else empty end) as $t
+    | select(($e.timestamp // "" | sub("\\.[0-9]+Z$"; "Z") | try fromdate catch 0) >= $since)
+    | select($t | startswith("Approval pane answer for "))
+    | ($t | index(". Asked: ")) as $i | select($i != null)
+    | select($t[:$i] | sub("^Approval pane answer for [^:]*: "; "") | test("^yes\\b"; "i"))
+    | select($t[$i + 9:] | contains($a))
+    | "\($e.uuid // $e.timestamp)"' "$tp" 2>/dev/null | tail -1)
+  [ -n "$row" ] || attended "Blocked: $action needs your user's Yes on your pane first (a link to another person's coordinator): $how."
+  used=~/.cache/session-status/approved/$(printf 'link|%s|%s|%s' "$tp" "$action" "$row" | shasum -a 256 | cut -c1-32)
+  [ ! -e "$used" ] || attended "Blocked: that Yes was used already; $how."
+  mkdir -p "${used%/*}" && : > "$used" || exit 1
+  decide allow "Your user's Yes on the pane for: $action"
+fi
 coordinated || pass
 # A landing by fast-forward (session-status --land BRANCH, worker.md) is gated as a merge: its action is "merge
 # BRANCH", relayed as "merge BRANCH (<this session's name>)". Seen where a command starts; it must run alone.

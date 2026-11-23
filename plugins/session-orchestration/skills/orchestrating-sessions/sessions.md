@@ -52,7 +52,8 @@ Never start, message or resume that project's sessions yourself, and never pass 
 When the user added any, a `Remote` block follows: their coordinators on their other computers
 (`NAME · another computer (Remote Control) · PURPOSE`, added with `session-status --remote add`). SendMessage one by
 NAME while your session is connected to Remote Control; not connected, it gets no reply address. No inbox reaches
-another computer ([features/remote.md](../../features/remote.md)).
+another computer ([features/remote.md](../../features/remote.md)). A `link` row is a coordinator under another account
+or another person's: message it with `session-status --link send` (remote.md, Links).
 
 Each coordinator registers its root at `--start`; the line is its config `coordinator.purpose`, and `--start` asks for
 it under `## Purpose` while it is unset (ask the user, then `session-status --purpose 'LINE'`). What is shared: nothing.

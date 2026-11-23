@@ -78,7 +78,8 @@ still lists only your account: `session-status --activity` lists every account's
 ## Messaging another project's coordinator
 
 A coordinator on another of your computers (same claude.ai account) isn't reached this way: it is a Remote Control
-session ([remote.md](remote.md)).
+session ([remote.md](remote.md)). Nor is one on another computer under another claude.ai account, or another person's:
+that takes a link (remote.md, Links).
 
 `session-status --coordinators` names every project's coordinator, its root, account and purpose, and the address to reach it
 at (orchestrating-sessions sessions.md, Another project's matter). Which account runs which project is the user's rule (the CLAUDE.md section that names the accounts), so another
