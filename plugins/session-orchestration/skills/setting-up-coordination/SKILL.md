@@ -132,6 +132,9 @@ an id in the code with no row or no fixture.
 
 ## Shared mode
 
+The rules for two or more people on one project (what is shared, what never is, approvals, ownership, what a team
+file may hold): `team.md`, next to this file.
+
 Off by default: setup writes nothing a collaborator sees (everything goes to `.git/info/exclude`d files and
 `CLAUDE.local.md` when `CLAUDE.md` is tracked; it never edits a tracked `CLAUDE.md` or `AGENTS.md`). Only when the
 repo's owner wants it, on the user's request. When git shows other authors, the proposal says so in one line and

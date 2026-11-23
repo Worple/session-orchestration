@@ -2263,6 +2263,45 @@ out=$(init "$x" --team-memory) && grep -qxF 'Carried: 1 [team] line(s) landed on
   { echo "team-memory pruned after merge: $out"; exit 1; }
 fi
 
+if section two-people; then
+gh_offline
+# Two people on one shared repo (part 2 of the design, setup's team.md): clones x and y, each its own P and personal config,
+# one T on origin. Both read T's files, neither sees the other's delegation, trust or P; a committed repo file that
+# delegates delegates for no one; nothing personal reaches git.
+o=$(mkdir -p "$tmp/tp/o.git" && cd "$tmp/tp/o.git" && pwd -P); git -C "$o" init -q --bare && git -C "$o" symbolic-ref HEAD refs/heads/main
+s=$(mkdir -p "$tmp/tp/seed" && cd "$tmp/tp/seed" && pwd -P); git -C "$s" init -q && git -C "$s" symbolic-ref HEAD refs/heads/main
+mkdir -p "$s/.claude/coordination"; echo '{"tracker":"none","host":"github"}' > "$s/.claude/coordination/coordination.json"
+echo '# Team memory' > "$s/.claude/coordination/memory.md"; echo '# Team review' > "$s/.claude/coordination/review-brief.md"
+printf '#!/bin/sh\n[ "$1" = urls ] && echo team-urls\n' > "$s/.claude/coordination/session-status-adapter"; chmod +x "$s/.claude/coordination/session-status-adapter"
+git -C "$s" add -f -A && gc "$s" -m shared && git -C "$s" push -q "$o" main
+git clone -q "$o" "$tmp/tp/x" && git clone -q "$o" "$tmp/tp/y"; x=$(cd "$tmp/tp/x" && pwd -P) y=$(cd "$tmp/tp/y" && pwd -P)
+sha=$(shasum -a 256 "$x/.claude/coordination/session-status-adapter" | cut -d' ' -f1)
+cfg() { (cd "$1" && HOME=$tmp XDG_STATE_HOME=$tmp/state CLAUDE_CONFIG_DIR=$tmp/cfg PATH=$tmp/bin:$PATH "$here/session-status" --config "$2" 2>/dev/null); }
+# both ask nothing about the repo; x delegates and trusts the adapter, y does neither
+init "$x" --write --delegate --trust=session-status-adapter@"$sha" >/dev/null && init "$y" --write >/dev/null ||
+  { echo "two-people: setup: $(init "$x" --write 2>&1) / $(init "$y" --write 2>&1)"; exit 1; }
+[ "$(cfg "$x" approvals.delegate)" = true ] && [ "$(cfg "$y" approvals.delegate)" = false ] &&
+  [ "$(cfg "$x" tracker)" = none ] && [ "$(cfg "$y" tracker)" = none ] || { echo "two-people: delegate/tracker: $(cfg "$x" approvals.delegate) $(cfg "$y" approvals.delegate)"; exit 1; }
+# one T, read by both; the adapter is trusted by x only
+init "$x" --check | grep -qx 'team: memory, review-brief, adapter (trusted)' ||
+  { echo "two-people: x team line: $(init "$x" --check)"; exit 1; }
+init "$y" --check | grep -qx 'team: memory, review-brief, adapter (not trusted, local wins)' ||
+  { echo "two-people: y untrusted: $(init "$y" --check)"; exit 1; }
+[ "$(cd "$x" && HOME=$tmp XDG_STATE_HOME=$tmp/state "$here/session-status" --urls)" = team-urls ] || { echo "two-people: x adapter didn't run"; exit 1; }
+# two personal folders: distinct, outside both clones, each clone clean
+px=$(pof "$x") py=$(pof "$y")
+[ "$px" != "$py" ] && [ -d "$px" ] && [ -d "$py" ] && [ -z "$(git -C "$x" status --short)" ] && [ -z "$(git -C "$y" status --short)" ] &&
+  ! git -C "$x" ls-files | grep -qE 'coordination\.local|CLAUDE\.local' || { echo "two-people: P/status: $px $py / $(git -C "$x" status --short)"; exit 1; }
+# a teammate's memory line stays in their P: x's isn't in y's, and neither is committed
+echo '- 2026-11-01 X-1: only x knows' >> "$px/memory.md"
+! grep -rqF 'only x knows' "$py" && ! git -C "$y" grep -qF 'only x knows' || { echo "two-people: x's memory leaked"; exit 1; }
+# a committed repo file that delegates still delegates for no one; trust is not copied by a pull
+echo '{"tracker":"none","host":"github","approvals":{"delegate":true}}' > "$y/.claude/coordination/coordination.json"
+git -C "$y" add -f .claude/coordination/coordination.json && gc "$y" -m 'delegate?' && git -C "$y" push -q origin HEAD:main && git -C "$x" pull -q --ff-only origin main
+[ "$(cfg "$y" approvals.delegate)" = false ] && [ "$(cfg "$x" approvals.delegate)" = true ] && [ -z "$(jq -r '.trusted // empty' "$y/.claude/coordination.local.json")" ] ||
+  { echo "two-people: committed delegate: $(cfg "$y" approvals.delegate)"; exit 1; }
+fi
+
 if section move; then
 gh_offline
 # --write --move: an older setup's files into the state folder. old ROOT ORCH REPLIES: ROOT's fresh setup made an
