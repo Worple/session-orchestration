@@ -1,7 +1,8 @@
 # Handing over the coordinator
 
 The coordinator's rules for replacing itself. Read this at the context-watch hook's mark, at a `Weekly limit:` line,
-before a restart, and as a successor (your first prompt says `You succeed "NAME"`). The status command here is
+before a restart, after a plugin update your session can't reload ([sessions.md](sessions.md), Repeats and reloads),
+and as a successor (your first prompt says `You succeed "NAME"`). The status command here is
 `session-status`; each step prints the next. Flags in detail: [status-reference.md](status-reference.md#commands-in-detail).
 
 ## The old coordinator

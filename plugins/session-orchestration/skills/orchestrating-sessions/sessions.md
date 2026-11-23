@@ -170,3 +170,6 @@ The script lists each PR, event and head SHA once.
   ends. Load a new tool with ToolSearch the turn after. To reload a worker, message it to call `reload_plugins`
   itself. A plugin tool that goes missing mid-session (Claude Code can retract them after an interrupted call) is
   registered again when the turn ends: ToolSearch it the turn after; if it still doesn't show, run `/reload-plugins`.
+  Hooks and tools change on the reload, never before it. Where it fails (your turn ends with `Reloading plugins
+  failed`) or `/reload-plugins` can't run in your session, only a new session has the new version: hand over
+  ([handover.md](handover.md)).

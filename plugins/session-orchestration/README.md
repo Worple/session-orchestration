@@ -81,6 +81,23 @@ background guards without a coordinator, install only `project-memory@session-or
 Updating an install from before project-memory split off: `claude plugin install project-memory@session-orchestration`
 too if `session-status --init --check` says it isn't installed (until then, background sessions have no guards).
 
+## Update
+
+```
+claude plugin marketplace update session-orchestration
+claude plugin update session-orchestration@session-orchestration
+```
+
+The first refreshes the marketplace from its source, the second installs the newest version it lists;
+`claude plugin list` shows the installed one. Releases carry no tags: each change lands on `main` as a commit titled
+`session-orchestration <version>: <what changed>`, so the commit list is the changelog and `version` in
+`plugins/session-orchestration/.claude-plugin/plugin.json` on `main` is the newest.
+
+A running session keeps the hooks and tools it started with until its plugins reload: ask the coordinator to reload
+(it calls `reload_plugins`, which runs `/reload-plugins` when its turn ends, and messages a worker to do the same).
+Where the reload fails (the turn ends with `Reloading plugins failed`) or `/reload-plugins` can't run in that
+session, only a new session has the new version: ask the coordinator to hand over to a successor.
+
 ## Start
 
 In a project folder, start Claude Code and say *coordinate this project*. Setup reads the folder, its repos and
