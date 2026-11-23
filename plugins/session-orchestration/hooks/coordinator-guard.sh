@@ -13,11 +13,15 @@
 #   and the root's CLAUDE.local.md while git doesn't track it (a worktree session can't reach it); never in
 #   a task's worktree (.worktrees/, .claude/worktrees/). The path is resolved first (`..`, symlinks).
 #   Outside the root (scratch, ~/.claude) is not the rule's business.
+# - In a task, chunk or review session that answers to a coordinator (keyed, or messaged): start_session and
+#   hand_off_to_session refused (worker.md: a task session starts no session), but a start_session that only shows the
+#   user a card (initiation own_initiative or offer, no proposal_id). start.sidebar doesn't change this.
+#   shortcut: only a cached kind is tested, so a session's first call isn't; upgrade if one starts sessions that early
 # Any other session pays one bash start and a file test (and, until context-watch caches its kind, lib.sh and a
 # first-prompt read).
 input=$(cat)
 # a subagent: its cd and edits aren't the coordinator's, but a sidebar session it starts is just as unseen
-[[ $input =~ \"agent_id\":\ *\"[^\"]+\" ]] && ! [[ $input =~ \"tool_name\":\ *\"mcp__ccd_session__start_session\" ]] && exit 0
+[[ $input =~ \"agent_id\":\ *\"[^\"]+\" ]] && ! [[ $input =~ \"tool_name\":\ *\"mcp__ccd_session__(start_session|hand_off_to_session)\" ]] && exit 0
 [[ $input =~ \"session_id\":\ *\"([A-Za-z0-9_-]+)\" ]] || exit 0
 k=${XDG_CACHE_HOME:-$HOME/.cache}/session-status/handoff-${BASH_REMATCH[1]}.kind
 kind=
@@ -29,7 +33,12 @@ elif [[ $input =~ \"transcript_path\":\ *\"([^\"]+)\" ]] && [ -f "${BASH_REMATCH
   ( . "${0%/*}/../lib.sh" && f=$(first_prompt "$tp" 50) && { [ -n "$f" ] || [ -z "$(sed -n '51{p;q;}' "$tp")" ] || f=$(first_prompt "$tp"); } &&
     ! chunk_of "$f" >/dev/null && ! grep -m 1 . <<<"$f" | grep -qE '^[[:space:]]*Coordinate ' && grep -q '^Act as a coordinator' <<<"$f" ) 2>/dev/null && kind=coordinator
 fi
-[ "$kind" = coordinator ] || exit 0
+# A task, chunk or review session starts no session (worker.md), under start.sidebar too: only its start calls go on
+task=
+case $kind in coordinator) ;;
+  task|chunk|review) task=1; [[ $input =~ \"tool_name\":\ *\"mcp__ccd_session__(start_session|hand_off_to_session)\" ]] || exit 0 ;;
+  *) exit 0 ;;
+esac
 
 # deny REASON NAME: the decision, and NAME as a telemetry=full block line (lib.sh usage).
 deny() {
@@ -38,6 +47,15 @@ deny() {
   exit 0
 }
 { read -r tool; read -r cwd; read -r path; } < <(jq -r '.tool_name // "", .cwd // "", (.tool_input.file_path // .tool_input.notebook_path // "")' <<<"$input")
+if [ -n "$task" ]; then
+  # one that answers to a coordinator: keyed, or messaged (context-watch.sh's test for the reply card)
+  read -r _ key _ < "$k"; [ "$key" != - ] || [ -e "${k%.kind}.card" ] || [ -e "${k%.kind}.msg" ] || exit 0
+  # a card the user starts themselves: Desktop starts nothing for these two without a proposal_id (hand_off_to_session
+  # always starts one; spawn_task only shows a chip, so it isn't matched)
+  [ "$tool" = mcp__ccd_session__start_session ] &&
+    jq -e '.tool_input | (.initiation == "own_initiative" or .initiation == "offer") and (.proposal_id // "" | tostring | test("^\\s*$"))' <<<"$input" >/dev/null && exit 0
+  deny "Worker rule: a task session starts no session (worker.md, Work a message gives you), by start_session or hand_off_to_session. Say in your report what needs one (what, why, whether it only reads): your coordinator starts it by the user's start mode. If the user asked you for it here, show them a card to start themselves: start_session with initiation \"own_initiative\" and no proposal_id." task-start
+fi
 if [ "$tool" = Bash ]; then
   cmd=$(jq -r '.tool_input.command // ""' <<<"$input")
   [[ $cmd =~ ^[[:space:]]*(cd|pushd)([[:space:]]|$) ]] || exit 0

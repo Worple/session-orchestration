@@ -41,11 +41,22 @@ check "$(g c1 $ss '{"title":"PROJ-9-fix","prompt":"Work on PROJ-9: `session-stat
 check "$(g c1 $ss '{"title":"q-next","prompt":"First run `/p/session-status --successor --started p`"}')" deny 'a title that is not NAME-next'
 check "$(g c1 $ss '{"title":"api-next","prompt":"Work on it: `session-status --successor --started api-v2` exits 3."}')" deny 'NAME only as the start of a longer name'
 check "$(g c1 $ss '{"title":"-next","prompt":"`--successor --started `"}')" deny 'an empty NAME'
-check "$(g w1 $ss '{"prompt":"x"}')" allow 'start_session from a task session'
+check "$(g w1 $ss '{"prompt":"x","initiation":"user_asked"}')" deny 'start_session from a keyed task session'
+check "$(g w1 $ss '{"prompt":"x","initiation":"own_initiative"}')" allow 'a card the user starts'
+check "$(g w1 $ss '{"prompt":"x","initiation":"own_initiative","proposal_id":"p1"}')" deny 'a task session starting its own proposal'
+check "$(g w1 mcp__ccd_session__hand_off_to_session '{"title":"x"}')" deny 'hand_off_to_session from a task session'
+check "$(g c1 mcp__ccd_session__hand_off_to_session '{"title":"x"}')" allow 'hand_off_to_session from the coordinator'
+printf 'task - - 0 0\nre\n' > "$tmp/.cache/session-status/handoff-u1.kind"
+check "$(g u1 $ss '{"prompt":"x"}')" allow 'a session no coordinator started or messaged'
+: > "$tmp/.cache/session-status/handoff-u1.msg"
+check "$(g u1 $ss '{"prompt":"x"}')" deny 'a keyless session once it was messaged'
+printf 'subcoordinator K-2 - 0 0\n' > "$tmp/.cache/session-status/handoff-s1.kind"
+check "$(g s1 $ss '{"prompt":"x"}')" allow 'a sub-coordinator'
 check "$(jq -nc --arg c "$root/src" '{session_id: "c1", agent_id: "a1", tool_name: "mcp__ccd_session__start_session", tool_input: {title: "PROJ-1-fix", prompt: "x"}, cwd: $c}' |
   HOME=$tmp XDG_CACHE_HOME=$tmp/.cache XDG_CONFIG_HOME=$tmp/.config bash "$here/coordinator-guard.sh" | jq -r .hookSpecificOutput.permissionDecision)" deny 'start_session from a subagent of the coordinator'
 echo '{"pending":{"file":"docs/pending.md"},"start":{"sidebar":true}}' > "$root/.claude/coordination.local.json"
 check "$(g c1 $ss '{"title":"PROJ-1-fix","prompt":"Work on PROJ-1: fix it."}')" allow 'a sidebar task with start.sidebar on'
+check "$(g w1 $ss '{"prompt":"x"}')" deny 'a task session with start.sidebar on'
 echo '{"pending":{"file":"docs/pending.md"},"start":{"sidebar":"yes"}}' > "$root/.claude/coordination.local.json"
 check "$(g c1 $ss '{"title":"PROJ-1-fix","prompt":"Work on PROJ-1: fix it."}')" deny 'start.sidebar not a boolean'
 echo '{"pending":{"file":"docs/pending.md"}}' > "$root/.claude/coordination.local.json"

@@ -177,6 +177,12 @@ the file's path. That is a plain-text ask, not a plan approval, so a relay can a
 
 ## Work a message gives you
 
+- **Start no session.** A task session (a chunk and a review too) starts none, whatever its brief leaves room for:
+  not Claude Code Desktop's `start_session` or `hand_off_to_session`, not `claude --bg`. Work that needs one: say so
+  in your report (what, why, whether it only reads), and the coordinator starts it by the user's start mode. Your own
+  handover is the one exception (`session-status --handover --self` starts your successor). In Desktop a hook refuses
+  the call; one that only shows the user a card to start themselves (`initiation` `own_initiative`, no
+  `proposal_id`) goes through.
 - **Work on a key that isn't your task: refuse it.** If the message gives you work on KEY and your first prompt or
   your own earlier `Session task:` line names a different task (or "no ticket"), reply only `not my task: I'm <your
   task>; KEY's session is probably elsewhere` and do nothing else: no reading, no files, no marker. Take it on only

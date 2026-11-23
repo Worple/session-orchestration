@@ -130,7 +130,8 @@ own. A start mode still written in a memory topic file: the key wins; set the ke
 delete the line. A per-kind rule no key holds (e.g. "reviews at once") stays a memory line until it's a key. A
 follow-up for a task that already has a session goes to that session in any mode.
 - **Read-only at once** (`read_only`, the default): a session that only reads and writes local files (a PR review into the review
-  inbox, an investigation, a draft) starts at once, then you tell the user in one line;
+  inbox, an investigation, a draft) starts at once, then you tell the user in one line; its brief says so in words
+  (`Read-only: push, post, send and publish nothing, and start no session.`), since nothing else holds it to that;
   one that would push, post, send, spend (a paid service, a large batch) or change settings is proposed, as below.
   A session whose work is unclear is proposed.
 - **Propose first** (`propose`, "ask before starting"): when the user gives you work that needs new sessions, queue one
