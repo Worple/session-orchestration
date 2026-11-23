@@ -588,4 +588,9 @@ grep -q "'task': 0," <<<"$out" && grep -q '^note: 1 sessions .*Pass --project RO
 out=$(retro sections plugin memory units sizing 2>&1)
 [ "$out" = $'skipped: memory (not a plugin section)\nunits\nsizing' ] || fail "sections: the listed ones the scope has" "$out"
 retro sections both 2>/dev/null && fail "sections: one scope per run" ""
+# retro-run's run is task retro-SCOPE, the key its successor's `Session task:` marker carries.
+echo '{"type":"user","timestamp":"2026-10-12T13:00:00.000Z","message":{"content":"Session task: retro run, scope plugin. Use the retro skill."}}
+{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":5}}}' > "$tmp/rr.jsonl"
+out=$(cd "$here" && python3 -c 'import sys, retro; print(retro.stat(sys.argv[1])["task"])' "$tmp/rr.jsonl")
+[ "$out" = retro-plugin ] || fail "a retro run's task key" "$out"
 echo ok

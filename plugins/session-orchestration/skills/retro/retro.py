@@ -670,7 +670,9 @@ def stat(f):
                 pass
     mark = lambda rx: (re.search(rx, s["first"], re.M) or [None, ""])[1]
     # A key: `Session task: KEY` (trailing punctuation dropped), or a brief starting `Work on PROJ-123`.
-    s.update(task=mark(r"^Session task: ([\w./-]*\w)") or mark(r"^Work on ([A-Za-z][\w]*-\d+)\b"), chunk=mark(r"^Chunk: (\S+)"), sup=mark(SUP.pattern),
+    # retro-run's `retro run, scope S` is task retro-S, as context-watch keys it (its successor's marker says so)
+    rs = mark(r"^Session task: retro run, scope ([a-z]+)")
+    s.update(task=rs and "retro-" + rs or mark(r"^Session task: ([\w./-]*\w)") or mark(r"^Work on ([A-Za-z][\w]*-\d+)\b"), chunk=mark(r"^Chunk: (\S+)"), sup=mark(SUP.pattern),
              model=max(s["models"], key=s["models"].get, default="?"))
     s["ts0"] = s["ts0"] or s["ts1"]
     return s

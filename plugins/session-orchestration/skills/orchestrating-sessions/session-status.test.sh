@@ -1110,13 +1110,16 @@ setacct cfg "$(sess "$pid2" "plugin-docs-prev-1" idle 1)"; calls >/dev/null
 out=$(run --handover "$pid2" 'Do Y.') && rc=0 || rc=$?
 [ "$rc" = 0 ] && calls | grep -q -- '--bg -n plugin-docs Work on plugin-docs: continue from replies/plugin-docs.md. Do Y.' ||
   { echo "keyless -prev-1 handover failed: $out"; calls; exit 1; }
-# A retro run, whatever its -n name, reports in replies/retro.md: that stands for its key.
-tid2=55555555-2222-3333-4444-555555555555
-echo '{"type":"user","message":{"content":"Session task: weekly retro run. Use the retro skill."}}' > "$proj/$tid2.jsonl"
-setacct cfg "$(sess "$tid2" "retro-weekly-2026-01-05" idle 1)"; calls >/dev/null; echo report > "$root/replies/retro.md"
-out=$(run --handover "$tid2" 'Do Z.') && rc=0 || rc=$?
-c=$(calls); [ "$rc" = 0 ] && grep -q -- '--bg -n retro-weekly-2026-01-05 Work on retro: continue from replies/retro.md. Do Z.' <<<"$c" &&
-  grep -qx 'Session task: retro' <<<"$c" || { echo "retro handover failed: $out"; echo "$c"; exit 1; }
+# A retro run, whatever its -n name, reports in replies/retro-SCOPE.md: that stands for its key, one per scope, so two
+# scopes at once hand over from their own files.
+for sc in project plugin; do
+  tid2=55555555-2222-3333-4444-77777777777${#sc}
+  echo '{"type":"user","message":{"content":"Session task: retro run, scope '$sc'. Use the retro skill."}}' > "$proj/$tid2.jsonl"
+  setacct cfg "$(sess "$tid2" "retro-$sc-2026-01-05" idle 1)"; calls >/dev/null; echo report > "$root/replies/retro-$sc.md"
+  out=$(run --handover "$tid2" 'Do Z.') && rc=0 || rc=$?
+  c=$(calls); [ "$rc" = 0 ] && grep -q -- "--bg -n retro-$sc-2026-01-05 Work on retro-$sc: continue from replies/retro-$sc.md. Do Z." <<<"$c" &&
+    grep -qx "Session task: retro-$sc" <<<"$c" || { echo "retro $sc handover failed: $out"; echo "$c"; exit 1; }
+done
 # A retro-…-followups task isn't a retro run: no NAME.md, so not handed over from retro.md.
 tid3=55555555-2222-3333-4444-555555555556
 echo '{"type":"user","message":{"content":"Fix the retro followups."}}' > "$proj/$tid3.jsonl"

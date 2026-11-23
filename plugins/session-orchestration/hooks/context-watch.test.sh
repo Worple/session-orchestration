@@ -231,6 +231,11 @@ EXTRA="{\"cwd\": \"$t/proj2\"}" expect bare2 'PROJ-1: fix it' 146000 'handoff re
 # `Session task: KEY.` drops the period.
 fire dot $'Session task: PROJ-123.\nFix it.' 1000 >/dev/null; read -r _ k _ < "$t/cache/session-status/handoff-dot.kind"
 [ "$k" = PROJ-123 ] || fail "key kept its period: $k"
+# retro-run's two scopes at once: one key, so one handoff file, per scope.
+fire rp 'Session task: retro run, scope project. Use the retro skill.' 1000 >/dev/null
+fire rg 'Session task: retro run, scope plugin. Use the retro skill.' 1000 >/dev/null
+read -r _ k _ < "$t/cache/session-status/handoff-rp.kind"; read -r _ k2 _ < "$t/cache/session-status/handoff-rg.kind"
+[ "$k $k2" = 'retro-project retro-plugin' ] || fail "retro scopes keyed $k $k2"
 # A coordinator's .kind: no key (`-`), a `Coordinate …` that names none isn't a sub.
 fire ck "$coord" 1000 >/dev/null; fire ck2 'Coordinate the release.' 1000 >/dev/null
 read -r kd k _ < "$t/cache/session-status/handoff-ck.kind"; [ "$kd $k" = 'coordinator -' ] || fail "coordinator .kind: $kd $k"

@@ -1936,8 +1936,8 @@ if [ -n "$HANDOVER" ]; then
     ! grep -qE ' review([.,;:!)]|$)' <<<"$marks" || { echo "\"$name\" (${id:0:8}) is a review session: not handed over"; exit 2; }
     keys=$( { first_key "$first"; grep -oE "$KEYRE" <<<"$marks"; } | sort -u)
     bn=$name; [[ $name =~ ^(.+)-prev-[0-9]+$ ]] && bn=${BASH_REMATCH[1]}   # renamed already by its own handoff
-    # a retro run (retro-run's retro-SCOPE-DATE; not a retro-…-followups task) reports in retro.md
-    [ -f "$rd/$bn.md" ] || [[ ! $bn =~ ^retro-[a-z]+-[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || bn=retro
+    # a retro run (retro-run's retro-SCOPE-DATE; not a retro-…-followups task) reports in retro-SCOPE.md
+    rr=; [ -f "$rd/$bn.md" ] || [[ ! $bn =~ ^(retro-[a-z]+)-[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { bn=${BASH_REMATCH[1]}; rr=1; }
     [ -n "$keys" ] || [ ! -f "$rd/$bn.md" ] || case $bn in */*|.*|*' '*) ;; *) keys=$bn ;; esac   # keyless task: its NAME.md
     [ -n "$keys" ] || { echo "\"$name\" (${id:0:8}) names no task key (first prompt or Session task: marker) and $rdir has no $bn.md: not handed over"; exit 2; }
     [ "$(grep -c . <<<"$keys")" = 1 ] || { echo "\"$name\" (${id:0:8}) names several task keys ($(paste -sd' ' - <<<"$keys")): hand over by hand"; exit 2; }
@@ -1998,8 +1998,8 @@ if [ -n "$HANDOVER" ]; then
   else
     hist=; [ -z "$PENDING" ] || hist=$(bash "$(dirname "$SELF")/pending" history --find "$key" 2>/dev/null)
     text="$([ "$hf" = "$key" ] && echo Work on || echo Coordinate) $key: continue from $rdir/$hf.md. ${next%.}. Supersedes: $id (transcript $f; read only the parts you need, never whole).${hist:+ The history of its handoff entry, if you need it: $hist (on demand, not up front).}"
-    # a retro run keeps its retro-SCOPE-DATE name, which `Work on retro` doesn't match: context-watch keys it by marker
-    [ "${bn:-}" != retro ] || [ "$new" = retro ] || text=$text$'\nSession task: retro'
+    # a retro run keeps its retro-SCOPE-DATE name, which `Work on retro-SCOPE` doesn't match: context-watch keys it by marker
+    [ -z "${rr:-}" ] || [ "$new" = "$key" ] || text=$text$'\nSession task: '$key
   fi
   # The caller's account, not the old one's: that one may be at its weekly limit, and only the caller's sessions can
   # message the coordinator (features/accounts.md). Unless features.accounts_weekly_switch is on, the caller's is past

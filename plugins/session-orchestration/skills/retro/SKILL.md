@@ -91,6 +91,8 @@ and no heading.
 - Reports, one series per scope, each with its own number, baselines and "Next run" section:
   `<R>/retro-project-<N>.md` and `<R>/retro-plugin-<N>.md`, an `.html` beside each. Data:
   `<R>/retro/<scope>-<N>/*.tsv`, a fresh folder per run.
+- A scheduled run's task key is `retro-<scope>` (one per scope, so `both` keeps two): its `reply` key, and its
+  handoff in `<R>/retro-<scope>.md`.
 - Numbering: the project series continues the old mixed reports. Its run is 1 + the highest N among
   `retro-project-<N>.md` and `rnd-run-<N>.md`, and its baseline is that highest report (an `rnd-run-<N>` is never
   renamed). The plugin series starts at 1 with no baseline: its first run measures two windows (Steps, 2) so

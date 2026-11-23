@@ -74,6 +74,8 @@ else
   elif grep -qE '^Session task: [^ ]+ review([.,;:!)]|$)' <<<"$first"; then kind=review
   else kind=task
     if c=$(grep -m1 -E '^Session task: ' <<<"$first"); then key=${c#Session task: }; key=${key%% *}
+      # retro-run's `retro run, scope S`: one key per scope, or two scopes at once share one handoff file
+      [[ ! $c =~ ^Session\ task:\ retro\ run,\ scope\ ([a-z]+) ]] || key=retro-${BASH_REMATCH[1]}
     else KEYRE=$(key_re "$a"); key=$(first_key "$first")
       # a bare `KEY:` start names a task only where the project is coordinated; `Work on KEY` everywhere
       [ -n "$a" ] || [ -n "$(config key_pattern 2>/dev/null)" ] || grep -m1 . <<<"$first" | grep -qE '^[[:space:]]*[Ww]ork on ' || key=
