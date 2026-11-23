@@ -27,7 +27,9 @@
 # (SAFE); read-only calls (gh pr view, gh api GET, an inline graphql query) pass too. A gated call may share its
 # command with read-only gh calls (gh pr view|checks, gh run view|watch, …, gh by name right after the subcommand), in
 # $(…) or a loop too: a landing's status poll. A read-only gh call in $(…) passes alone too as echo's argument,
-# on a line of plain echo calls (echo "#$n $(gh pr view $n …)", in a for loop too).
+# on a line of plain echo calls (echo "#$n $(gh pr view $n …)", in a for loop too). A read-only call that could still
+# run code is denied (asked, when attended): --web, gh browse, gh config set, a variable set in its command, an
+# integer or -v test on its $(…), and its output piped into anything but a filter (jq, grep, head, …).
 # ponytail: a text check, not a sandbox: a file one call writes (a script, a git hook) can run its text in a later
 # call this hook never links to it. Gate at execution (a wrapper for gh and the CLIs on PATH) if that matters.
 # ponytail: gh subcommands outside pr/issue/api (release, repo, workflow) aren't gated; add them when a project
@@ -266,15 +268,15 @@ ghw='(^|[^A-Za-z0-9_.-])gh([^A-Za-z0-9_.-]|$)'
 # gh, then pr/issue and a merge, comment or review, or api, in the same command (flags may sit between): what a gated
 # gh call looks like. gh pr view or gh issue list don't.
 ghops='(^|[^A-Za-z0-9_.-])gh([^A-Za-z0-9_.-][^|;&]*[[:space:]]|[[:space:]]+)((pr|issue)([[:space:]][^|;&]*)?[[:space:]](merge|comment|review)|api)([[:space:]]|$)'
-# gh named through a variable or $(…): x=gh, $(which gh), `command -v gh`.
-ghind='(=["'"'"']?|\$\(|`)[[:space:]]*((which|command[[:space:]]+-v|type[[:space:]]+-p)[[:space:]]+)?([^[:space:]]*/)?gh([^A-Za-z0-9_.-]|$)'
+# gh named through a variable or $(…): x=gh, $(which gh), `command -v gh`, and read as a file: bash <(gh …).
+ghind='(=["'"'"']?|\$\(|`|[<>=]\()[[:space:]]*((which|command[[:space:]]+-v|type[[:space:]]+-p)[[:space:]]+)?([^[:space:]]*/)?gh([^A-Za-z0-9_.-]|$)'
 # A read-only gh call (pr view|checks, run watch, …), as landing a PR polls it: chained with the merge (then it
 # doesn't count as one more call), and in "$(…)" tested by [ ], [[ ]], test or case, in a wait loop too: there its
 # output (a PR body, a diff, which others write) is only compared, never run; and in $(…) as an argument on a line of
 # plain echo calls, only printed (below). Anywhere else (x=$(…), which $x could run, echo's output in $(…), a pipe, eval, a shell) it is
 # still denied as indirect.
 # shortcut: a known list of re-parsing commands (eval, shells, interpreters); add one if it shows up.
-ghreparse='(^|[^A-Za-z0-9_.-])(eval|source|sh|bash|zsh|dash|ksh|fish|python3?|perl|ruby|node)([^A-Za-z0-9_.-]|$)'
+ghreparse='(^|[^A-Za-z0-9_.-])(eval|source|sh|bash|zsh|dash|ksh|fish|python3?|perl|ruby|node|xargs|awk)([^A-Za-z0-9_.-]|$)'
 ghro='[[:space:]]+((pr|issue)[[:space:]]+(view|checks|list|status|diff)|run[[:space:]]+(view|list|watch)|repo[[:space:]]+view)([^A-Za-z0-9_.-]|$)'
 # One line: continuations joined as bash joins them (-\<nl>-exec is --exec; a line ending \\ goes on to no next
 # line), other newlines made command separators.
@@ -310,6 +312,47 @@ grep -qiE "$msw"'[[:space:]](.*[[:space:]])?raw[[:space:]].*--method[=[:space:]]
 grep -qE "$msind" <<<"$uq" && grep -qiE "(^|[[:space:]])($msv|raw[[:space:]].*--method[=[:space:]]+(POST|PUT|PATCH|DELETE))" <<<"$uq" &&
   attended "Blocked: msgraph reached through a variable or \$(…) can't be checked by the approval hook. Run it by its name (msgraph …, or npx -y <package> …), as one plain command."
 [ -n "$bbops" ] || [ "$ghn" -gt 0 ] || pass
+# A read-only gh call can still run code: the browser --web or gh browse opens (gh config set picks it), another gh
+# or config a variable picks (PATH=/x gh, HOME=…; gh, export, zsh's path, a function named gh), and a program its
+# output is piped into (| xargs env, | sh, >(…)). Each asks (denied unattended), wherever the call sits: chained, or
+# in a tested or echoed $(…). Any pipe in the command goes only into a filter that never runs its input, and a
+# command word that runs or sources text (eval, ., bash, exec, coproc) shares no command with gh.
+# Read from the scan with quote marks dropped and separators inside quotes made `_` (jq '.a|b' is no pipe), but
+# a "$(…)" kept as code.
+# shortcut: a denylist of the setters and openers seen so far; add one when it shows up.
+if [ "$ghn" -gt 0 ]; then
+mq=$(printf '%s' "$scan" | awk -v Q="'" '{ s = s $0 } END { n = length(s); iq = ""; d = 0
+  for (j = 1; j <= n; j++) { c = substr(s, j, 1)
+    if (iq != Q && c == "\\") { printf "%s%s", c, substr(s, j + 1, 1); j++; continue }
+    # a "$(…)": read as code, its own quotes too, back in the "…" at its closing )
+    if (d && iq == "") { d += (c == "(") - (c == ")"); if (!d) iq = "\""; if (c != Q && c != "\"") printf "%s", c; else iq = c; continue }
+    if (iq == "\"" && c == "$" && substr(s, j + 1, 1) == "(") { d = 1; iq = ""; printf "$("; j++; continue }
+    if (iq == "" && (c == Q || c == "\"")) { iq = c; continue }
+    if (c == iq) { iq = ""; continue }
+    printf "%s", (iq != "" && c ~ /[|;&<>()]/ || iq == Q && c ~ /[`$]/ ? "_" : c) }
+  }') || exit 1
+ghcp='(^|[;&|({`]|\$\(|[[:space:]](then|do|else|!))[[:space:]]*'
+grep -qE '(^|[^A-Za-z0-9_$-])([A-Za-z_][A-Za-z0-9_]*\+?=[^[:space:]]*[[:space:]]+([^;&|()]*[[:space:]])?([^[:space:];&|()]*/)?gh([^A-Za-z0-9_.-]|$)|([A-Z_][A-Z0-9_]*|path)(\[[^]]*\])?\+?=|[A-Za-z_][A-Za-z0-9_]*\[[^]]*\]\+?=)|'"$ghcp"'((export|declare|typeset|readonly|alias|hash|function|unset)([[:space:]]|$)|for[[:space:]]+([A-Z_][A-Z0-9_]*|path)[[:space:]]|printf[[:space:]]+-v[[:space:]]*([A-Z_]|path)|read[[:space:]][^;&|]*[[:space:]]([A-Z_][A-Z0-9_]*|path)([[:space:];]|$)|gh[[:space:]]*\(\))' <<<"$mq" &&
+  attended "Blocked: a variable set in a command with gh (PATH=, HOME=, export, a function named gh) can pick another gh or config, so the approval hook can't check it. Run the gh call alone, as one plain command."
+grep -qE "$ghcp([^[:space:]]*/)?gh([[:space:]]|$)" <<<"$mq" && grep -qE "$ghcp"'(eval|source|\.|sh|bash|zsh|dash|ksh|fish|python3?|perl|ruby|node|xargs|awk|exec|coproc)([[:space:]]|$)' <<<"$mq" &&
+  attended "Blocked: a command that runs or sources text (eval, ., bash, exec) can't share a command with gh: it could run gh's output. Run the gh call alone, as one plain command."
+# (a case pattern's | (in A|B), ;; C|D)) is no pipe)
+mp=$(sed -E 's/\|\|/;/g; s/\|&/|/g; s/([[:space:]]in|;;)[[:space:]]+[^;()]*\)/\1 _)/g' <<<"$mq")
+while IFS= read -r s; do
+  case "$s" in cat|head|tail|grep|egrep|fgrep|jq|wc|cut|tr|uniq) ;;
+    *) attended "Blocked: in a command with gh, a pipe into ${s:-a command} could run gh's output, so the approval hook can't check it. Pipe only into jq, grep, head, tail, wc, cut, tr, uniq or cat." ;; esac
+done < <(grep -oE '\|[[:space:]]*[^[:space:]|]*' <<<"$mp" | sed -E 's/^\|[[:space:]]*//')
+ghsegs=$(sed -E 's/&&/;/g' <<<"$mp" | grep -oE '(^|[^A-Za-z0-9_.-])gh([^A-Za-z0-9_.-][^;&|)]*)?') || ghsegs=
+while IFS= read -r g; do
+  g=" $g "
+  [[ $g == *[\<\>=]\(* ]] &&
+    attended "Blocked: gh's output fed to a process substitution could run it, so the approval hook can't check it. Run the gh call alone, as one plain command."
+  # -w is --web on every read verb but run list (--workflow)
+  [[ $g =~ [[:space:]](--web|browse|config[[:space:]]+set)[=[:space:]] ]] ||
+    { [[ $g =~ [[:space:]]-[A-Za-z]*w[A-Za-z]*[=[:space:]] ]] && ! [[ $g =~ [[:space:]]run[[:space:]]+list[[:space:]] ]]; } &&
+    attended "Blocked: gh --web, gh browse and gh config set open or set the browser gh runs, which the approval hook can't check. Read it with gh pr view, without --web."
+done <<<"$ghsegs"
+fi
 # A backtick or $ inside '…' (a perl or sed program printing `gh pr create`) runs nothing: made `_`; all else stays
 # as written ("$(…)" runs, x='gh' names it). Not when the text is opaque or a quote is left open: a heredoc body's
 # apostrophe would hide real code. (A gated gh call such a program runs still reads as a post or merge the walk
@@ -323,7 +366,8 @@ ghl=$scan
     o = o c }
   printf "%s", (iq == "" ? o : s) }') || exit 1
 ghi=$ghl
-grep -qE "$ghreparse" <<<"$ghl" ||
+# (Not with an integer or -v test anywhere: [[ ]] evaluates a body like a[$(cmd)] there as arithmetic.)
+grep -qE "$ghreparse" <<<"$ghl" || grep -qE '(^|[[:space:]])-(eq|ne|lt|le|gt|ge|v)([[:space:]]|$)' <<<"$ghl" ||
   ghi=$(sed -E "s/((^|[^A-Za-z0-9_.-])(\\[|\\[\\[|test|case)[[:space:]]+\"(\\\$\\(|\`)[[:space:]]*)gh($ghro)/\\1_\\5/g" <<<"$ghl") || exit 1
 # And a line of nothing but echo calls (in one for loop too) whose words are plain text, $var and read-only
 # $(gh …) calls of plain words: echo "#$n $(gh pr view $n -R O/R --json state)", a coordinator's PR-state check. The

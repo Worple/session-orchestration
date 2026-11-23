@@ -136,7 +136,9 @@ Installing the plugin adds these to every Claude Code session, in every project:
 - **Approval gate** (`hooks/approved-action.sh`): a PR merge, review or comment post (`gh pr merge|comment|review`,
   `gh issue comment`, and the Bitbucket, Forgejo and Jira CLIs named above) or a Teams or mail send (`msgraph message
   send|update`, `mail send|reply|forward`) needs your approval, relayed by the
-  coordinator; without it an interactive session asks you and a background one is denied. It acts only on
+  coordinator; without it an interactive session asks you and a background one is denied. So is a read-only gh call
+  that could run code: `--web` or `gh browse`, `gh config set`, a variable set in its command (`PATH=…`, `export`),
+  or its output piped into anything but a plain filter (`jq`, `grep`, `head`, …). It acts only on
   coordinated work: a project setup has written files for (an adapter, `.claude/coordination.local.json` or
   `.claude/coordination/`, in the folder or one above), or a session a coordinator started or messaged. Elsewhere,
   `claude -p` and `--bg` runs included, those commands run as without the plugin.
