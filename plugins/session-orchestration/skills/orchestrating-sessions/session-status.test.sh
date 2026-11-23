@@ -1052,7 +1052,7 @@ mv "$tmp/adapter.keep" "$root/.claude/session-status-adapter"
 # e2's name is taken by a copy resumed by hand that has retired since (no process): still a duplicate.
 setacct cfg "$(failed "$e1" one),$(failed "$e2" ABC-62-x),$(sess "$e5" ABC-62-x '' null),$(sess "$e3" three idle 1)"; calls >/dev/null
 out=$(run --resume-ended --pause 0 "${e1:0:8}" "${e2:0:8}" "${e3:0:8}" ffffffff) && rc=0 || rc=$?
-[ "$rc" = 2 ] && [ "$(calls | grep -v ' agents ')" = "cfg --bg --resume $e1 $(sed -n 's/^  text=.\(.*\).$/\1/p' "$here/session-status")" ] &&
+[ "$rc" = 2 ] && [ "$(calls | grep -v ' agents ')" = "cfg --bg --resume $e1 $(sed -n 's/^  text=.\(The background service stopped.*\).$/\1/p' "$here/session-status")" ] &&
   grep -q '^woke "one" (e1e1e1e1, failed)' <<<"$out" && grep -qx '"ABC-62-x" (e2e2e2e2): another session has that name or supersedes it: not resumed' <<<"$out" &&
   grep -qx '"three" (e3e3e3e3) is blocked now, not ended: not resumed' <<<"$out" && grep -qx 'ffffffff: not listed in any account: not resumed' <<<"$out" ||
   { echo "--resume-ended: $rc $out"; exit 1; }
