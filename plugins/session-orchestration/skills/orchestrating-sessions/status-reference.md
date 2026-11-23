@@ -278,7 +278,7 @@ called with the cwd at the root:
 | Call | Prints |
 |------|--------|
 | `tasks [ARG…]` | `KEY<TAB>STATUS<TAB>TITLE<TAB>EXTRA` per task, in display order. EXTRA (PRs, conflicts, hints) is printed as is before the worktree column, so it ends with its own separator (`\| `). The pane reads the words in the table below from it. On failure: exit non-zero, message on stdout; the board prints without tracker columns under `adapter tasks failed (exit N): MESSAGE` (none: the last stderr line), and `--changes` exits 1 with it instead. Exit 2 with nothing on stderr means not answered (a syntax error exits 2 too, but says so on stderr): rows come from session names and worktree branches, as with no adapter, so an adapter answering only `pending`, `urls` or `key-pattern` needs no `tasks`. After such a sweep, the keys sessions and worktrees point at are asked about: those `done` reports go to Leftovers, the rest are looked up with `tasks KEY…`, whose rows on exit 0 replace the bare ones. A `fix: LABEL → COMMAND` line, on success or failure, is printed after the rows and becomes a pane action (Project actions) |
-| `done KEY…` | `KEY[<TAB>LABEL]` for the finished ones; drives Leftovers and Resolved |
+| `done KEY…` | `KEY[<TAB>LABEL]` for the finished ones; drives Leftovers and Resolved. From the release after the watcher's stop of reported-done sessions, a key `done` doesn't name that has no row, or whose row has no status or PR words when `tasks` with no keys doesn't answer (the rows are then the sessions' and branches' keys), is finished too once its owner's or a session named for it (not a review's, not under a sub-coordinator) last sent a `done` reply for that key that the reply tool let through: `done: report` with no prompt since (`KEY reported done`), or `done: pr`/`pushed` whose named worktree is clean, off the default branch and all landed (`KEY landed`; an open PR never is). So a PR on a branch without the key, or a no-code spike, still reaches Leftovers and the watcher's stop |
 | `key-pattern` | One ERE for a task key. Default `[A-Z][A-Z0-9]+-[0-9]+` |
 | `status-names` | Regex of the project's own status-command names (its wrapper), counted like `session-status` |
 | `repos` | Git repos holding the worktrees, relative to the root. Default: the root if it's a repo, else its child repos |
@@ -318,7 +318,7 @@ The phrases `approved by NAME` and `changes requested by NAME` read without a le
 ## Without an adapter, and task ownership
 
 Without an adapter, rows are the keys in running sessions' names and worktree branches (no tracker
-status, no Leftovers). Transcripts that ran `session-status` (or a `status-names` command) with
+status; Leftovers only from the sessions' own done reports, below). Transcripts that ran `session-status` (or a `status-names` command) with
 `--start`, `--changes`, `--watch` or `--owner`, or that called `open_pane`, are a coordinator's and never own a task; a plain run (a worker checking its
 own task) or reading the docs doesn't count. **Owner:** the key a session's first prompt starts with
 (`Work on KEY`, `Session task: KEY`, `KEY:` on its first line; a key further on, history or an

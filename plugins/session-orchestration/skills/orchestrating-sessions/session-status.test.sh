@@ -3442,6 +3442,58 @@ o=$(run 2>/dev/null); [[ $o == *"Retry limits · $u · ~/cfg · page behind the 
 awk -F'\t' 'BEGIN { OFS = "\t" } { $7 = 1000; print }' "$rp/report-artifacts.tsv" > "$tmp/rp.tsv" && mv "$tmp/rp.tsv" "$rp/report-artifacts.tsv"
 o=$(run 2>/dev/null); [[ $o != *'Report pages:'* ]] || { echo "board, old row: $o"; exit 1; }
 fi
+if section reported-done; then
+# A key the tracker knows nothing about (no status, no PR) is finished once its session's last `done` reply the reply
+# tool let through says so: `report` with no prompt since (ABC-41), or `pr` whose worktree landed rebased (ABC-45). Not:
+# `pr` with a commit off main (ABC-42), a refused reply (ABC-43), a prompt after the report (ABC-44). The watcher stops
+# the finished ones at rest: not while their transcript is fresh, nor one on a prompt (status waiting).
+git -C "$root" update-ref refs/remotes/origin/main HEAD && git -C "$root" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+cat > "$root/.claude/session-status-adapter" <<'EOF'
+#!/bin/sh
+case $1 in
+  tasks) shift; [ $# -gt 0 ] || exit 2; for k; do printf '%s\t-\t\t\n' "$k"; done ;;
+  done) ;;
+  *) exit 2 ;;
+esac
+EOF
+chmod +x "$root/.claude/session-status-adapter"
+for n in 42 45; do git -C "$root" worktree add -q -b "ABC-$n" "$root/wt$n" origin/main && echo "$n" > "$root/wt$n/f$n" && git -C "$root/wt$n" add "f$n" && gc "$root/wt$n" -m "f$n"; done
+git -C "$root" update-ref refs/remotes/origin/main "$(git -C "$root" -c user.name=u -c user.email=u@u commit-tree -p origin/main -m 'f45 (rebased)' 'ABC-45^{tree}')"
+# rd N DONE RESULT [IS_ERROR] [WORKTREE]: session ABC-N's transcript, ending in a reply with `done` and its result
+rd() { local f=$proj/$1$1$1$1-0000-0000-0000-0000000000$1.jsonl
+  printf '{"type":"user","message":{"content":"Work on ABC-%s"}}\n' "$1" > "$f"
+  printf '{"type":"assistant","cwd":"%s","message":{"content":[{"type":"tool_use","id":"tu1","name":"mcp__session-orchestration__reply","input":{"text":"done","done":"%s"%s}}]}}\n' "$root" "$2" "${5:+,\"worktree\":\"$5\"}" >> "$f"
+  printf '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu1","content":"%s"%s}]}}\n' "$3" "${4:+,\"is_error\":true}" >> "$f"; }
+rd 41 report 'Sent to coord.'; rd 42 pr 'Sent to coord.' '' "$root/wt42"; rd 43 report 'reply: not sent, no PR' 1
+rd 44 report 'Sent to coord.'; hu 2026-11-23T10:00:00Z 'one more thing' >> "$proj/44444444-0000-0000-0000-000000000044.jsonl"
+rd 45 pr 'Queued for coord.' '' "$root/wt45"
+fs() { printf '{"sessionId":"%s%s%s%s-0000-0000-0000-0000000000%s","name":"ABC-%s %s","cwd":"%s","kind":"background","state":"idle","status":"%s","pid":1}' "$1" "$1" "$1" "$1" "$1" "$1" "$2" "$root" "${3:-idle}"; }
+# ABC-46: its reviewer (ABC-46-review-x) reported done, its worker didn't. ABC-48: its session's done report names ABC-47.
+rd 47 report 'Sent to coord.'; printf '{"type":"user","message":{"content":"Work on ABC-46"}}\n' > "$proj/46464646-0000-0000-0000-000000000046.jsonl"
+sed 's/"done":"report"/&,"key":"ABC-47"/; s/Work on ABC-47/Work on ABC-48/' "$proj/47474747-0000-0000-0000-000000000047.jsonl" > "$proj/48484848-0000-0000-0000-000000000048.jsonl"
+f=$proj/47474747-0000-0000-0000-000000000047.jsonl; sed 's/Work on ABC-47/Session task: ABC-46 review/' "$f" > "$f.t" && mv "$f.t" "$f"
+agents() { echo "[$(fs 41 spike "${1:-idle}"),$(fs 42 pr),$(fs 43 refused),$(fs 44 asked),$(fs 45 landed),$(fs 46 work),$(fs 47 review | sed 's/ABC-47 review/ABC-46-review-x/'),$(fs 48 other)]" > "$tmp/agents.json"; }
+agents
+cat > "$tmp/bin/claude" <<EOF
+#!/bin/sh
+case "\$1" in
+  agents) if echo "\$*" | grep -q -- --all; then cat "$tmp/agents.json"; else jq '[.[] | select(.pid != null)]' "$tmp/agents.json"; fi ;;
+  stop) echo "\$2" >> "$tmp/stops"
+    jq --arg id "\$2" '[.[] | if (.sessionId | startswith(\$id)) then .pid = null else . end]' "$tmp/agents.json" > "$tmp/agents.t" && mv "$tmp/agents.t" "$tmp/agents.json" ;;
+esac
+EOF
+out=$(run); l=$(sed -n '/^Leftovers/,/^$/p' <<<"$out")
+grep -qF 'ABC-41 reported done — ' <<<"$l" && grep -qF 'ABC-45 landed — ' <<<"$l" && ! grep -qE 'ABC-4[23468]' <<<"$l" ||
+  { echo "reported-done Leftovers: $out"; exit 1; }
+: > "$tmp/stops"; run --changes >/dev/null; SESSION_STATUS_FORWARD=1 run --changes >/dev/null
+[ ! -s "$tmp/stops" ] || { echo "stopped a session with a fresh transcript: $(cat "$tmp/stops")"; exit 1; }
+agents waiting; SESSION_STATUS_STOP_AFTER_S=0 run --changes >/dev/null; SESSION_STATUS_STOP_AFTER_S=0 SESSION_STATUS_FORWARD=1 run --changes >/dev/null
+[ "$(cat "$tmp/stops")" = 45454545 ] || { echo "stops with ABC-41 waiting: $(cat "$tmp/stops")"; exit 1; }
+jq '[.[] | if (.name | startswith("ABC-41")) then .status = "idle" else . end]' "$tmp/agents.json" > "$tmp/agents.t" && mv "$tmp/agents.t" "$tmp/agents.json"
+SESSION_STATUS_STOP_AFTER_S=0 run --changes >/dev/null; SESSION_STATUS_STOP_AFTER_S=0 SESSION_STATUS_FORWARD=1 run --changes >/dev/null
+[ "$(sort "$tmp/stops" | tr '\n' ' ')" = '41414141 45454545 ' ] || { echo "reported-done stops: $(cat "$tmp/stops")"; exit 1; }
+fi
+
 if section land; then
 # --land: from a linked worktree, fast-forwards the branch the main checkout has out, files included; refuses a
 # dirty checkout and a non-fast-forward.

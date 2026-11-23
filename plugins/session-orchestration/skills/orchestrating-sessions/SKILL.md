@@ -144,7 +144,7 @@ arming if one already runs. Never `/loop` the status command: every tick re-send
 find nothing. A `PR events` section in its output: [sessions.md](sessions.md), PR events.
 
 **The watcher stops finished sessions.** A background session under Leftovers or Resolved (its task finished: PR
-merged and released) that is at rest (idle or done, not on a prompt, not waiting on the user) and quiet 10 minutes
+merged and released, or, with nothing on the board to say so, its own `done` report: status-reference.md, `done`) that is at rest (idle or done, not on a prompt, not waiting on the user) and quiet 10 minutes
 (its after-release steps had time) is stopped by the watcher, with no ask; it shows under `Stopped (…)` in the
 change that wakes you: tell the user in one line. Once no live session holds the task, the watcher also removes its
 worktree and local branch, with no ask, when nothing can be lost: no uncommitted or untracked file, no ignored file the
