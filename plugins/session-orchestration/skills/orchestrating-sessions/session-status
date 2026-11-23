@@ -841,7 +841,9 @@ if [ "${1:-}" = --approvals ] || [ "${1:-}" = --relay ]; then
   [ "$others" = 0 ] || echo "$key has $others older live answer(s) too: relaying the newest (--approvals lists them)" >&2
   # A landing asked under another key: `merge TARGET (<session name>)` becomes `(<session name>, approved under KEY)`
   # here, once the yes speaks of landing (the hook's rule), so the coordinator's command makes no approval claim itself.
-  if [[ $action =~ ^(merge[[:space:]].*\()([A-Za-z0-9][A-Za-z0-9._-]*)\)[[:space:]]*$ ]] && [ "${BASH_REMATCH[2]}" != "$key" ]; then
+  # A yes asked under the session's name without the project prefix stays as is: the hook verifies that short key itself.
+  if [[ $action =~ ^(merge[[:space:]].*\()([A-Za-z0-9][A-Za-z0-9._-]*)\)[[:space:]]*$ ]] && [ "${BASH_REMATCH[2]}" != "$key" ] &&
+     ! { [[ $name == ?*-coordinator* ]] && [ "${BASH_REMATCH[2]}" = "${name%-coordinator*}-$key" ]; }; then
     grep -qiE 'land|merg' <<<"${q#"Approval pane answer for $key: "}" ||
       { echo "$key's answer doesn't speak of landing or merging: it approves no merge for ${BASH_REMATCH[2]}: $q" >&2; exit 1; }
     action="${BASH_REMATCH[1]}${BASH_REMATCH[2]}, approved under $key)"
@@ -1183,6 +1185,8 @@ if [ "${1:-}" = --changes ]; then
     # .rt: when the last committed run looked; a report older than that was a line then (or not news: its session could message)
     touch "$last.rt.$$"; nw=(-mtime -1); [ ! -f "$last.rt" ] || nw+=(-newer "$last.rt")
     r=(); [ -z "$rd" ] || while IFS= read -r -d '' f; do k=${f##*/}; k=${k%.md}
+      # a report kept off a plan or a chunk's brief (--report-file): NAME-report.md, KEY-cN-report.md
+      if [[ $k == ?*-report ]]; then k=${k%-report}; [[ ! $k =~ ^(.+)-c[0-9]+$ ]] || k=${BASH_REMATCH[1]}; fi
       grep -qxE "$kre" <<<"$k" && ! grep -qE "^$k(-|\$)" <<<"$mine" && r+=("$f")
     done < <(find "$rd" -maxdepth 1 -type f -name '*.md' "${nw[@]}" -print0 2>/dev/null)
     [ ${#r[@]} = 0 ] || new+=$'\nReports:'$(mtime_named "${r[@]}" | sort -rn |

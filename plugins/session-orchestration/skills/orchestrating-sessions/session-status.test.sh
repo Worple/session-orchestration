@@ -970,9 +970,10 @@ printf -- '- Replies folder (for reports): `replies/`.\n' > "$root/CLAUDE.md"; m
 # Accounts on: a report written to the replies folder wakes --changes (a worker on another account can't message).
 echo '{"features":{"accounts":true}}' > "$root/.claude/coordination.local.json"; run --changes >/dev/null
 echo brief > "$root/replies/ABC-41-c1.md"; [ "$(run --changes)" = "no changes" ] || { echo "a coordinator's brief woke --changes"; exit 1; }
-echo report > "$root/replies/ABC-41.md"; out=$(run --changes)
-rm "$root/replies/ABC-41.md" "$root/replies/ABC-41-c1.md" "$root/.claude/coordination.local.json"; run --changes >/dev/null
-grep -q '^now:   \* report written: ABC-41.md (' <<<"$out" || { echo "a report didn't wake --changes: $out"; exit 1; }
+echo report > "$root/replies/ABC-41.md"; echo report > "$root/replies/ABC-41-c1-report.md"; out=$(run --changes)
+rm "$root/replies/ABC-41.md" "$root/replies/ABC-41-c1.md" "$root/replies/ABC-41-c1-report.md" "$root/.claude/coordination.local.json"; run --changes >/dev/null
+grep -q '^now:   \* report written: ABC-41.md (' <<<"$out" && grep -q '^now:   \* report written: ABC-41-c1-report.md (' <<<"$out" ||
+  { echo "a report didn't wake --changes: $out"; exit 1; }
 # A report its (messaging) session wrote earlier isn't news once that session ends: only one written since the last run is.
 echo '{"features":{"accounts":true}}' > "$root/.claude/coordination.local.json"; setacct cfg "$(sess "$hid" ABC-45 idle 1)"; run --changes >/dev/null
 echo report > "$root/replies/ABC-45.md"; [ "$(run --changes)" = "no changes" ] && setacct cfg "" && ! run --changes | grep -q 'report written' &&
@@ -2974,6 +2975,11 @@ out=$(ap --relay ABC-11 'merge acme/app#5 (abc-fix)' 2>/dev/null) &&
   { echo "--relay, approved under: $out"; exit 1; }
 rc=0; out=$(ap --relay ABC-12 'merge acme/app#6 (abc-fix)' 2>&1) || rc=$?
 [ $rc = 1 ] && [[ $out == "ABC-12's answer doesn't speak of landing or merging"* ]] || { echo "--relay, a yes not to landing: $rc $out"; exit 1; }
+# Asked under the session's name without the coordinator's project prefix: relayed as given, the hook verifies the short key.
+stub p-coordinator
+out=$(ap --relay ABC-12 'merge acme/app#6 (p-ABC-12)' 2>&1) && [[ $out == *$'\nAction: merge acme/app#6 (p-ABC-12)\n'* ]] ||
+  { echo "--relay, short key: $out"; exit 1; }
+stub coord
 # Stopped since (no coordinator listed): the worker's check finds the relay in its transcript.
 printf '#!/bin/sh\necho []\n' > "$tmp/bin/claude"
 v=$(cd "$root" && HOME=$tmp CLAUDE_CONFIG_DIR=$tmp/cfg PATH=$tmp/bin:$PATH env -u CLAUDE_CODE_SESSION_ID bash "$here/verify-approval.sh" "$cid" "$root" coord ABC-11 'merge PR #5' \
