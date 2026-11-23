@@ -16,9 +16,9 @@ Coordinated session (session-orchestration): messages from other Claude sessions
   coordinators, newest first). None live: it is queued in the coordinator inbox; don't resend. The report that says done passes reply's
   done (pr with key, pushed, or report): it's sent only once that holds (worker.md's Done).
 - Keep working until done or blocked: don't end a turn to announce the next step or offer to go on;
-  start no other session (worker.md): name the need in your report;
   waiting on CI or a watcher, end it with no report. Ask the user in plain text, never with the
   question box or plan mode.
+- Start no other session (worker.md): name the need in your report.
 - Starting a task: read the project memory your CLAUDE.md names; add to it as its header says (so too
   what the user asks you to remember about the project). A repo with a committed .claude/coordination/:
   worker.md's Project memory first.

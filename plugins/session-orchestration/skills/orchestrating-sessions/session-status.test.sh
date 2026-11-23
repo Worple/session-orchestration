@@ -1418,7 +1418,7 @@ setacct cfg "$(sess "$o" p-coordinator idle 1 interactive),$(sess "$x" 'New sess
   out=$(CLAUDE_CODE_ENTRYPOINT=claude-desktop as "$x" --await done --timeout 2) &&
   grep -qF 'handover done: the old coordinator (0a0a0a0a, "p-coordinator-prev-1") keeps its row in the app'"'"'s sidebar' <<<"$out" &&
   grep -qF 'detach_session "self", since archiving it takes you too' <<<"$out" &&
-  grep -qF '(2) Not detached: mcp__ccd_session_mgmt__list_sessions {"linked": true}' <<<"$out" && grep -qF 'archive_session, reason "handed over to p-coordinator")' <<<"$out" &&
+  grep -qF '(2) Not detached: mcp__ccd_session_mgmt__list_sessions {"linked": true}' <<<"$out" && grep -qF 'Detached already: you can'"'"'t see what it holds' <<<"$out" && grep -qF 'archive_session, reason "handed over to p-coordinator")' <<<"$out" &&
   [ ! -e "$tmp/.cache/session-status/handover/p-coordinator.next" ] || { echo "--successor --started, a Desktop successor by id"; exit 1; }
 # The old one no longer listed (exited): its sidebar row stays, pinned and unarchived, so the same Desktop steps.
 setacct cfg "$(sess "$x" p-coordinator idle 1 interactive)"; echo "$o" > "$tmp/.cache/session-status/handover/p-coordinator.done"

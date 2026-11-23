@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # PreToolUse in a coordinator session (context-watch.sh's cached kind; none cached yet: its first prompt starts a line
-# with `Act as a coordinator`): three of SKILL.md's Rules as checks.
+# with `Act as a coordinator`): three of SKILL.md's Rules as checks. In a task, chunk or review session: worker.md's
+# rule that it starts no session (the last bullet).
 # - Bash starting with `cd`: refused (the Bash tool keeps it, and `claude --bg` then starts outside the project).
 #   Only the prefix: a `cd` later in a chain isn't parsed out of the shell text.
-# - Claude Code Desktop's start_session (a sidebar session): refused, in a subagent too, unless it is the call
+# - Claude Code Desktop's start_session or hand_off_to_session (a sidebar session): refused, in a subagent too, unless it is the call
 #   `--successor` prints (title NAME-next, its prompt running `--successor --started NAME`). A task goes to
 #   `claude --bg`: a sidebar session is in no listing the status reads. Config start.sidebar true (a person key,
 #   default false) lets every start_session through: the user chose sidebar tasks over the status's view of them.
@@ -48,8 +49,9 @@ deny() {
 }
 { read -r tool; read -r cwd; read -r path; } < <(jq -r '.tool_name // "", .cwd // "", (.tool_input.file_path // .tool_input.notebook_path // "")' <<<"$input")
 if [ -n "$task" ]; then
-  # one that answers to a coordinator: keyed, or messaged (context-watch.sh's test for the reply card)
-  read -r _ key _ < "$k"; [ "$key" != - ] || [ -e "${k%.kind}.card" ] || [ -e "${k%.kind}.msg" ] || exit 0
+  # one that answers to a coordinator: a chunk, a review, keyed, or messaged (context-watch.sh's test for the reply
+  # card; .card is gone after a compaction until the next PostToolUse, so a review doesn't rely on it)
+  read -r _ key _ < "$k"; [ "$kind $key" != 'task -' ] || [ -e "${k%.kind}.card" ] || [ -e "${k%.kind}.msg" ] || exit 0
   # a card the user starts themselves: Desktop starts nothing for these two without a proposal_id (hand_off_to_session
   # always starts one; spawn_task only shows a chip, so it isn't matched)
   [ "$tool" = mcp__ccd_session__start_session ] &&
@@ -61,10 +63,10 @@ if [ "$tool" = Bash ]; then
   [[ $cmd =~ ^[[:space:]]*(cd|pushd)([[:space:]]|$) ]] || exit 0
   deny "Coordinator rule: never cd in your shell; use absolute paths. The Bash tool keeps a cd across calls, and claude --bg then starts the new session in that folder, outside the project's settings. Run it again without the cd." cd
 fi
-if [ "$tool" = mcp__ccd_session__start_session ]; then
-  # NAME whole: `--started p` inside `--started p-v2` isn't p's successor
+if [ "$tool" = mcp__ccd_session__start_session ] || [ "$tool" = mcp__ccd_session__hand_off_to_session ]; then
+  # NAME whole: `--started p` inside `--started p-v2` isn't p's successor; a hand-off is never the successor
   # shortcut: NAME is checked against the title, not this coordinator's own name; upgrade if a task ever carries that exact text
-  jq -e '.tool_input | (.title // "" | strings) as $t | ($t | endswith("-next") and length > 5) and
+  [ "$tool" = mcp__ccd_session__start_session ] && jq -e '.tool_input | (.title // "" | strings) as $t | ($t | endswith("-next") and length > 5) and
     (.prompt // "" | strings | split("--successor --started " + ($t | rtrimstr("-next")))[1:] | any(test("^([^A-Za-z0-9._-]|$)")))' <<<"$input" >/dev/null && exit 0
   ( l=$(cd "${0%/*}/.." 2>/dev/null && pwd)/lib.sh; cd "${cwd:-.}" 2>/dev/null && . "$l" && [ "$(config start.sidebar 2>/dev/null)" = true ] ) && exit 0
   deny "Coordinator rule: start a task with claude --bg (SKILL.md, Rules), never as a Desktop sidebar session: a sidebar session gets no status row, no idle notice, no resume after a restart and no stop, so you would lose sight of it. start_session is only for your successor: if this was your handover, run session-status --successor again and pass the call it prints unchanged. If claude isn't on PATH, hand the user its install: curl -fsSL https://claude.ai/install.sh | bash. Only the user can allow sidebar tasks." sidebar

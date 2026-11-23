@@ -86,9 +86,10 @@ too if `session-status --init --check` says it isn't installed (until then, back
 ```
 claude plugin marketplace update session-orchestration
 claude plugin update session-orchestration@session-orchestration
+claude plugin update project-memory@session-orchestration
 ```
 
-The first refreshes the marketplace from its source, the second installs the newest version it lists;
+The first refreshes the marketplace from its source, the others install the newest version it lists;
 `claude plugin list` shows the installed one. Releases carry no tags: each change lands on `main` as a commit titled
 `session-orchestration <version>: <what changed>`, so the commit list is the changelog and `version` in
 `plugins/session-orchestration/.claude-plugin/plugin.json` on `main` is the newest.

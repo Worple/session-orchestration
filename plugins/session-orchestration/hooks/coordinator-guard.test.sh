@@ -45,7 +45,9 @@ check "$(g w1 $ss '{"prompt":"x","initiation":"user_asked"}')" deny 'start_sessi
 check "$(g w1 $ss '{"prompt":"x","initiation":"own_initiative"}')" allow 'a card the user starts'
 check "$(g w1 $ss '{"prompt":"x","initiation":"own_initiative","proposal_id":"p1"}')" deny 'a task session starting its own proposal'
 check "$(g w1 mcp__ccd_session__hand_off_to_session '{"title":"x"}')" deny 'hand_off_to_session from a task session'
-check "$(g c1 mcp__ccd_session__hand_off_to_session '{"title":"x"}')" allow 'hand_off_to_session from the coordinator'
+check "$(g c1 mcp__ccd_session__hand_off_to_session '{"title":"p-next","remaining_plan":"`--successor --started p`"}')" deny 'hand_off_to_session from the coordinator'
+printf 'review - - 0 0\nre\n' > "$tmp/.cache/session-status/handoff-r1.kind"
+check "$(g r1 $ss '{"prompt":"x","initiation":"user_asked"}')" deny 'a review session with no marker (after a compaction)'
 printf 'task - - 0 0\nre\n' > "$tmp/.cache/session-status/handoff-u1.kind"
 check "$(g u1 $ss '{"prompt":"x"}')" allow 'a session no coordinator started or messaged'
 : > "$tmp/.cache/session-status/handoff-u1.msg"
@@ -57,6 +59,7 @@ check "$(jq -nc --arg c "$root/src" '{session_id: "c1", agent_id: "a1", tool_nam
 echo '{"pending":{"file":"docs/pending.md"},"start":{"sidebar":true}}' > "$root/.claude/coordination.local.json"
 check "$(g c1 $ss '{"title":"PROJ-1-fix","prompt":"Work on PROJ-1: fix it."}')" allow 'a sidebar task with start.sidebar on'
 check "$(g w1 $ss '{"prompt":"x"}')" deny 'a task session with start.sidebar on'
+check "$(g c1 mcp__ccd_session__hand_off_to_session '{"title":"x"}')" allow 'hand_off_to_session from the coordinator with start.sidebar on'
 echo '{"pending":{"file":"docs/pending.md"},"start":{"sidebar":"yes"}}' > "$root/.claude/coordination.local.json"
 check "$(g c1 $ss '{"title":"PROJ-1-fix","prompt":"Work on PROJ-1: fix it."}')" deny 'start.sidebar not a boolean'
 echo '{"pending":{"file":"docs/pending.md"}}' > "$root/.claude/coordination.local.json"
