@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# PreToolUse in a coordinator session (context-watch.sh's cached kind): three of SKILL.md's Rules as checks.
+# PreToolUse in a coordinator session (context-watch.sh's cached kind; none cached yet: its first prompt starts a line
+# with `Act as a coordinator`): three of SKILL.md's Rules as checks.
 # - Bash starting with `cd`: refused (the Bash tool keeps it, and `claude --bg` then starts outside the project).
 #   Only the prefix: a `cd` later in a chain isn't parsed out of the shell text.
 # - Claude Code Desktop's start_session (a sidebar session): refused, in a subagent too, unless it is the call
@@ -12,13 +13,23 @@
 #   and the root's CLAUDE.local.md while git doesn't track it (a worktree session can't reach it); never in
 #   a task's worktree (.worktrees/, .claude/worktrees/). The path is resolved first (`..`, symlinks).
 #   Outside the root (scratch, ~/.claude) is not the rule's business.
-# Any other session pays one bash start and a file test.
+# Any other session pays one bash start and a file test (and, until context-watch caches its kind, lib.sh and a
+# first-prompt read).
 input=$(cat)
 # a subagent: its cd and edits aren't the coordinator's, but a sidebar session it starts is just as unseen
 [[ $input =~ \"agent_id\":\ *\"[^\"]+\" ]] && ! [[ $input =~ \"tool_name\":\ *\"mcp__ccd_session__start_session\" ]] && exit 0
 [[ $input =~ \"session_id\":\ *\"([A-Za-z0-9_-]+)\" ]] || exit 0
 k=${XDG_CACHE_HOME:-$HOME/.cache}/session-status/handoff-${BASH_REMATCH[1]}.kind
-[ -f "$k" ] && read -r kind _ < "$k" && [ "$kind" = coordinator ] || exit 0
+kind=
+if [ -f "$k" ]; then read -r kind _ < "$k"
+# not cached yet (a first prompt or a resume classifies in a detached job): context-watch.sh's coordinator test inline
+elif [[ $input =~ \"transcript_path\":\ *\"([^\"]+)\" ]] && [ -f "${BASH_REMATCH[1]}" ]; then
+  tp=${BASH_REMATCH[1]}
+  # in its order: a chunk or a `Coordinate KEY` start isn't one, whatever later lines say
+  ( . "${0%/*}/../lib.sh" && f=$(first_prompt "$tp" 50) && { [ -n "$f" ] || [ -z "$(sed -n '51{p;q;}' "$tp")" ] || f=$(first_prompt "$tp"); } &&
+    ! chunk_of "$f" >/dev/null && ! grep -m 1 . <<<"$f" | grep -qE '^[[:space:]]*Coordinate ' && grep -q '^Act as a coordinator' <<<"$f" ) 2>/dev/null && kind=coordinator
+fi
+[ "$kind" = coordinator ] || exit 0
 
 # deny REASON NAME: the decision, and NAME as a telemetry=full block line (lib.sh usage).
 deny() {

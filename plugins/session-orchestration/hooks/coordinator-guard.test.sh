@@ -18,7 +18,21 @@ check "$(g c1 Bash '{"command":"  pushd /x"}')" deny pushd
 check "$(g c1 Bash '{"command":"ls /x; cd /y"}')" allow 'cd later in a chain (prefix only)'
 check "$(g c1 Bash '{"command":"cdk deploy"}')" allow 'a word starting cd'
 check "$(g w1 Bash '{"command":"cd /x"}')" allow 'a task session'
-check "$(g nokind Bash '{"command":"cd /x"}')" allow 'no kind cached'
+check "$(g nokind Bash '{"command":"cd /x"}')" allow 'no kind cached, no transcript'
+# no .kind yet (context-watch.sh classifies detached): the guard reads the first prompt itself
+# t SID PROMPT: a cd from SID whose transcript's first prompt is PROMPT, with no .kind cached
+t() { jq -nc --arg p "$2" '{type: "user", message: {content: $p}}' > "$tmp/$1.jsonl"
+  jq -nc --arg s "$1" --arg tp "$tmp/$1.jsonl" --arg c "$root/src" '{session_id: $s, transcript_path: $tp, tool_name: "Bash", tool_input: {command: "cd /x"}, cwd: $c}' |
+    HOME=$tmp XDG_CACHE_HOME=$tmp/.cache XDG_CONFIG_HOME=$tmp/.config bash "$here/coordinator-guard.sh" | jq -r '.hookSpecificOutput.permissionDecision // empty' | grep . || echo allow; }
+check "$(t nk1 'Act as a coordinator')" deny 'no kind cached, a coordinator first prompt'
+check "$(t nk2 'Work on PROJ-1: fix it.')" allow 'no kind cached, a task first prompt'
+check "$(t nk3 $'Coordinate PROJ-1.\nAct as a coordinator for it')" allow 'no kind cached, a sub-coordinator'
+check "$(t nk4 $'Chunk: PROJ-1/2\nAct as a coordinator')" allow 'no kind cached, a chunk'
+check "$(t w1 'Act as a coordinator')" allow 'a cached task kind wins over the transcript'
+{ for i in $(seq 60); do echo '{"type":"attachment"}'; done; jq -nc '{type: "user", message: {content: "Act as a coordinator"}}'; } > "$tmp/nk5.jsonl"
+check "$(jq -nc --arg tp "$tmp/nk5.jsonl" --arg c "$root/src" '{session_id: "nk5", transcript_path: $tp, tool_name: "Bash", tool_input: {command: "cd /x"}, cwd: $c}' |
+  HOME=$tmp XDG_CACHE_HOME=$tmp/.cache XDG_CONFIG_HOME=$tmp/.config bash "$here/coordinator-guard.sh" | jq -r .hookSpecificOutput.permissionDecision)" deny 'no kind cached, the first prompt past line 50'
+[ ! -e "$tmp/.cache/session-status/handoff-nk1.kind" ] || { echo 'FAIL the guard wrote .kind'; exit 1; }
 ss=mcp__ccd_session__start_session
 check "$(g c1 $ss '{"title":"PROJ-1-fix","prompt":"Work on PROJ-1: fix it."}')" deny 'a task as a Desktop sidebar session'
 check "$(g c1 $ss '{"title":"PROJ-1-fix"}')" deny 'start_session without a prompt'
