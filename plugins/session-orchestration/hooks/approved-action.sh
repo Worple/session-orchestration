@@ -663,7 +663,7 @@ done
 tried= me=
 while IFS= read -r r; do
   [ -n "$r" ] || continue
-  act=$(jq -r .action <<<"$r") alt=
+  act=$(jq -r .action <<<"$r") alt= hint=
   # A send names all it sends: the whole action, word for word (none dropped or added, not another verb or target).
   if [ "$kind" = send ]; then grep -qF -- "$action" <<<"$act" || continue
   else w=${what//./\\.}; grep -qE "(^|[^A-Za-z0-9#/.-])$w([^A-Za-z0-9]|$)" <<<"$act" || continue; fi
@@ -682,12 +682,14 @@ while IFS= read -r r; do
   # "(<this session's name>)" is verified with that name, so the user's yes to the task itself verifies. A yes given
   # under another key whose answer started this session with its landing (a design task's pane ask): "(<this
   # session's name>, approved under <that key>)", verified with that key.
-  if [ -z "$key" ] && [ "$kind" = merge ] && [[ $act =~ \(([A-Za-z0-9][A-Za-z0-9._-]*)(,[[:space:]]*approved[[:space:]]+under[[:space:]]+([A-Za-z0-9][A-Za-z0-9._-]*))?\)[[:space:]]*$ ]]; then
+  # (A sentence's closing . after the bracket is allowed: it claims nothing.)
+  if [ -z "$key" ] && [ "$kind" = merge ] && [[ $act =~ \(([A-Za-z0-9][A-Za-z0-9._-]*)(,[[:space:]]*approved[[:space:]]+under[[:space:]]+([A-Za-z0-9][A-Za-z0-9._-]*))?\)[[:space:]]*\.?[[:space:]]*$ ]]; then
     nm=${BASH_REMATCH[1]} under=${BASH_REMATCH[3]}
     [ -n "$me" ] || me=$(jq -r 'select(.type == "agent-name") | .agentName // empty' "$tp" 2>/dev/null | tail -1)
+    [ "$nm" = "$me" ] || hint=" (its Action names the session $nm, but this session is ${me:-unnamed})"
     # Under another key, the yes itself must speak of the landing: a yes to start some task approves no merge.
     if [ -n "$under" ] && ! jq -r .quote <<<"$r" | sed 's/ Asked:.*//' | grep -qiE '(^|[^a-z])(land|merg)'; then
-      tried="the quote approved under $under doesn't speak of landing or merging"; fault not-landing relay; continue; fi
+      tried=${tried:-"the quote approved under $under doesn't speak of landing or merging"}; fault not-landing relay; continue; fi
     [ "$nm" != "$me" ] || key=${under:-$me}
     # A coordinator may have asked under the name without its project prefix (the "<project>-" of its own
     # "<project>-coordinator"): that key verifies the yes too, only as a pane answer asked under exactly it
@@ -695,10 +697,13 @@ while IFS= read -r r; do
     sn=$(jq -r .name <<<"$r"); pfx=${sn%-coordinator*}-
     if [ "$nm" = "$me" ] && [ -z "$under" ] && [[ $sn == ?*-coordinator* && $me == "$pfx"?* ]] &&
        [[ $(jq -r .quote <<<"$r") == "Approval pane answer for ${me#"$pfx"}:"* ]]; then alt=${me#"$pfx"}; fi
+  elif [ -z "$key" ] && [ "$kind" = merge ] && [[ $act =~ \([A-Za-z0-9][^\)]*\)[^\)]*[^[:space:].\)][^\)]*$ ]]; then
+    # A hand-written Action with words after its bracket (a merge instruction) isn't the landing form: say which is.
+    hint=" (its Action has text after the closing bracket: relay exactly \"merge $what (<session name>)\", or \"merge $what (<session name>, approved under KEY)\", with nothing after it: session-status --relay KEY writes that)"
   fi
   # No tracker key (session-name keys): the user's words must name the target itself (REPO#ID; OWNER/ may precede).
   [ -n "$key" ] || key=$short
-  [ -n "$key" ] || { tried="the matching relay's Action names no task key"; fault no-key relay; continue; }
+  [ -n "$key" ] || { tried=${tried:-"the matching relay's Action names no task key"}; fault no-key relay; continue; }
   v1=
   for k in "$key" ${alt:+"$alt"}; do
     v=$(cd "$cwd" 2>/dev/null && jq -r .quote <<<"$r" |
@@ -716,7 +721,7 @@ while IFS= read -r r; do
   case "$v" in
     verified*) pr=; [ "$kind" != merge ] || [ "$host" != gh ] || pr=$(gh pr view "$target" -R "$repo" --json state,autoMergeRequest,headRefOid 2>/dev/null) || pr=
                [ ! -e "$used" ] || jq -e --arg h "$(cat "$used")" '$h != "" and .headRefOid == $h and .state == "OPEN" and .autoMergeRequest == null' <<<"${pr:-null}" >/dev/null 2>&1 ||
-                 { tried="this relay was used once already: check whether that run landed before asking again"; fault used-once relay; continue; }
+                 { tried=${tried:-"this relay was used once already: check whether that run landed before asking again"}; fault used-once relay; continue; }
                mkdir -p "${used%/*}" && { jq -r '.headRefOid // empty' <<<"${pr:-null}" 2>/dev/null || :; } > "$used" || exit 1
                # This exact command, also handed to the user (hand_command): withdrawn, or the pane's Run posts it again.
                w=
@@ -726,6 +731,6 @@ while IFS= read -r r; do
                done
                decide allow "Relayed approval for $action (good for this one run)$w: $v" ;;
   esac
-  tried=${v:-verify-approval.sh failed}; fault unverified relay
+  tried=${tried:-${v:-verify-approval.sh failed}$hint}; fault unverified relay   # relays run newest first: the newest one's reason is the deny's
 done < <(awk '{ l[NR] = $0 } END { for (i = NR; i > 0; i--) print l[i] }' <<<"$relays")   # newest first (no tail -r on Linux)
 ask_for "$action${tried:+ (the relay found: $tried)}" "$action" "$what"

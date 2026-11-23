@@ -139,7 +139,8 @@ user a command).
   (PROJ-5164)`. Use the hook's words, not the CLI command: an Action naming the command fails the hook even when
   `verify-approval.sh` said verified. The worker's hook allows only that PR or issue, and for a post only a body
   file with that sha256; anything else is denied. One relay allows one run (a `gh` merge again while its PR stays open
-  with no auto-merge queued: gh refused it, as it does `--auto` on a `CLEAN` PR). Every gated command (comment edits
+  with no auto-merge queued, at the head it first saw: gh refused it, as it does `--auto` on a `CLEAN` PR, or a plain
+  merge failed `Base branch was modified`; so a retry needs no second relay). Every gated command (comment edits
   included: an edit is named like a new post) and its action: [worker.md](worker.md#posting-and-merging). A Teams
   send's `--attachments` files are each named with their own sha256 too. A `gh` merge's Action names `OWNER/REPO#ID`;
   the user's approval of the task covers landing its own PR: relay that with the worker's session name in the

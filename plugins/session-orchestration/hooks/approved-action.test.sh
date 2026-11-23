@@ -89,6 +89,10 @@ run() { # $1 command → allow | deny | pass | blocked (exit 2)
   [ -n "$out" ] && jq -r .hookSpecificOutput.permissionDecision <<<"$out" || echo pass
 }
 check() { got=$(run "$1"); [ "$got" = "$2" ] || { echo "FAIL ($3): '$1': got $got, want $2"; exit 1; }; }
+run_reason() { # $1 command → the decision's reason
+  jq -nc --arg c "$1" --arg cwd "$root" --arg tp "$w" '{tool_input: {command: $c}, cwd: $cwd, transcript_path: $tp}' |
+    (cd "$root" && HOME=$home CLAUDE_CONFIG_DIR=$home/.claude PATH=$tmp/bin:$PATH bash "$here/approved-action.sh") 2>/dev/null | jq -r .hookSpecificOutput.permissionDecisionReason
+}
 bb='npx -y bitbucketdc-cli@latest' jd='npx jiradc-cli@latest'
 
 check "git status" pass "unrelated command"
@@ -281,6 +285,23 @@ check "gh pr merge 45 -R acme/app --auto --rebase" deny "approved under a key th
 check "gh pr merge 46 -R acme/app --auto --rebase" allow "merge relayed as approved under the key the yes was given under"
 relay "Approval pane answer for claude-plugins-y: Yes, start claude-plugins-y. Asked: Start claude-plugins-y?" "merge acme/app#47 (claude-plugins-x, approved under claude-plugins-y)" >> "$w"
 check "gh pr merge 47 -R acme/app --auto --rebase" deny "approved under a key whose yes doesn't speak of landing"
+# A hand-written Action: a closing . after the bracket claims nothing and verifies; a merge instruction after it
+# doesn't, and the deny says which form to relay.
+{ relay "Approval pane answer for design-z: Start stage 1 now as its own PR; landing it is approved with it. Asked: How to go on?" "merge acme/app#52 (claude-plugins-x, approved under design-z)."
+  relay "Approval pane answer for design-z: Start stage 1 now as its own PR; landing it is approved with it. Asked: How to go on?" "merge acme/app#53 (claude-plugins-x, approved under design-z). Plain --rebase, it is CLEAN"
+} >> "$w"
+check "gh pr merge 52 -R acme/app --auto --rebase" allow "approved under, a closing . after the bracket"
+check "gh pr merge 53 -R acme/app --auto --rebase" deny "approved under, an instruction after the bracket"
+got=$(run_reason "gh pr merge 53 -R acme/app --auto --rebase")
+grep -qF 'text after the closing bracket' <<<"$got" || { echo "FAIL: trailing text deny gives no form: $got"; exit 1; }
+got=$(run_reason "gh pr merge 44 -R acme/app --auto --rebase")
+grep -qF 'names the session claude-plugins-y, but this session is claude-plugins-x' <<<"$got" || { echo "FAIL: name mismatch not said: $got"; exit 1; }
+# An older relay used once and a newer one with text after the bracket: the deny gives the newer one's reason.
+relay "Approval pane answer for design-z: Start stage 1 now as its own PR; landing it is approved with it. Asked: How to go on?" "merge acme/app#54 (claude-plugins-x, approved under design-z)" >> "$w"
+check "gh pr merge 54 -R acme/app --auto --rebase" allow "approved under, used here once"
+relay "Approval pane answer for design-z: Start stage 1 now as its own PR; landing it is approved with it. Asked: How to go on?" "merge acme/app#54 (claude-plugins-x, approved under design-z), now" >> "$w"
+got=$(run_reason "gh pr merge 54 -R acme/app --auto --rebase")
+grep -qF 'text after the closing bracket' <<<"$got" || { echo "FAIL: deny gives an older relay's reason: $got"; exit 1; }
 # The yes asked under the name without the project prefix (the coordinator's "<project>-coordinator" names it).
 typed "Approval pane answer for x: Yes, start x. Asked: Start x?" "$now" >> "$proj/$cid.jsonl"
 printf '#!/bin/sh\necho %s\n' "'[{\"sessionId\":\"$cid\",\"name\":\"claude-plugins-coordinator\",\"cwd\":\"$root\",\"kind\":\"interactive\"}]'" > "$tmp/bin/claude"

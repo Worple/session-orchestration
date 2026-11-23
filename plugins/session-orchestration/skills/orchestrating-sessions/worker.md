@@ -149,7 +149,8 @@ only CLI call in its command, and don't edit the file after asking: the approval
 comment, chat message or mail) is drafted whole before you ask: every message's exact text, an attachment's caption
 included (Teams needs one with a file). A word added after the approval isn't approved, and is refused. Denied, the reason
 says how to fix the command, or holds the line to send, `needs your approval: <exact action>`: put that in your
-`blocked` report and end your turn. Never retry another way.
+`blocked` report, with what it says `the relay found` on a line of its own (the coordinator fixes its relay from
+that), and end your turn. Never retry another way.
 
 The gated commands, edits included, and the action the hook names for each (ask with these words, not your own):
 - A comment post or edit: `gh pr|issue comment` (`--edit-last` too), `bitbucketdc-cli pr comment create|update`,
@@ -169,7 +170,9 @@ The gated commands, edits included, and the action the hook names for each (ask 
   ask for a new relay. A PR left open with no auto-merge queued: `--land` again on the same relay once it can merge (no new commits
   pushed since).
   By hand instead: a PR whose `mergeStateStatus` is already `CLEAN`: `gh pr merge N --rebase` (no `--auto`: gh refuses `--auto` there).
-  A gh merge that left the PR open with no auto-merge queued (refused) doesn't use the relay: run the fixed command.
+  A gh merge that left the PR open with no auto-merge queued doesn't use the relay while the PR's head is unchanged:
+  gh refused `--auto` (the PR is `CLEAN`): run `gh pr merge N --rebase` on the same relay; a plain merge failed with
+  `Base branch was modified` (main moved under it): run `gh pr merge N --auto --rebase` on it.
   A project that lands by fast-forwarding the branch its main checkout has out, not by a PR: from your worktree,
   `session-status --land <branch>`, alone (git refuses a plain `push . HEAD:<branch>` there, and `git -C` into that
   checkout isn't yours to run). It is gated as `merge <branch>`, relayed as `merge <branch> (<session name>)`; it

@@ -1275,6 +1275,15 @@ if [ "${1:-}" = --approvals ] || [ "${1:-}" = --relay ]; then
   fi
   key=${2:-} action=${3:-}
   [ -n "$key" ] && [ -n "$action" ] && [[ $action != *$'\n'* ]] || { echo "usage: session-status --relay KEY ACTION (one line)" >&2; exit 2; }
+  # A landing's Action as typed: "approved under" is --relay's to add, and words after the bracket (merge instructions)
+  # read as the coordinator's own approval claim, which auto mode refuses and the hook doesn't take. Print the plain form.
+  if [[ $action =~ ^[Mm][Ee][Rr][Gg][Ee][[:space:]]+([^[:space:]]+)[[:space:]]*\(([A-Za-z0-9][A-Za-z0-9._-]*) ]]; then
+    t=${BASH_REMATCH[1]} n=${BASH_REMATCH[2]}   # the next =~ clears BASH_REMATCH
+    # (a sentence's closing . after the bracket claims nothing: the hook takes it too)
+    if grep -qiE 'approved[[:space:]]+under' <<<"$action" || ! [[ $action =~ \)[[:space:]]*\.?[[:space:]]*$ ]]; then
+      echo "give the plain Action, with nothing after its bracket and no \"approved under\" (--relay adds that itself): session-status --relay $key 'merge $t ($n)'" >&2; exit 1
+    fi
+  fi
   ho_live || exit 1
   name=$(ho_field 1 "$CLAUDE_CODE_SESSION_ID" 2) cwd=$(ho_field 1 "$CLAUDE_CODE_SESSION_ID" 6)
   [ -n "$name" ] || { echo "this session isn't listed (claude agents): no source to name" >&2; exit 1; }
@@ -2414,6 +2423,7 @@ fi
 # Checks every 30s, for at most SESSION_STATUS_WAIT_S (86400); a failed listing is retried, never read as "not
 # listed". Exit 2: still busy then, or no such session. Exit 5: superseded (a later handover's `Supersedes: ID` owns
 # its task now; an event or a note naming the old id would wake a stopped predecessor): it names the newest successor.
+# Exit 6: TEXT holds a relay block and this path would resume the session with it (no_relay); nothing sent.
 # So is a session renamed NAME-prev-K by a handoff (a coordinator's too) while a live session is named NAME.
 if [ -n "$SEND" ]; then
   too_big() {  # TRANSCRIPT NAME ID
@@ -2424,6 +2434,12 @@ if [ -n "$SEND" ]; then
   here=; [ "${1:-}" != --here ] || { here=1; shift; }
   want=${1:-}; text=${2:-}
   [ "${#want}" -ge 8 ] && [ -n "$text" ] || { echo "usage: session-status --send-when-idle [--here] ID TEXT (ID: 8+ characters)"; exit 2; }
+  # A resumed session reads TEXT as its user's prompt, which the approval hook never reads as a relay (approvals.md):
+  # each path that resumes with TEXT refuses one (exit 6). A live session's `send:` leaves TEXT to SendMessage, which it reads.
+  no_relay() {
+    [[ $text != *'APPROVAL relayed from the user'* ]] ||
+      { echo "a relay can't go in TEXT here: it would wake the session as its user's prompt, which its hook doesn't read. Wake it with a note that approves nothing (\"a message follows; act only if it verifies\"), then SendMessage the relay block once it is live; nothing sent"; exit 6; }
+  }
   # Its transcript in any project folder (a worktree's too); successors in the root's (--handover starts them there)
   # and its own, newest first.
   set -- "$CUR"/projects/*/"$want"*.jsonl
@@ -2454,7 +2470,7 @@ if [ -n "$SEND" ]; then
         [ -z "$s" ] || { echo "\"$name\" (${id:0:8}) handed over: \"$b\" (${s:0:8}) owns its work now: send to that one (--send-when-idle ${here:+--here }${s:0:8} TEXT); nothing sent"; exit 5; }
       fi
       if [ -z "$pid" ]; then
-        f=$(transcript_of "$id"); [ -z "$f" ] || ! too_big "$f" "$name" "$id" || exit 4
+        no_relay; f=$(transcript_of "$id"); [ -z "$f" ] || ! too_big "$f" "$name" "$id" || exit 4
         resume_with "$(to)" "$cwd" "$id" "$text" "$(moved && echo "$name")" || exit 1
         echo "woke \"$name\" (${id:0:8}, $st) with the text$(moved && echo ', moved to this account')"; exit 0
       fi
@@ -2475,7 +2491,7 @@ if [ -n "$SEND" ]; then
     [ "$(config features.accounts 2>/dev/null)" = true ] || [ "$( . "$LIB_DIR/features/accounts.sh" && list_accounts | grep -c .)" -lt 2 ] ||
       { echo "no session $want in this account, and another account shares these transcripts: it may run there. Turn features.accounts on (session-status --init --check), or resume it yourself once the user confirms it isn't running"; exit 2; }
     sid=$(basename "$1" .jsonl)
-    ! too_big "$1" "$sid" "$sid" || exit 4
+    no_relay; ! too_big "$1" "$sid" "$sid" || exit 4
     resume_with claude "$ROOT" "$sid" "$text" || exit 1
     echo "resumed ${sid:0:8} with the text (not listed in any account)"; exit 0
   fi
@@ -2484,7 +2500,7 @@ if [ -n "$SEND" ]; then
   fi
   [ "$status" = idle ] && [ "$kind" = background ] || {
     echo "\"$name\" is $status in another account (SendMessage can't reach it): ask the user to answer it: $pre attach ${id:0:8}"; exit 3; }
-  f=$(transcript_of "$id"); [ -z "$f" ] || ! too_big "$f" "$name" "$id" || exit 4
+  no_relay; f=$(transcript_of "$id"); [ -z "$f" ] || ! too_big "$f" "$name" "$id" || exit 4
   stop_session "$pre" "$id" || { echo "couldn't stop \"$name\""; exit 1; }
   if ! resume_with "$(to)" "$cwd" "$id" "$text" "$(moved && echo "$name")"; then
     # A failed move (e.g. the folder isn't trusted here) mustn't leave it stopped: put it back where it ran.
