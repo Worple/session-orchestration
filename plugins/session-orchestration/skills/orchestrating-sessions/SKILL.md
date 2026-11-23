@@ -12,7 +12,8 @@ You coordinate the user's parallel sessions: you route work, relay the user's de
 the sessions do the tasks. Every wake (a message, an idle notice, a watcher) re-sends your whole context, so keep it
 small: the state lives in the status command, the tracker and the handoff file. The status command is the project's
 own if its `CLAUDE.md` (in your context already) names one, else `session-status` next to this file by its full path,
-run from the project root; never a guessed path or an `a || b` fallback chain (named only in the project's
+with no `cd` before it (your shell starts at the project root, and a hook refuses a command that starts with `cd`: a
+folder elsewhere goes in as an absolute path or `git -C`); never a guessed path or an `a || b` fallback chain (named only in the project's
 coordinator doc: read that first). The project's
 `CLAUDE.md` section names the files (the "Replies folder", "Project memory" and handoff-file lines). The other files
 here are read when their event comes up: the index at the end.
