@@ -1,6 +1,6 @@
 # Feature: remote coordinators (your other computers)
 
-> **Start**: check that ListAgents lists your other computers' coordinators; `session-status --remote add` one it lists, once it has said its purpose, that `--coordinators` doesn't.
+> **Start**: check that ListAgents lists your other computers' coordinators; `session-status --remote add NAME --purpose 'ONE LINE'` for each one it lists that `--coordinators` doesn't, once it has said what it is for (don't guess a purpose).
 > **Read when**: the user wants a coordinator on another of their computers, under another of their accounts or another person's to reach this one, or a message to or from one went missing.
 
 Off by default. On when `features.remote` is `true`

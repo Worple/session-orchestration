@@ -314,8 +314,7 @@ Words and phrases set off by spaces; anything else shows only in a task's detail
 | `↩MM-DD NAME→STATUS` | The tracker sent the task back | Needs action (Ask the session why) |
 | `(PRs as of HH:MM)` | The PR words are from that time (a lookup failed) | Shown as stale; `--changes` ignores it appearing or clearing |
 
-The phrases `approved by NAME` and `changes requested by NAME` read without a legend and take any GitHub login
-; `+NAME` and `!NAME` need a letter first, so `+1` is no reviewer.
+The phrases `approved by NAME` and `changes requested by NAME` read without a legend and take any GitHub login; `+NAME` and `!NAME` need a letter first, so `+1` is no reviewer.
 
 ## Without an adapter, and task ownership
 

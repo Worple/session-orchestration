@@ -50,7 +50,7 @@ feature `design`), never one kind for all.
 
 **Apply sessions.** Start one per batch the user names (with `at_once`, per batch), from this root. Run
 `session-status --kind <its kind> <name>`
-first (`<name>`: a task name the project's key pattern matches, of letters, digits, `.`, `_` and `-`, at most 80), then `claude --bg -n <name>` as the coordinator skill's sessions.md says, with this
+first (this start has its own brief, so it's one `--launch` doesn't cover; `<name>`: `<name>`: a task name the project's key pattern matches, of letters, digits, `.`, `_` and `-`, at most 80), then `claude --bg -n <name>` as the coordinator skill's sessions.md says, with this
 brief, which starts with the name so the status shows its owner: `Work on <name>: Apply plugin feedback: <case file paths>. Follow feedback.md,
 Applying, for these cases only, and this repo's CLAUDE.md release checks. <PR line> Why: <what the cases say goes
 wrong>. Done when: the change is implemented with the repo's checks passing, a PR is open, and each case is marked
@@ -61,7 +61,7 @@ Because they work in your project, relayed approvals verify for them ([approvals
 
 **Releases.** A batch's PR lands the way the repo's `CLAUDE.md` says. Once the release is on the repo's main (check it
 yourself, and take the version from it):
-1. Install it as the repo's `CLAUDE.md` step 4 says: a reload without the install loads the old version.
+1. Install it as the repo's `CLAUDE.md` says (its install step, if it has one): a reload without the install loads the old version.
 2. Mark each of its cases `fixed <version>` (`feedback mark FILE fixed …`).
 3. Call `reload_plugins`.
 4. Tell the user that other running coordinators keep the old version until they call `reload_plugins` themselves.

@@ -48,7 +48,7 @@ same way a hook's exit 2 sends you back. The kinds:
 **A report page.** When `session-status --config features.report_artifacts` prints anything and you finish a
 research, retro, design or review report, follow `../../features/report-artifacts.md`: run its check, publish the
 `.md` only on `publish: yes`, and pass the link as `reply`'s `artifact` with `done: report`. On a `no`, the report
-stays local; the feature doc says which `no` the done report explains (not `off` or unlisted).
+stays local, and the done report says why, except for `off` or an unlisted kind (the feature doc).
 
 git runs in the session's cwd; pass `worktree` (absolute) when the task's worktree is elsewhere. What the board can't
 show (no adapter, a failed lookup) isn't held against you. If a check is still wrong (the board's PR words are
