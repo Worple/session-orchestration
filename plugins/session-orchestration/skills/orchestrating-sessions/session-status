@@ -179,6 +179,8 @@
 #                       skill's session-init documents the modes; runs in the cwd, not the root
 #        session-status --land TARGET   fast-forward TARGET, checked out in another worktree, to HEAD (a worker's
 #                       approved landing in a project that lands by fast-forward), that checkout's files too
+#        session-status --land OWNER/REPO#N   land GitHub PR N (a worker's approved landing): merge, wait until merged,
+#                       watch the CI runs on main; one line at the end. Minutes long: run it in the background
 #        session-status --config KEY   a config value (lib.sh at the plugin root lists the keys), e.g. approvals.delegate
 #        session-status --pane-section SLUG open|line|hidden   how the coordinator pane draws a section (config
 #                       pane.sections), written to the project's .claude/coordination.local.json; a title press runs it
@@ -267,8 +269,72 @@ fi
 # lands by fast-forwarding its main checkout's branch), from a worktree-isolated session: git refuses a plain
 # `push . HEAD:TARGET` there, and git -C into that checkout is the isolation guard's to refuse. updateInstead moves the
 # branch and that checkout's files together, and refuses a dirty checkout or a non-fast-forward (no --force).
+# --land OWNER/REPO#N: land GitHub PR N in one run: merge it (--auto --rebase; a clean PR, which gh refuses --auto,
+# plain --rebase; "Base branch was modified" retried), wait until it merged, then watch every CI run on its merge
+# commit (one rerun of a job cancelled for want of a runner). One line at the end: merged and green, or what failed.
+# It gives up after SESSION_STATUS_LAND_MAX seconds (3 h), naming the read-only calls to go on with.
+# Checked before the branch form: # is legal in a branch name. The approval hook classifies with this same regex.
+# shortcut: gh only; a Forgejo or Bitbucket PR lands by hand until a project needs it here.
+if [ "${1:-}" = --land ] && [ $# = 2 ] && [[ $2 =~ ^([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)#([0-9]+)$ ]]; then
+  repo=${BASH_REMATCH[1]} n=${BASH_REMATCH[2]} poll=${SESSION_STATUS_LAND_POLL:-60}
+  deadline=$((SECONDS + ${SESSION_STATUS_LAND_MAX:-10800}))
+  trap - EXIT   # every outcome here (refused, a conflict, red, gave up) is an answer on the last line, not a fault
+  say() { local t; t=$(one_line "${1:0:200}"); echo "${t:-$1}"; }
+  on() { echo "continue read-only: gh pr view $n -R $repo --json state,mergeCommit, gh run list -R $repo -c SHA, gh run watch ID -R $repo --exit-status --interval 60"; }
+  plain=
+  for try in 1 2 3 4; do
+    out=$(gh pr merge "$n" -R "$repo" --auto --rebase 2>&1) && break
+    [[ $out != *'clean status'* ]] || { out=$(gh pr merge "$n" -R "$repo" --rebase 2>&1) && plain=1 && break; }
+    [[ $out == *'Base branch was modified'* ]] && [ "$try" -lt 4 ] || { say "merge refused: $out"; exit 1; }
+    sleep $((poll / 12))
+  done
+  # Red: a check run that ended other than success, skipped or neutral, or a commit status that failed or errored.
+  bad='"FAILURE","CANCELLED","TIMED_OUT","STARTUP_FAILURE","ACTION_REQUIRED","ERROR"'
+  while :; do
+    for try in 1 2 3; do
+      st=$(gh pr view "$n" -R "$repo" --json state,mergeStateStatus,mergeCommit,autoMergeRequest,statusCheckRollup \
+        --jq "[.state, .mergeStateStatus, (.mergeCommit.oid // \"-\"), (.autoMergeRequest != null), ([.statusCheckRollup[]? | .conclusion // .state] | any(IN($bad)))] | map(tostring) | join(\" \")" 2>/dev/null) && break
+      [ "$try" = 3 ] && { echo "gh pr view $repo#$n failed 3 times; the merge may be queued: $(on)"; exit 1; }
+      sleep $((poll / 12))
+    done
+    read -r s m sha auto red <<<"$st"
+    [ "$s" != MERGED ] || break
+    [ "$s" = OPEN ] || { say "$repo#$n is $s, not merged"; exit 1; }
+    [ "$m" != DIRTY ] || { echo "conflict: rebase on origin/main and push --force-with-lease; auto-merge stays on (gh pr view $n -R $repo --json state shows when it merged)"; exit 1; }
+    [ "$red" != true ] || { echo "a check failed on $repo#$n: gh pr checks $n -R $repo; fix and push, auto-merge stays on"; exit 1; }
+    [ "$auto" = true ] || [ -n "$plain" ] || { echo "$repo#$n is open with no auto-merge queued: the relay still covers it while no new commits are pushed: run --land again once it can merge"; exit 1; }
+    [ "$SECONDS" -lt "$deadline" ] || { echo "$repo#$n not merged yet, auto-merge stays on: $(on)"; exit 1; }
+    sleep "$poll"
+  done
+  # Every run on the merge commit (test, release, …), listed a few seconds after the merge. None: no CI to watch.
+  for try in 1 2 3 4 5 6; do
+    ids=$(gh run list -R "$repo" -c "$sha" --json databaseId --jq '.[].databaseId' 2>/dev/null) && listed=1 || ids= listed=
+    [ -z "$ids" ] || break; [ "$try" = 6 ] || sleep $((poll / 6))
+  done
+  [ -n "$ids" ] || [ -z "$listed" ] || { echo "merged: $sha (no CI run on it)"; exit 0; }
+  [ -n "$ids" ] || { echo "merged: $sha, but gh run list failed: $(on)"; exit 1; }
+  for id in $ids; do
+    rerun=1
+    while :; do
+      [ "$SECONDS" -lt "$deadline" ] || { echo "merged: $sha, its run $id still running: $(on)"; exit 1; }
+      # gh run watch also fails on its own (HTTP 403, the network): only a completed run's conclusion decides.
+      gh run watch "$id" -R "$repo" --exit-status --interval "$poll" >/dev/null 2>&1 && break
+      v=$(gh run view "$id" -R "$repo" --json status,conclusion --jq '.status + " " + .conclusion' 2>/dev/null)
+      case $v in "completed "success|"completed "skipped|"completed "neutral) break ;; completed*) ;; *) sleep "$poll"; continue ;; esac
+      # One rerun of a job cancelled for want of a runner, then wait until the rerun shows before watching again.
+      [ -n "$rerun" ] && log=$(gh run view "$id" -R "$repo" 2>&1) && [[ $log == *'acquired by Runner'* ]] &&
+        gh run rerun "$id" -R "$repo" --failed >/dev/null 2>&1 || { echo "merged: $sha, but its run $id is red: gh run view $id -R $repo"; exit 1; }
+      rerun=
+      for try in 1 2 3 4 5 6; do
+        [ "$(gh run view "$id" -R "$repo" --json status --jq .status 2>/dev/null)" = completed ] || break
+        sleep $((poll / 6))
+      done
+    done
+  done
+  echo "merged and green: $sha"; exit 0
+fi
 if [ "${1:-}" = --land ]; then
-  [ $# = 2 ] && git check-ref-format --branch "$2" >/dev/null 2>&1 || { echo "usage: session-status --land TARGET-BRANCH" >&2; exit 2; }
+  [ $# = 2 ] && git check-ref-format --branch "$2" >/dev/null 2>&1 || { echo "usage: session-status --land TARGET-BRANCH | OWNER/REPO#N" >&2; exit 2; }
   # A typo would push a new branch, and your own branch is a no-op: both exit 0 with nothing landed.
   git rev-parse -q --verify "refs/heads/$2" >/dev/null || { echo "no branch $2 to land on" >&2; exit 1; }
   [ "$(git branch --show-current)" != "$2" ] || { echo "$2 is this worktree's own branch: name the branch to land on" >&2; exit 1; }

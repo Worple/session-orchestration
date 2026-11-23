@@ -304,6 +304,20 @@ relay "Approval pane answer for claude-plugins-x: Yes, start claude-plugins-x. A
 check "true && bash /x/session-status --land main" deny "--land in a chain"
 check "/x/session-status --land main" allow "--land relayed as the task's landing"
 check "/x/session-status --land main" deny "--land relay used once already"
+# session-status --land OWNER/REPO#N is gated as gh pr merge N -R OWNER/REPO: one relay covers either, used once over both.
+for n in 70 71; do
+  relay "Approval pane answer for claude-plugins-x: Yes, start claude-plugins-x. Asked: Start claude-plugins-x?" "merge acme/app#$n (claude-plugins-x)" >> "$w"
+done
+check "bash /x/session-status --land acme/app#72" deny "--land a PR, no relay"
+check "/x/session-status --land acme/app#70 && gh pr view 70 -R acme/app" deny "--land a PR in a chain"
+export GH_STUB='{"state":"OPEN","autoMergeRequest":null,"headRefOid":"a1"}'; check "bash /x/session-status --land acme/app#70" allow "--land a PR, relayed"
+check "bash /x/session-status --land acme/app#70" allow "--land again, the used run didn't land or queue"
+GH_STUB='{"state":"OPEN","autoMergeRequest":{"mergeMethod":"REBASE"},"headRefOid":"a1"}'
+check "gh pr merge 70 -R acme/app --auto --rebase" deny "gh merge on the relay --land used"
+check "bash /x/session-status --land acme/app#70" deny "--land again, auto-merge queued"
+check "gh pr merge 71 -R acme/app --auto --rebase" allow "gh merge, relayed"
+check "/x/session-status --land acme/app#71" deny "--land on the relay a gh merge used"
+unset GH_STUB
 # Landing: the merge chained with read-only status reads, and those reads tested in "$(…)" in a wait loop.
 for n in 60 61 62 63; do
   relay "Approval pane answer for claude-plugins-x: Yes, start claude-plugins-x. Asked: Start claude-plugins-x?" "merge acme/app#$n (claude-plugins-x)" >> "$w"

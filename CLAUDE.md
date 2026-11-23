@@ -26,6 +26,9 @@
 3. Land it through a PR: push the branch, open the PR and, once the task is approved, `gh pr merge <N> -R OWNER/REPO --auto --rebase`
    (`mergeStateStatus` already `CLEAN`: `gh pr merge <N> -R OWNER/REPO --rebase`, no `--auto`, which gh refuses there;
    a refused merge leaves the relay usable while the PR stays open with no auto-merge).
+   From the release after one-command landing, the steps below are one command on the same relay:
+   `session-status --land OWNER/REPO#N`, alone, in the background (worker.md "Posting and merging"); it ends with
+   `merged and green: SHA` or what failed. The steps stay for a run lost midway and for landing by hand.
    In a coordinated session, approved means the coordinator's relay naming that PR (`merge OWNER/REPO#N`): send the
    done report first (`reply` with `done: pr` and `key`), then merge once the relay arrives. An approval in the start
    brief is the coordinator's to relay, not the session's to act on, and the approval hook refuses the merge before

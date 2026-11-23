@@ -3584,6 +3584,44 @@ echo c >> "$lr-wt/f" && git -C "$lr-wt" -c user.name=t -c user.email=t@t commit 
 git -C "$lr" checkout -q f && git -C "$lr" -c user.name=t -c user.email=t@t commit -q --allow-empty -m d
 ! (cd "$lr-wt" && "$here/session-status" --land main >/dev/null 2>&1) && [ "$(git -C "$lr" log -1 --format=%s main)" = d ] ||
   { echo "--land forced a non-fast-forward"; exit 1; }
+# --land OWNER/REPO#N against a scripted gh: each "gh A B" call takes the next line of $lg/A-B ("RC OUTPUT"; the
+# last line repeats), and every call is logged.
+lg=$tmp/lgh; mkdir -p "$lg"
+printf '#!/bin/sh\nd=$(dirname "$0"); echo "$*" >> "$d/log"; f="$d/$1-$2"; [ -s "$f" ] || exit 0\nl=$(head -n 1 "$f"); [ "$(wc -l < "$f")" -le 1 ] || sed -i.bak 1d "$f"\nprintf "%%s\\n" "${l#* }"; exit "${l%%%% *}"\n' > "$lg/gh"; chmod +x "$lg/gh"
+gscript() { rm -f "$lg"/*-* "$lg/log"; while [ $# -gt 1 ]; do printf '%s\n' "$2" | tr '|' '\n' > "$lg/$1"; shift 2; done; }
+landpr() { (cd "$lr-wt" && SESSION_STATUS_LAND_POLL=0 SESSION_STATUS_LAND_MAX=${lmax:-600} PATH=$lg:$PATH "$here/session-status" --land acme/app#5); }
+# pr-view answers "STATE MERGESTATE SHA AUTO-MERGE-ON RED". Clean (gh refuses --auto): plain --rebase; base branch
+# modified: retried; open, then merged; the run listed late, cancelled for want of a runner: rerun once, then green.
+gscript pr-merge '1 GraphQL: Pull request is in clean status|1 GraphQL: Base branch was modified. Review and try the merge again.|0 ok' \
+  pr-view '0 OPEN BLOCKED - true false|0 MERGED CLEAN abc123 false false' run-list '0 |0 42' run-watch '1 x|0 x' \
+  run-view '0 completed failure|0 The job was not acquired by Runner of type hosted|0 in_progress' run-rerun '0 '
+out=$(landpr) && [ "$out" = "merged and green: abc123" ] && grep -qx 'pr merge 5 -R acme/app --rebase' "$lg/log" &&
+  [ "$(grep -c '^pr merge' "$lg/log")" = 3 ] && grep -qx 'run rerun 42 -R acme/app --failed' "$lg/log" ||
+  { echo "--land PR, the happy path with every retry: $out"; cat "$lg/log"; exit 1; }
+gscript pr-merge '0 ok' pr-view '0 OPEN DIRTY - true false'
+out=$(landpr) && rc=0 || rc=$?; [ $rc = 1 ] && [[ $out == conflict:* ]] || { echo "--land PR, a conflict: $rc $out"; exit 1; }
+gscript pr-merge '0 ok' pr-view '0 OPEN BLOCKED - true true'
+out=$(landpr) && rc=0 || rc=$?; [ $rc = 1 ] && [[ $out == 'a check failed'* ]] || { echo "--land PR, a red check: $rc $out"; exit 1; }
+gscript pr-merge '0 ok' pr-view '0 OPEN BLOCKED - false false'
+out=$(landpr) && rc=0 || rc=$?; [ $rc = 1 ] && [[ $out == *'no auto-merge queued'* ]] || { echo "--land PR, auto-merge turned off: $rc $out"; exit 1; }
+gscript pr-merge '0 ok' pr-view '0 OPEN BLOCKED - true false'
+out=$(lmax=0 landpr) && rc=0 || rc=$?; [ $rc = 1 ] && [[ $out == *'not merged yet'* ]] || { echo "--land PR, past its deadline: $rc $out"; exit 1; }
+gscript pr-merge '0 ok' pr-view '1 HTTP 502'
+out=$(landpr) && rc=0 || rc=$?; [ $rc = 1 ] && [[ $out == *'failed 3 times'*'continue read-only'* ]] && [ "$(grep -c '^pr view' "$lg/log")" = 3 ] ||
+  { echo "--land PR, gh pr view keeps failing: $rc $out"; exit 1; }
+gscript pr-merge '0 ok' pr-view '0 MERGED CLEAN abc123 false false' run-list '0 42' run-watch '1 x' run-view '0 completed failure|0 a test failed'
+out=$(landpr) && rc=0 || rc=$?; [ $rc = 1 ] && [[ $out == 'merged: abc123, but its run 42 is red'* ]] && ! grep -q rerun "$lg/log" ||
+  { echo "--land PR, a red run: $rc $out"; exit 1; }
+# gh run watch failing on its own (HTTP 403) while the run goes on: watched again, not red.
+gscript pr-merge '0 ok' pr-view '0 MERGED CLEAN abc123 false false' run-list '0 42' run-watch '1 HTTP 403|0 x' run-view '0 in_progress'
+out=$(landpr) && [ "$out" = "merged and green: abc123" ] || { echo "--land PR, a failed watch: $out"; exit 1; }
+gscript pr-merge '0 ok' pr-view '0 MERGED CLEAN abc123 false false' run-list '0 '
+out=$(landpr) && [ "$out" = "merged: abc123 (no CI run on it)" ] || { echo "--land PR, no CI run: $out"; exit 1; }
+gscript pr-merge '0 ok' pr-view '0 MERGED CLEAN abc123 false false' run-list '1 HTTP 403'
+out=$(landpr) && rc=0 || rc=$?; [ $rc = 1 ] && [[ $out == *'gh run list failed'*'continue read-only'* ]] || { echo "--land PR, gh run list failing: $rc $out"; exit 1; }
+gscript pr-merge '1 not mergeable'
+out=$(landpr) && rc=0 || rc=$?; [ $rc = 1 ] && [[ $out == 'merge refused: not mergeable' ]] && ! grep -q 'pr view' "$lg/log" ||
+  { echo "--land PR, merge refused: $rc $out"; exit 1; }
 fi
 
 if section filter; then

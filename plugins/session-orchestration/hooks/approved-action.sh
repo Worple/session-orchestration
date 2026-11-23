@@ -150,10 +150,10 @@ coordinated || pass
 # A landing by fast-forward (session-status --land BRANCH, worker.md) is gated as a merge: its action is "merge
 # BRANCH", relayed as "merge BRANCH (<this session's name>)". Seen where a command starts; it must run alone.
 lpre='(^|[;&|(]|'$'\n'')[[:space:]]*(bash[[:space:]]+)?([^[:space:]]*/)?session-status[[:space:]]+--land([[:space:]]|$)'
-lone='^[[:space:]]*(bash[[:space:]]+)?([^[:space:];&|<>`$]*/)?session-status[[:space:]]+--land[[:space:]]+([A-Za-z0-9._/-]+)[[:space:]]*$'
+lone='^[[:space:]]*(bash[[:space:]]+)?([^[:space:];&|<>`$]*/)?session-status[[:space:]]+--land[[:space:]]+([A-Za-z0-9._/#-]+)[[:space:]]*$'
 landing=
 if [[ $raw =~ $lpre ]]; then
-  [[ $raw =~ $lone ]] || decide deny "Blocked: run session-status --land BRANCH alone, as its own command, so the approval hook can name it."
+  [[ $raw =~ $lone ]] || decide deny "Blocked: run session-status --land BRANCH (or OWNER/REPO#N) alone, as its own command, so the approval hook can name it."
   landing=${BASH_REMATCH[3]}
 fi
 if [ -z "$landing" ]; then   # (not indented: the rest of the command parsing, up to the relays)
@@ -626,6 +626,11 @@ fi
 
 else
   kind=merge what=$landing target=$landing short= host= fj= action="merge $landing"
+  # session-status --land OWNER/REPO#N (the same regex it uses) merges a GitHub PR: gated as gh pr merge N -R OWNER/REPO,
+  # so one relay covers either command, used once over both.
+  if [[ $landing =~ ^([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)#([0-9]+)$ ]]; then
+    host=gh repo=${BASH_REMATCH[1]} target=${BASH_REMATCH[2]} short=${BASH_REMATCH[1]##*/}#${BASH_REMATCH[2]}
+  fi
 fi
 # The relays this session received: peer messages from another session (not a subagent's hand-back), newest
 # first: sender name, quote, action, source sessionId, source cwd, the transcript it came in (tab-free JSON lines).

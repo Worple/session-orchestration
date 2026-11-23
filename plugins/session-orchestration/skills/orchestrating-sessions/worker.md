@@ -157,7 +157,14 @@ The gated commands, edits included, and the action the hook names for each (ask 
   coordinator relays it with the Action ending in your session's name, `merge OWNER/REPO#ID (<session name>)` (within 24h of that approval; later, ask for the merge).
   Started by a yes given under another key that approved your landing too: `(<session name>, approved under <that
   key>)`, within 24h of that yes.
-  A PR whose `mergeStateStatus` is already `CLEAN`: `gh pr merge N --rebase` (no `--auto`: gh refuses `--auto` there).
+  A GitHub PR lands in one command on that relay: `session-status --land OWNER/REPO#ID`, alone, with Bash's
+  `run_in_background` (it takes minutes). It merges (`--auto --rebase`, plain `--rebase` on a clean PR, a retry on
+  `Base branch was modified`), waits until merged, watches every CI run on its merge commit and ends with one line:
+  `merged and green: SHA`, or what failed (a conflict: rebase and push; auto-merge stays on). Its run lost, or given
+  up, after the merge queued: finish with the read-only `gh pr view` and `gh run watch` calls its line names; don't
+  ask for a new relay. A PR left open with no auto-merge queued: `--land` again on the same relay once it can merge (no new commits
+  pushed since).
+  By hand instead: a PR whose `mergeStateStatus` is already `CLEAN`: `gh pr merge N --rebase` (no `--auto`: gh refuses `--auto` there).
   A gh merge that left the PR open with no auto-merge queued (refused) doesn't use the relay: run the fixed command.
   A project that lands by fast-forwarding the branch its main checkout has out, not by a PR: from your worktree,
   `session-status --land <branch>`, alone (git refuses a plain `push . HEAD:<branch>` there, and `git -C` into that
