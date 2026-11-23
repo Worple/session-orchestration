@@ -2048,7 +2048,7 @@ echo '{"features":{"retro":true},"retro":{"scope":"both","schedule":"mon 12:00"}
 # pane.sections: from the project's person file only, bad entries dropped with a warning, hidden read as line for what
 # needs you; --pane-section writes it there (made when missing), refuses hidden for those and a committed file; the
 # repo file and the person-wide file can't set it.
-pss() { (cd "$1" && shift && XDG_CONFIG_HOME=$tmp/xdg "$here/session-status" "$@"); }
+pss() { (cd "$1" && shift && HOME=$tmp XDG_STATE_HOME=$tmp/state XDG_CONFIG_HOME=$tmp/xdg "$here/session-status" "$@"); }
 # lib.sh PANE_SLUGS is register.tsx USAGE_SECTIONS' slugs (sectionSlug), so the two can't drift.
 want=$(grep '^export const USAGE_SECTIONS = ' "$here/../../hooks/register.tsx" | grep -o "'[^']*'" | tr -d "'" |
   sed -E 's/ *\(.*$//' | tr 'A-Z' 'a-z' | sed -E 's/[^a-z0-9]+/-/g; s/^-|-$//g' | sort | tr '\n' ' ')

@@ -206,6 +206,8 @@ without asking the user: they signed in for it.
 - **Nor is a session's progress.** Tell the user what finished, what's blocked and what waits on them; a progress
   update a session sends anyway stays with you.
 - **Check a session's wording against the project docs before repeating it** to the user.
+- **Never `open` a report a session wrote** (an HTML file, a page): that session opened it already. Give the user
+  its path.
 
 ## When to read what
 

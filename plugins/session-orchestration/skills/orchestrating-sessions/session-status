@@ -1232,7 +1232,12 @@ if [ "${1:-}" = --start ]; then
   # an older setup's layout made current first, so the reads below see the moved files; shown when it did or asks something
   mg=$("$SELF" --init --migrate 2>&1) || :
   ! grep -qE '^\[|failed' <<<"$mg" || printf '## Migration (answer an ask: session-status --init --migrate --apply=ID or --decline=ID)\n%s\n\n' "$mg"
-  echo '## Status';"$SELF" "$@" | tee "$TMP/rows"; rc=${PIPESTATUS[0]}
+  # Bounded: every task row and actionable footer, but at most 5 lines of Leftovers (the watcher stops those) and of
+  # Other sessions; the plain status prints them whole.
+  echo '## Status';"$SELF" "$@" | tee "$TMP/rows" | awk -v cmd="$SELF" '
+    function more() { if (k > 5) printf "  (and %d more: %s prints them all)\n", k - 5, cmd; k = 0; cap = 0 }
+    cap && /^  / { if (++k <= 5) print; next } { more() }
+    $0 == "Leftovers (task finished):" || $0 == "Other sessions:" { cap = 1 } { print } END { more() }'; rc=${PIPESTATUS[0]}
   pf=$(config pending.file 2>/dev/null); printf '\n## Handoff file%s\n' "${pf:+ ($pf)}"
   prc=0; pend=$("$SELF" --pending) || prc=$?; [ -z "$pend" ] || printf '%s\n' "$pend"
   [ "$prc" = 0 ] || echo '(none: the adapter gives no pending text)'
@@ -1258,8 +1263,10 @@ if [ "${1:-}" = --start ]; then
   [ ! -s "$TMP/ids" ] || echo "Resume them one at a time, after one ask (approvals.md): session-status --resume-ended $(sed 's/ $//' "$TMP/ids")"
   if [ -n "$h" ] && [ -f "$h" ]; then printf '\n## Handover (%s, written %s)\n' "$h" "$(epochfmt "$(mtime "$h")" '%m-%d %H:%M')"; cat "$h"
   else printf '\n## Handover\n(none%s)\n' "${h:+: no $h}"; fi
+  # only the answers not relayed yet: the relayed ones are done (--approvals lists them all)
   [ -z "${CLAUDE_CODE_SESSION_ID:-}" ] || { ap=$("$SELF" --approvals 2>/dev/null) && [ -n "$ap" ] &&
-    printf '\n## Approvals (relay one: session-status --relay KEY ACTION)\n%s\n' "$ap"; }
+    { nr=$(grep -c ' · relayed: ' <<<"$ap"); ap=$(grep -v ' · relayed: ' <<<"$ap"); :; } &&
+    printf '\n## Approvals not relayed yet (relay one: session-status --relay KEY ACTION)\n%s%s\n' "${ap:+$ap$'\n'}" "($nr relayed already: session-status --approvals lists them)"; }
   u=$(inbox_unread)
   [ -z "$u" ] || printf '\n## Coordinator inbox, unread (%s): act on each, then mark it read: %s --inbox --read N\n%s\n' "$(inbox_file)" "$SELF" "$u"
   # Other coordinators find this one by its purpose (--coordinators); the registry holds this root from now on.
