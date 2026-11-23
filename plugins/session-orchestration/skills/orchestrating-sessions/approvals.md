@@ -128,16 +128,18 @@ user a command).
   its text). Relay with that action as the Action line, verbatim, plus the task key: `Action: merge app#271
   (PROJ-5164)`. Use the hook's words, not the CLI command: an Action naming the command fails the hook even when
   `verify-approval.sh` said verified. The worker's hook allows only that PR or issue, and for a post only a body
-  file with that sha256; anything else is denied. One relay allows one run. Every gated command (comment edits
+  file with that sha256; anything else is denied. One relay allows one run (a `gh` merge again while its PR stays open
+  with no auto-merge queued: gh refused it, as it does `--auto` on a `CLEAN` PR). Every gated command (comment edits
   included: an edit is named like a new post) and its action: [worker.md](worker.md#posting-and-merging). A Teams
   send's `--attachments` files are each named with their own sha256 too. A `gh` merge's Action names `OWNER/REPO#ID`;
   the user's approval of the task covers landing its own PR: relay that with the worker's session name in the
   parentheses, `Action: merge OWNER/REPO#ID (<session name>)`, within 24h of that approval (later, ask for the
   merge itself); a yes asked under that name without your project prefix (`issue-templates` for
   `<project>-issue-templates`, the prefix of your own `<project>-coordinator`) verifies the same way. When the yes that started the session was given under another key and speaks of its landing (a
-  design task's pane answer "start stage 1 as its own PR; landing it is approved with it"), quote that answer and
-  relay `Action: merge OWNER/REPO#ID (<session name>, approved under <that key>)`: the hook verifies the quote with
-  that key, within 24h of the answer. A project that lands by fast-forward instead: `Action: merge <branch> (<session
+  design task's pane answer "start stage 1 as its own PR; landing it is approved with it"), run
+  `session-status --relay <that key> 'merge OWNER/REPO#ID (<session name>)'`: it adds `, approved under <that key>`
+  to the Action itself (refusing an answer that doesn't speak of landing or merging), so your command makes no
+  approval claim; the hook verifies the quote with that key, within 24h of the answer. A project that lands by fast-forward instead: `Action: merge <branch> (<session
   name>)` for the worker's `session-status --land <branch>`. The check reads the source's transcript for its send of
   that whole relay first (no session listing for a send within 24h), so a relay whose source has since stopped still
   verifies.

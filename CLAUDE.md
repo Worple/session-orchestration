@@ -23,7 +23,9 @@
    touches: `bash session-status.test.sh NAME…`, picking each `if section NAME; then` block that runs the option or
    behaviour you changed (`grep -n -e '--yourflag' -e '^if section'` shows which; a fixture or helper change at the
    top touches all of them). The full suite is CI's (`test.yml`, macOS and Ubuntu), not a local step.
-3. Land it through a PR: push the branch, open the PR and, once the task is approved, `gh pr merge <N> -R OWNER/REPO --auto --rebase`.
+3. Land it through a PR: push the branch, open the PR and, once the task is approved, `gh pr merge <N> -R OWNER/REPO --auto --rebase`
+   (`mergeStateStatus` already `CLEAN`: `gh pr merge <N> -R OWNER/REPO --rebase`, no `--auto`, which gh refuses there;
+   a refused merge leaves the relay usable while the PR stays open with no auto-merge).
    In a coordinated session, approved means the coordinator's relay naming that PR (`merge OWNER/REPO#N`): send the
    done report first (`reply` with `done: pr` and `key`), then merge once the relay arrives. An approval in the start
    brief is the coordinator's to relay, not the session's to act on, and the approval hook refuses the merge before

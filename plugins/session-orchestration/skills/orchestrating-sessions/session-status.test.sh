@@ -782,6 +782,13 @@ tid=f100000c-2222-3333-4444-555555555555 ago=1; tj "$(up 'Session task: ABC-107\
 out=$(run --owner ABC-107)
 [ "$(head -1 <<<"$out" | sed 's/ closed [0-9]*h$//')" = 'ABC-107: sess:f100000b' ] && grep -q '^  f100000b subcoordinator · ' <<<"$out" &&
   grep -q '^  f100000c first-prompt · ' <<<"$out" || { echo "--owner, sub-coordinator: $out"; exit 1; }
+# A chunked task: the live chunk (c4) owns it, not a done one (c3) whose transcript was touched since.
+tid=f100000d-2222-3333-4444-555555555555 ago=3; tj "$(up 'Session task: ABC-108\nChunk: ABC-108/4\nRead the brief.')"
+tid=f100000e-2222-3333-4444-555555555555 ago=1; tj "$(up 'Session task: ABC-108\nChunk: ABC-108/3\nRead the brief.')"
+cp "$tmp/bin/claude" "$tmp/claude.keep"
+printf '#!/bin/sh\necho %s\n' "'[{\"sessionId\":\"f100000d-2222-3333-4444-555555555555\",\"name\":\"ABC-108-c4\",\"cwd\":\"$root\",\"state\":\"idle\"},{\"sessionId\":\"f100000e-2222-3333-4444-555555555555\",\"name\":\"ABC-108-c3\",\"cwd\":\"$root\",\"state\":\"done\"}]'" > "$tmp/bin/claude"
+run ABC-108 | grep -q 'sess:"ABC-108-c4" idle' || { echo "a done chunk took the owner from the live one: $(run ABC-108)"; exit 1; }
+mv "$tmp/claude.keep" "$tmp/bin/claude"
 rm "$proj"/f100000*.jsonl
 # A session in one of the adapter's session-dirs shows under Other sessions and never owns a task.
 mkdir -p "$tmp/tools"; tools=$(cd "$tmp/tools" && pwd -P)
@@ -858,7 +865,11 @@ out=$(run --send-when-idle "$rid" x) && rc=0 || rc=$?
 export SESSION_STATUS_MAX_RESUME=1000000
 run --send-when-idle "$rid" "Follow up: X" | grep -q '^delivered to "rev"' &&
   [ "$(calls | grep -v ' agents ')" = "$(printf '.claude-work stop 22222222\n.claude-work --bg --resume %s Follow up: X' "$rid")" ] || { echo "send other account failed"; exit 1; }
-# --here: the same stop, but the resume runs under this account and keeps the name; a retired one too.
+# Retired here but live in the other account: the owning account's row wins, so it is sent there, not woken here.
+setacct cfg "$(sess "$rid" rev '' null)"; setacct .claude-work "$(sess "$rid" rev idle 1)"
+run --send-when-idle "$rid" "Owner" | grep -q '^delivered to "rev"' &&
+  [ "$(calls | grep -v ' agents ')" = "$(printf '.claude-work stop 22222222\n.claude-work --bg --resume %s Owner' "$rid")" ] || { echo "send, retired here, live there failed"; calls; exit 1; }
+setacct cfg ""
 setacct .claude-work "$(sess "$rid" rev idle 1)"
 run --send-when-idle --here "$rid" "Moved" | grep -q '^moved "rev" (22222222) to this account' &&
   [ "$(calls | grep -v ' agents ')" = "$(printf '.claude-work stop 22222222\ncfg --bg --resume %s Moved --name rev' "$rid")" ] || { echo "send --here failed"; exit 1; }
@@ -962,6 +973,12 @@ echo brief > "$root/replies/ABC-41-c1.md"; [ "$(run --changes)" = "no changes" ]
 echo report > "$root/replies/ABC-41.md"; out=$(run --changes)
 rm "$root/replies/ABC-41.md" "$root/replies/ABC-41-c1.md" "$root/.claude/coordination.local.json"; run --changes >/dev/null
 grep -q '^now:   \* report written: ABC-41.md (' <<<"$out" || { echo "a report didn't wake --changes: $out"; exit 1; }
+# A report its (messaging) session wrote earlier isn't news once that session ends: only one written since the last run is.
+echo '{"features":{"accounts":true}}' > "$root/.claude/coordination.local.json"; setacct cfg "$(sess "$hid" ABC-45 idle 1)"; run --changes >/dev/null
+echo report > "$root/replies/ABC-45.md"; [ "$(run --changes)" = "no changes" ] && setacct cfg "" && ! run --changes | grep -q 'report written' &&
+  touch "$root/replies/ABC-45.md" && grep -q '^now:   \* report written: ABC-45.md (' <<<"$(run --changes)" ||
+  { echo "an old report of an ended session woke --changes"; exit 1; }
+rm "$root/replies/ABC-45.md" "$root/.claude/coordination.local.json"; run --changes >/dev/null
 # Logins restored: a file action whose `when` held and no longer does wakes --changes once, naming the blocked
 # reports whose Blocker line is a sign-in; a peek keeps it for the committing run; the first run only records.
 printf '[{"label":"Sign in","hotkey":"g","command":"gh auth login","when":"[ -f %s/signed-out ]"}]' "$tmp" > "$root/.claude/coordinator-actions.json"
@@ -1479,7 +1496,16 @@ rf=$root/replies/p-fix-thing.md
   mkdir -p "$tmp/.cache/session-status" && printf 'task PROJ-8 - 0 0\nre\n' > "$tmp/.cache/session-status/handoff-$z.kind" &&
   [ "$(printf 'cached key' | as "$z" --report-file "$z")" = "$root/replies/PROJ-8.md" ] && rm "$root/replies/PROJ-8.md" &&
   printf 'chunk PROJ-7 2 0 0\n' > "$tmp/.cache/session-status/handoff-$z.kind" &&
-  [ "$(printf 'chunk report' | as "$z" --report-file "$z")" = "$rf" ] && [ ! -e "$root/replies/PROJ-7.md" ] &&
+  printf 'brief' > "$root/replies/PROJ-7-c2.md" && cr=$root/replies/PROJ-7-c2-report.md &&
+  [ "$(printf 'chunk report' | as "$z" --report-file "$z")" = "$cr" ] && [ ! -e "$root/replies/PROJ-7.md" ] &&
+  [ "$(printf 'keyed chunk' | as "$z" --report-file "$z" PROJ-7)" = "$cr" ] && [ "$(printf 'named chunk' | as "$z" --report-file "$z" PROJ-7-c2)" = "$cr" ] &&
+  [ "$(cat "$root/replies/PROJ-7-c2.md")" = brief ] && [ ! -e "$root/replies/PROJ-7.md" ] && rm "$cr" "$root/replies/PROJ-7-c2.md" &&
+  printf 'chunk PROJ-7 x 0 0\n' > "$tmp/.cache/session-status/handoff-$z.kind" && [ "$(printf 'odd chunk' | as "$z" --report-file "$z")" = "$rf" ] &&
+  printf '# PROJ-5\n\n## Build plan\nc1 ...\n\n## Handoff\nh' > "$root/replies/PROJ-5.md" &&
+  [ "$(printf 'over a plan' | as "$z" --report-file "$z" PROJ-5)" = "$root/replies/PROJ-5-report.md" ] &&
+  [ "$(head -3 "$root/replies/PROJ-5.md" | tail -1)" = '## Build plan' ] &&
+  [ "$(printf 'a new plan\n\n## Plan\nc1' | as "$z" --report-file "$z" PROJ-5)" = "$root/replies/PROJ-5.md" ] &&
+  rm "$root/replies/PROJ-5.md" "$root/replies/PROJ-5-report.md" &&
   printf 'subcoordinator PROJ-6 - 0 0\n' > "$tmp/.cache/session-status/handoff-$z.kind" &&
   [ "$(printf 'sub report' | as "$z" --report-file "$z" PROJ-6)" = "$root/replies/PROJ-6-coordinator.md" ] && [ ! -e "$root/replies/PROJ-6.md" ] &&
   rm "$root/replies/PROJ-6-coordinator.md" &&
@@ -2940,6 +2966,14 @@ out=$(ap --relay ABC-11 'merge PR #5' 2>"$tmp/err") && [ "$out" = "$(blk 'ABC-11
 relay 0.1 w1 "$out" >> "$proj/$cid.jsonl"
 [ "$(ap --approvals | sed -n 2p)" = 'ABC-11: Yes, merge ABC-11. Asked: Merge PR #5? · 21h left · relayed: merge PR #5 to w1' ] ||
   { echo "--approvals, relayed: $(ap --approvals)"; exit 1; }
+# A landing for a session named other than the key: --relay itself adds "approved under KEY", once the yes speaks of
+# landing; under the key's own name it stays as given.
+out=$(ap --relay ABC-11 'merge acme/app#5 (abc-fix)' 2>/dev/null) &&
+  [ "$out" = "$(blk 'ABC-11: Yes, merge ABC-11. Asked: Merge PR #5?' 'merge acme/app#5 (abc-fix, approved under ABC-11)' "$cid")" ] &&
+  out=$(ap --relay ABC-11 'merge acme/app#5 (ABC-11)' 2>/dev/null) && [[ $out == *$'\nAction: merge acme/app#5 (ABC-11)\n'* ]] ||
+  { echo "--relay, approved under: $out"; exit 1; }
+rc=0; out=$(ap --relay ABC-12 'merge acme/app#6 (abc-fix)' 2>&1) || rc=$?
+[ $rc = 1 ] && [[ $out == "ABC-12's answer doesn't speak of landing or merging"* ]] || { echo "--relay, a yes not to landing: $rc $out"; exit 1; }
 # Stopped since (no coordinator listed): the worker's check finds the relay in its transcript.
 printf '#!/bin/sh\necho []\n' > "$tmp/bin/claude"
 v=$(cd "$root" && HOME=$tmp CLAUDE_CONFIG_DIR=$tmp/cfg PATH=$tmp/bin:$PATH env -u CLAUDE_CODE_SESSION_ID bash "$here/verify-approval.sh" "$cid" "$root" coord ABC-11 'merge PR #5' \

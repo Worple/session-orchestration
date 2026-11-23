@@ -525,15 +525,18 @@ fi
 # --report-file SESSION_ID [KEY] < REPORT: the reply tool's `report`, the status report at the top of <replies>/<KEY>.md
 # (the file --handover reads; worker.md, The replies file). No KEY: the task key context-watch.sh cached for that
 # session, else its name less a -prev-K; a sub-coordinator's (`Coordinate KEY`), always KEY-coordinator. It replaces what precedes the first `## Handoff` and keeps that section on,
-# so a report never drops the handoff; a report with its own `## Handoff` replaces it. Exit 3: no replies folder.
+# so a report never drops the handoff; a report with its own `## Handoff` replaces it. A chunk files under KEY-cN-report;
+# a report without a plan heading over a file whose top has one (`## Plan`, `## Build plan`) goes to NAME-report.md. Exit 3: no replies folder.
 if [ "${1:-}" = --report-file ]; then
   rd=$(replies_path); [ -n "$rd" ] || { echo "$ROOT/CLAUDE.md names no replies folder" >&2; exit 3; }
   body=$(cat); [ -n "${body//[[:space:]]/}" ] && [ -n "${2:-}" ] || { echo "usage: session-status --report-file SESSION_ID < REPORT" >&2; exit 2; }
   ok='^[A-Za-z0-9][A-Za-z0-9._-]*$'
-  kd= ck=; [[ $2 =~ ^[A-Za-z0-9_-]+$ ]] && read -r kd ck _ 2>/dev/null < "${XDG_CACHE_HOME:-$HOME/.cache}/session-status/handoff-$2.kind" || kd=
+  kd= ck= cn=; [[ $2 =~ ^[A-Za-z0-9_-]+$ ]] && read -r kd ck cn _ 2>/dev/null < "${XDG_CACHE_HOME:-$HOME/.cache}/session-status/handoff-$2.kind" || kd=
   # a sub-coordinator (context-watch's kind) files under its name, KEY-coordinator, whatever key it passes: KEY.md is its plan
   # shortcut: relies on .kind (written at its first prompt); classify here too if a sub ever reports before that
   if [ "$kd" = subcoordinator ] && [[ $ck =~ $ok ]]; then n=$ck-coordinator
+  # a chunk files under KEY-cN-report: KEY.md is the plan, KEY-cN.md the chunk's brief
+  elif [ "$kd" = chunk ] && [[ $ck =~ $ok ]] && [[ $cn =~ ^[0-9]+$ ]] && [[ -z ${3:-} || $3 == "$ck" || $3 == "$ck-c$cn" ]]; then n=$ck-c$cn-report
   elif [ -n "${3:-}" ]; then n=$3; [[ $n =~ $ok ]] || { echo "key \"$n\": letters, digits, . _ - only (a keyless task: its session name)" >&2; exit 2; }
   else
     # a task's cached key only: a chunk's second field is its plan's key, and KEY.md is the plan
@@ -542,6 +545,9 @@ if [ "${1:-}" = --report-file ]; then
     [[ $n =~ $ok ]] || { echo "session ${2:0:8} has no name to file the report under${n:+ (\"$n\")}: pass key, or name_session first" >&2; exit 2; }
   fi
   f=$rd/$n.md; mkdir -p "$rd"
+  # a plan (a `## Plan` or `## Build plan` above its handoff) is never replaced by a report that has none: NAME-report.md
+  if [ -f "$f" ] && ! grep -qE '^## (Build )?[Pp]lan' <<<"$body" &&
+    awk '/^## Handoff/ { exit } /^## (Build )?[Pp]lan/ { p = 1; exit } END { exit !p }' "$f"; then n=$n-report; f=$rd/$n.md; fi
   {
     printf '%s\n' "$body"
     if [ -f "$f" ] && ! grep -q '^## Handoff' <<<"$body"; then awk '/^## Handoff/ { on = 1 } on' "$f" | sed '1s/^/\n/'; fi
@@ -833,6 +839,13 @@ if [ "${1:-}" = --approvals ] || [ "${1:-}" = --relay ]; then
     { echo "$key's newest pane answer is a No, nothing to relay: $q" >&2; exit 1; }
   others=$(( $(wc -l <<<"$pick") - 1 ))
   [ "$others" = 0 ] || echo "$key has $others older live answer(s) too: relaying the newest (--approvals lists them)" >&2
+  # A landing asked under another key: `merge TARGET (<session name>)` becomes `(<session name>, approved under KEY)`
+  # here, once the yes speaks of landing (the hook's rule), so the coordinator's command makes no approval claim itself.
+  if [[ $action =~ ^(merge[[:space:]].*\()([A-Za-z0-9][A-Za-z0-9._-]*)\)[[:space:]]*$ ]] && [ "${BASH_REMATCH[2]}" != "$key" ]; then
+    grep -qiE 'land|merg' <<<"${q#"Approval pane answer for $key: "}" ||
+      { echo "$key's answer doesn't speak of landing or merging: it approves no merge for ${BASH_REMATCH[2]}: $q" >&2; exit 1; }
+    action="${BASH_REMATCH[1]}${BASH_REMATCH[2]}, approved under $key)"
+  fi
   v=$(cd "$cwd" && env -u CLAUDE_CODE_SESSION_ID bash "$(dirname "$SELF")/verify-approval.sh" "$CLAUDE_CODE_SESSION_ID" "$cwd" "$name" "$key" "$action" <<<"$q") ||
     { echo "${v:-verify-approval.sh failed}" >&2; exit 1; }
   printf 'APPROVAL relayed from the user\nQuote: %s\nAction: %s\nSource: %s %s\n' "$q" "$action" "$CLAUDE_CODE_SESSION_ID" "$cwd"
@@ -1159,17 +1172,19 @@ if [ "${1:-}" = --changes ]; then
     new=$(awk '$0 == "Leftovers (task finished):" { h = $0; next } h != "" && /^  / { print h } { h = ""; print }' <<<"$new")
   rm -f "$last.fin.$$" "$last.fin.$$.wt"
   # A worker under another account with no live socket can't SendMessage this coordinator (features/accounts.md): its
-  # report reaches only the replies folder. With accounts on, each <KEY>.md written there in the last day is a line, so
-  # writing one is news; not a key a session that can message works on (this account's, or one with a live socket),
-  # nor the coordinator's own files (plans, briefs).
+  # report reaches only the replies folder. With accounts on, each <KEY>.md written there since the last run (else in
+  # the last day) is a line, so writing one is news once; not a key a session that can message works on (this account's,
+  # or one with a live socket), nor the coordinator's own files (plans, briefs).
   if [ "$(config features.accounts 2>/dev/null)" = true ]; then
     rd=$(replies_path)
     kre=$(key_re "$(adapter_path "$ROOT")")
     mine=$(awk -F'\t' '{ print $4 "\t" $2 "\t" $9 }' ~/.cache/session-status/"$ENC".agents 2>/dev/null |
       while IFS=$'\t' read -r p n pid; do [ "$p" != claude ] && ! sock_addr "$pid" >/dev/null || echo "$n"; done)
+    # .rt: when the last committed run looked; a report older than that was a line then (or not news: its session could message)
+    touch "$last.rt.$$"; nw=(-mtime -1); [ ! -f "$last.rt" ] || nw+=(-newer "$last.rt")
     r=(); [ -z "$rd" ] || while IFS= read -r -d '' f; do k=${f##*/}; k=${k%.md}
       grep -qxE "$kre" <<<"$k" && ! grep -qE "^$k(-|\$)" <<<"$mine" && r+=("$f")
-    done < <(find "$rd" -maxdepth 1 -type f -name '*.md' -mtime -1 -print0 2>/dev/null)
+    done < <(find "$rd" -maxdepth 1 -type f -name '*.md' "${nw[@]}" -print0 2>/dev/null)
     [ ${#r[@]} = 0 ] || new+=$'\nReports:'$(mtime_named "${r[@]}" | sort -rn |
       while read -r m f; do printf '\n  * report written: %s (%s)' "${f##*/}" "$(epochfmt "$m" '%m-%d %H:%M:%S')"; done)
     # This account past 90% of its weekly limit while another has headroom: wake the coordinator once to move.
@@ -1338,7 +1353,8 @@ if [ "${1:-}" = --changes ]; then
     [ -n "${SESSION_STATUS_PEEK:-}" ] || [ -z "$fwc" ] || locked_drop "$fw" "$fwc"
   fi
   rm -f "$last.out.$$"
-  [ -n "${SESSION_STATUS_PEEK:-}" ] && [ -z "$stale" ] || { echo "$new" > "$last"; printf '%s\n' "$me" > "$last.by"; }; exit
+  [ -n "${SESSION_STATUS_PEEK:-}" ] && [ -z "$stale" ] || { echo "$new" > "$last"; printf '%s\n' "$me" > "$last.by"; [ ! -f "$last.rt.$$" ] || mv "$last.rt.$$" "$last.rt"; }
+  rm -f "$last.rt.$$"; exit
 fi
 
 ADAPTER=$(adapter_path "$ROOT")   # local, else the committed one once trusted (lib.sh)
@@ -2182,7 +2198,11 @@ sed -E "s#.*/##; s#\.jsonl\$##; s#^#$SCAN/#" "$TMP/files" | tr '\n' '\0' | xargs
 while read -r o id; do o=$(resolve_old "$o" "$TRANSCRIPTS") && echo "$o $id"; done < "$TMP/sup" > "$TMP/superseded"
 cut -d' ' -f1 "$TMP/superseded" > "$TMP/superseded.ids"
 sort -k1,1 -k2,2rn -k3,3rn -o "$TMP/owners.all" "$TMP/owners.all"
-awk -v ssf="$TMP/superseded.ids" 'BEGIN { while ((getline l < ssf) > 0) s[l] } !($4 in s) && !o[$1]++ {print $1, $4}' "$TMP/owners.all" > "$TMP/owners.exact"
+awk -F'\t' '$3 !~ /^(done|stopped)$/ {print $1}' "$TMP/agents" > "$TMP/live.ids"
+# per key, the newest of its top rank; a live one beats a newer one that isn't (a done chunk whose transcript was touched)
+awk -v ssf="$TMP/superseded.ids" -v lf="$TMP/live.ids" 'BEGIN { while ((getline l < ssf) > 0) s[l]; while ((getline l < lf) > 0) live[l] }
+  ($4 in s) { next } !($1 in r) { r[$1] = $2; o[++n] = $1; id[$1] = $4; lv[$1] = ($4 in live); next }
+  $2 == r[$1] && !lv[$1] && ($4 in live) { id[$1] = $4; lv[$1] = 1 } END { for (i = 1; i <= n; i++) print o[i], id[o[i]] }' "$TMP/owners.all" > "$TMP/owners.exact"
 
 # Mentions (`men`): count, key, id.
 awk -v fkf="$TMP/firstkey" -v rvf="$TMP/reviewers" -v ssf="$TMP/superseded.ids" 'BEGIN { while ((getline l < fkf) > 0) { split(l, x, " "); fk[x[1]] = x[2] }
@@ -2194,7 +2214,6 @@ awk '!s[$1]++ && $2 >= 10 {print $1, $3, $2}' "$TMP/guess.all" > "$TMP/owners.gu
 # (ID KEY SUBID): live, not the sub, not a coordinator, first prompt naming KEY (first_key: a chunk's and a review's do;
 # --coordinator routes their replies to the sub by the same rule). The sweep leaves them out of its footer, unless the
 # caller is that sub; a key lookup lists them (Under KEY-coordinator). A gone sub folds nothing: they unfold.
-awk -F'\t' '$3 !~ /^(done|stopped)$/ {print $1}' "$TMP/agents" > "$TMP/live.ids"
 awk -v lf="$TMP/live.ids" 'BEGIN { while ((getline l < lf) > 0) live[l] } NR==FNR { if ($2 == 2) s[$1 " " $4]; next }
   (($1 " " $2) in s) && ($2 in live)' "$TMP/owners.all" "$TMP/owners.exact" > "$TMP/subs"
 # (every `Coordinate KEY` session stays out: a retiring sub beside its successor isn't folded under it)

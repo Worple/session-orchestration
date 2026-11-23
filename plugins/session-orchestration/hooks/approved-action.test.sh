@@ -42,6 +42,8 @@ typed() { jq -nc --arg ts "$2" --arg t "$1" '{type: "user", origin: {kind: "huma
 export CLAUDE_CODE_SESSION_ATTENDED=0 # unattended (a --bg session) unless a check says otherwise
 printf '#!/bin/sh\necho %s\n' "'[{\"sessionId\":\"$cid\",\"name\":\"coord\",\"cwd\":\"$root\",\"kind\":\"interactive\"}]'" > "$tmp/bin/claude"
 chmod +x "$tmp/bin/claude"
+# gh pr view (a used merge relay's recheck) answers $GH_STUB; unset, it fails
+printf '#!/bin/sh\n[ -n "$GH_STUB" ] && echo "$GH_STUB"\n' > "$tmp/bin/gh"; chmod +x "$tmp/bin/gh"
 
 relay() { # $1 quote, $2 action, [$3 sender name, $4 origin.from, $5 handback]
   jq -nc --arg b "$(printf 'Go ahead.\n\nAPPROVAL relayed from the user\nQuote: %s\nAction: %s\nSource: %s %s\n' "$1" "$2" "$cid" "$root")" \
@@ -216,6 +218,11 @@ check "{ rtk gh pr merge 12 -R acme/app --subject 'a; b' -R evil/app; }" deny "a
 check "{ rtk gh pr merge 19 -R acme/app; }" allow "rtk gh inside braces is a call"
 check "gh pr merge 12 -R github.com/acme/app --squash" allow "gh merge with a relay, HOST/OWNER/REPO"
 check "gh pr merge 12 --repo acme/app" deny "gh merge, relay used once already"
+# gh refused that run (--auto on a clean PR): still open, nothing queued, so the relay holds; merged or queued, it's used
+export GH_STUB='{"state":"OPEN","autoMergeRequest":null}'; check "gh pr merge 12 --repo acme/app" allow "gh merge again, the used run didn't land or queue"
+GH_STUB='{"state":"MERGED","autoMergeRequest":null}'; check "gh pr merge 12 --repo acme/app" deny "gh merge again, merged"
+GH_STUB='{"state":"OPEN","autoMergeRequest":{"mergeMethod":"REBASE"}}'; check "gh pr merge 12 --repo acme/app" deny "gh merge again, auto-merge queued"
+unset GH_STUB
 check "gh pr -R acme/app merge 99" deny "gh flag between pr and merge"
 check "gh pr \"merge\" 99 -R acme/app" deny "gh quoted verb"
 check "\"gh\" pr merge 99 -R acme/app" deny "gh quoted name"

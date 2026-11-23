@@ -727,7 +727,10 @@ list_sessions() {
       | select(($all | test("--all")) or .kind != "background" or .pid != null or .state != "blocked")
       | (if .state == "done" and .pid != null and .status != "busy" then "blocked" else .state // .status // "?" end) as $st
       | "\(.sessionId)\t\(.name)\t\($st)\t\($pre)\t\((.startedAt // 0) / 1000 | floor)\t\(.cwd)\t\(.kind // "")\t\(.status // "")\t\(.pid // "")\t\(.waitingFor // "" | tostring | gsub("[\t\n\r]"; " ") | .[:80])"' <<<"$out"
-  done < <(list_accounts) | awk -F'\t' '!s[$1]++'
+  done < <(list_accounts) |
+    # one row per id across accounts: the owning account's (a live process, else not done) beats a stale copy; ties keep the first (this account)
+    awk -F'\t' '{ r = $9 != "" ? 2 : $3 != "done" } !($1 in b) { o[++n] = $1; b[$1] = $0; k[$1] = r; next }
+      r > k[$1] { b[$1] = $0; k[$1] = r } END { for (i = 1; i <= n; i++) print b[o[i]] }'
 }
 
 # weekly_use: "CONFIG_DIR<TAB>PERCENT<TAB>RESETS" (whole percent, epoch s) per account list_accounts names, the current

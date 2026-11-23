@@ -9,7 +9,7 @@
 # session-name keys) is verified with REPO's last part #ID as the key; a merge's Action may instead end "(<this session's name>)",
 # verified with that name (approving the task covers its landing), or "(<this session's name>, approved under KEY)",
 # verified with KEY (a yes under another task's key that started this session with its landing). Then: allow, once per relay
-# (~/.cache/session-status/approved/). The command must be that one CLI call alone (a gh one: beside
+# (~/.cache/session-status/approved/; a gh merge again while its PR stays open with no auto-merge). The command must be that one CLI call alone (a gh one: beside
 # read-only gh calls only, see ghro below). Anything else on
 # those commands: deny, with the exact action to report. A `gh api` call with a write method or fields, a
 # `forgejo-cli raw` call with a write method, or gh reached through a variable or $(…), is denied (asked, when
@@ -583,10 +583,13 @@ while IFS= read -r r; do
   # Both keys failed: the deny gives the full key's reason.
   [[ $v == verified* ]] || v=${v1:-$v}
   # One use per relay: a rerun (the CLI timed out after the server took it) needs a new approval.
-  # ponytail: used up when allowed, not when the command succeeds; the deny says to check before asking again.
+  # ponytail: used up when allowed, not when the command succeeds; the deny says to check before asking again. A gh
+  # merge whose PR is still open with no auto-merge queued (gh refused it: --auto on a clean PR) didn't use it.
   used=~/.cache/session-status/approved/$(printf '%s|%s|%s' "$(jq -r .tp <<<"$r")" "$action" "$(jq -c "del(.tp)" <<<"$r")" | shasum -a 256 | cut -c1-32)
   case "$v" in
-    verified*) [ ! -e "$used" ] || { tried="this relay was used once already: check whether that run landed before asking again"; fault used-once relay; continue; }
+    verified*) [ ! -e "$used" ] || { [ "$kind" = merge ] && [ "$host" = gh ] &&
+                 gh pr view "$target" -R "$repo" --json state,autoMergeRequest 2>/dev/null | jq -e '.state == "OPEN" and .autoMergeRequest == null' >/dev/null 2>&1; } ||
+                 { tried="this relay was used once already: check whether that run landed before asking again"; fault used-once relay; continue; }
                mkdir -p "${used%/*}" && touch "$used" || exit 1
                # This exact command, also handed to the user (hand_command): withdrawn, or the pane's Run posts it again.
                w=

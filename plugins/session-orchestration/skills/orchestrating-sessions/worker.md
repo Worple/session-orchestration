@@ -150,6 +150,8 @@ The gated commands, edits included, and the action the hook names for each (ask 
   coordinator relays it with the Action ending in your session's name, `merge OWNER/REPO#ID (<session name>)` (within 24h of that approval; later, ask for the merge).
   Started by a yes given under another key that approved your landing too: `(<session name>, approved under <that
   key>)`, within 24h of that yes.
+  A PR whose `mergeStateStatus` is already `CLEAN`: `gh pr merge N --rebase` (no `--auto`: gh refuses `--auto` there).
+  A gh merge that left the PR open with no auto-merge queued (refused) doesn't use the relay: run the fixed command.
   A project that lands by fast-forwarding the branch its main checkout has out, not by a PR: from your worktree,
   `session-status --land <branch>`, alone (git refuses a plain `push . HEAD:<branch>` there, and `git -C` into that
   checkout isn't yours to run). It is gated as `merge <branch>`, relayed as `merge <branch> (<session name>)`; it
