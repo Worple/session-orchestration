@@ -7,7 +7,8 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT; trap 'echo "failed at line $LINENO:
 fail() { echo "FAIL: $1"; [ -z "${2:-}" ] || echo "$2"; exit 1; }
 export HOME=$tmp XDG_STATE_HOME=$tmp/state RETRO_LOG=$tmp/log TZ=UTC
 bin=$tmp/.local/bin; mkdir -p "$bin" "$tmp/.claude-work"
-printf '#!/bin/sh\necho "$@" >> %q\n' "$tmp/claude.calls" > "$bin/claude"
+# claude --bg's own line; with $tmp/claude.fail present it fails the way a refused start does
+printf '#!/bin/sh\n[ -e %q ] && { echo "error: no account" >&2; exit 1; }\necho "$@" >> %q\necho "backgrounded · 1234abcd"\n' "$tmp/claude.fail" "$tmp/claude.calls" > "$bin/claude"
 printf '#!/bin/sh\necho "$@" >> %q\n' "$tmp/launchctl.calls" > "$bin/launchctl"
 root=$(mkdir -p "$tmp/proj/.claude" && cd "$tmp/proj" && pwd -P)
 # an old line for this root, one for another root whose path starts the same, and one unrelated
@@ -45,8 +46,20 @@ RETRO_NOW=$(at '2026-11-20 08:00') run "$root" --scheduled
 RETRO_NOW=$(at '2026-11-23 11:59') run "$root" --scheduled; [ "$(calls)" = 2 ] || fail "not due before the time" ""
 RETRO_NOW=$(at '2026-11-23 12:00') run "$root" --scheduled --scope project
 [ "$(calls)" = 3 ] && tail -1 "$tmp/claude.calls" | grep -q 'retro-project-' || fail "due at the time; --scope picks one" "$(cat "$tmp/claude.calls")"
-# --now skips the check.
-RETRO_NOW=$(at '2026-11-23 12:01') run "$root" --now --scope plugin; [ "$(calls)" = 4 ] || fail "--now" ""
+# --now skips the check, and stdout says what started (a caller seeing nothing started a duplicate).
+out=$(RETRO_NOW=$(at '2026-11-23 12:01') run "$root" --now --scope plugin); [ "$(calls)" = 4 ] || fail "--now" ""
+[[ $out == 'started "retro-plugin-'????-??-??'" (1234abcd) · retro opus/xhigh' ]] || fail "--now prints the started line" "$out"
+# A failed start: its didn't-start line, exit 1, and the stamp given back.
+cp "$replies/retro-plugin.stamp" "$tmp/stamp.bak"; touch "$tmp/claude.fail"
+rc=0; out=$(RETRO_NOW=$(at '2026-11-23 12:02') run "$root" --now --scope plugin) || rc=$?
+rm "$tmp/claude.fail"
+[ "$rc" = 1 ] && [[ $out == '"retro-plugin-'????-??-??'" didn'"'"'t start: error: no account' ]] &&
+  cmp -s "$tmp/stamp.bak" "$replies/retro-plugin.stamp" || fail "a failed start: didn't-start line, exit 1, stamp kept" "rc=$rc $out"
+# Another call holding the lock: a busy line and exit 1, not silence.
+mkdir "$replies/retro-plugin.stamp.lock"
+rc=0; out=$(run "$root" --now --scope plugin) || rc=$?
+rmdir "$replies/retro-plugin.stamp.lock"
+[ "$rc" = 1 ] && [ "$(calls)" = 4 ] && grep -q "didn't start: busy" <<<"$out" || fail "busy: a didn't-start line, exit 1" "rc=$rc $out"
 
 # A new project (no report, no stamp) waits for its first scheduled time.
 rm "$replies"/*.stamp "$replies/replies/rnd-run-3.md"
@@ -100,7 +113,7 @@ run --uninstall "$root" >/dev/null
 # The old entry points (a crontab line names retro-weekly): with no schedule there's no due check, and the log names the
 # install command.
 echo '{}' > "$root/.claude/coordination.local.json"
-"$here/retro-weekly" "$root"
+"$here/retro-weekly" "$root" >/dev/null
 if [ "$(uname)" = Darwin ]; then hint="retro-run --install $root"; else hint="point the cron line at .*retro-run"; fi
 [ "$(calls)" = 7 ] && tail -1 "$tmp/claude.calls" | grep -q 'retro-project-' && grep -q "called as retro-weekly: .*$hint" "$tmp/log" ||
   fail "retro-weekly shim starts a project run and logs the install" "$(cat "$tmp/log")"

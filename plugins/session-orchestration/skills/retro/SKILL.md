@@ -243,7 +243,7 @@ else in `${XDG_STATE_HOME:-~/.local/state}` (`RETRO_LOG` overrides). It reads th
 
 | Call | Does |
 |------|------|
-| `retro-run ROOT [--scope S] [--now] [--dry-run]` | starts the scope's session(s) whose run is due: its last start is older than `retro.schedule`'s most recent time. `--now` skips the check; `--dry-run` prints the verdict and the start line |
+| `retro-run ROOT [--scope S] [--now] [--dry-run]` | starts the scope's session(s) whose run is due: its last start is older than `retro.schedule`'s most recent time. `--now` skips the check; `--dry-run` prints the verdict and the start line. Each start prints `started "NAME" (ID8) · retro M/E` on stdout, or `"NAME" didn't start: WHY`, one line per scope; exit 1 when any scope didn't start |
 | `retro-run --install ROOT` | writes `~/Library/LaunchAgents/session-orchestration.retro.<slug>-<6 hex>.plist` (needs `features.retro` true and `retro.schedule`) and loads it; again after changing `retro.schedule` or `retro.account`. Prints the command that removes an old cron line; it never edits the crontab |
 | `retro-run --uninstall ROOT` | unloads and deletes it |
 | `retro-run --status [ROOT]` | label, loaded or not, schedule, account, last start and next due per scope (no ROOT: every agent) |

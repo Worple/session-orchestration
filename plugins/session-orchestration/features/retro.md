@@ -41,4 +41,5 @@ A value outside its set falls back to the default with one warning line.
   each scope's next due time.
 - **An overdue run**: with `retro.schedule` set, the newest retro report in the replies folder is over
   8 days old. Tell the user once, with `retro-run --status ROOT`'s lines (an agent not loaded is the usual cause), and
-  on their yes start it with `retro-run ROOT --now` from the plugin's `skills/retro/`.
+  on their yes start it with `retro-run ROOT --now` from the plugin's `skills/retro/`. Its `started "NAME" (ID8)` line is the
+  start: don't start it again while `claude agents` doesn't list it yet. Rerun only a scope whose line says `didn't start` (`--scope S`).

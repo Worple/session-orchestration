@@ -4,7 +4,8 @@
 #                         start the scope's session(s) (retro.scope; both = one session each) whose run is due: its
 #                         stamp (last start) is older than retro.schedule's most recent due time. --now skips the
 #                         check; retro.schedule unset: no check (the caller is the schedule, e.g. an old cron line).
-#                         --dry-run prints the verdict and the start line and starts nothing.
+#                         --dry-run prints the verdict and the start line and starts nothing. Each start prints
+#                         `started "NAME" (ID8) · retro M/E`, or `"NAME" didn't start: WHY`; exit 1 when any scope didn't.
 #   retro-run --install ROOT     write and load the LaunchAgent (features.retro true, retro.schedule set); run it again
 #                                after changing retro.schedule or retro.account
 #   retro-run --uninstall ROOT   unload and delete it
@@ -25,6 +26,8 @@ LOG=${RETRO_LOG:-$logdir/retro-run.log}
 agents=$HOME/Library/LaunchAgents
 usage="usage: retro-run ROOT [--scope project|plugin|both] [--now] [--dry-run] | --install ROOT | --uninstall ROOT | --status [ROOT]"
 log() { mkdir -p "$(dirname "$LOG")"; echo "$(date '+%F %T') $*" >> "$LOG"; }
+# say LINE: a start's line on stdout and in the log; under the LaunchAgent stdout is the log, so only once
+say() { log "$1"; [ -n "$sched" ] || echo "$1"; }
 
 mode=run root= scope= now= dry= sched=
 while [ $# -gt 0 ]; do
@@ -104,7 +107,7 @@ run)
     if [ -z "$dry" ]; then
       for _ in 1 2 3 4 5 6 7 8 9 10; do mkdir "$f.lock" 2>/dev/null && lock=$f.lock && break
         [ -z "$(find "$f.lock" -mmin +1 2>/dev/null)" ] || rmdir "$f.lock" 2>/dev/null || true; sleep 1; done
-      [ -n "$lock" ] || { log "busy: $sc in $root"; continue; }
+      [ -n "$lock" ] || { say "\"retro-$sc-$(date +%F)\" didn't start: busy, another retro-run holds $f.lock"; rc=1; continue; }
     fi
     if [ -z "$now" ] && [ -n "$s" ]; then
       if ! due "$sc" "$s"; then
@@ -120,13 +123,24 @@ run)
         me="--model ${me%%/*} --effort ${me#*/}$a"; } || me=   # --kind's --advisor, as the real run gets it
     else me=$(cd "$root" && bash "$ss" --kind retro "$name") || me=; fi
     read -ra me <<<"$me"   # words, not globs: a [1m] model stays literal
+    [ ${#me[@]} = 0 ] || me=("${me[@]//\\/}")   # --kind prints them %q-escaped (opus\[1m\])
     cmd=(claude --bg ${me[@]+"${me[@]}"} -n "$name" "$task")
     if [ -n "$dry" ]; then echo "due: $sc"; printf '%q ' "${cmd[@]}"; echo; command -v claude || true; continue; fi
     log "start $name in $root${CLAUDE_CONFIG_DIR:+ under $CLAUDE_CONFIG_DIR}"
     old=$(cat "$f" 2>/dev/null) || old=
     clock > "$f"; unlock   # claimed before the start; given back when it fails
-    (cd "$root" && "${cmd[@]}") >> "$LOG" 2>&1 || { log "failed: $name"; if [ -n "$old" ]; then echo "$old" > "$f"; else rm -f "$f"; fi; }
-  done ;;
+    # stdout says what started, as session-status --launch does: a caller that sees nothing starts a duplicate
+    ok=0; out=$(cd "$root" && "${cmd[@]}" 2>&1) || ok=$?; [ -z "$out" ] || printf '%s\n' "$out" >> "$LOG"
+    id=$(grep -oE 'backgrounded · [0-9a-f]{8}' <<<"$out" | tail -1) || id=; id=${id##* }
+    # exit 0 without the id still started (claude's wording may change): keep the stamp, or the next call starts it again
+    if [ -n "$id" ] || [ "$ok" = 0 ]; then
+      line="started \"$name\" (${id:-no id}) · retro ${me[1]:+${me[1]}/${me[3]:-}}"; say "${line% }"
+    else
+      say "\"$name\" didn't start: $(tail -1 <<<"${out:-claude --bg exited $ok}")"; rc=1
+      if [ -n "$old" ]; then echo "$old" > "$f"; else rm -f "$f"; fi
+    fi
+  done
+  exit "${rc:-0}" ;;
 
 install)
   command -v launchctl >/dev/null || { echo "no launchctl: --install is macOS only; on Linux use a cron line (the retro skill's Scheduling)" >&2; exit 1; }
