@@ -26,7 +26,8 @@
 # heredoc cat writes to a file or session-status --inbox-add stores) passes when every command in it is on an allowlist of ones that never run their text
 # (SAFE); read-only calls (gh pr view, gh api GET, an inline graphql query) pass too. A gated call may share its
 # command with read-only gh calls (gh pr view|checks, gh run view|watch, …, gh by name right after the subcommand), in
-# $(…) or a loop too: a landing's status poll.
+# $(…) or a loop too: a landing's status poll. A read-only gh call in $(…) passes alone too as echo's argument,
+# on a line of plain echo calls (echo "#$n $(gh pr view $n …)", in a for loop too).
 # ponytail: a text check, not a sandbox: a file one call writes (a script, a git hook) can run its text in a later
 # call this hook never links to it. Gate at execution (a wrapper for gh and the CLIs on PATH) if that matters.
 # ponytail: gh subcommands outside pr/issue/api (release, repo, workflow) aren't gated; add them when a project
@@ -208,8 +209,9 @@ ghops='(^|[^A-Za-z0-9_.-])gh([^A-Za-z0-9_.-][^|;&]*[[:space:]]|[[:space:]]+)((pr
 ghind='(=["'"'"']?|\$\(|`)[[:space:]]*((which|command[[:space:]]+-v|type[[:space:]]+-p)[[:space:]]+)?([^[:space:]]*/)?gh([^A-Za-z0-9_.-]|$)'
 # A read-only gh call (pr view|checks, run watch, …), as landing a PR polls it: chained with the merge (then it
 # doesn't count as one more call), and in "$(…)" tested by [ ], [[ ]], test or case, in a wait loop too: there its
-# output (a PR body, a diff, which others write) is only compared, never run. Anywhere else (x=$(…), which $x could
-# run, echo's output in $(…), eval, a shell) it is still denied as indirect.
+# output (a PR body, a diff, which others write) is only compared, never run; and in $(…) as an argument on a line of
+# plain echo calls, only printed (below). Anywhere else (x=$(…), which $x could run, echo's output in $(…), a pipe, eval, a shell) it is
+# still denied as indirect.
 # shortcut: a known list of re-parsing commands (eval, shells, interpreters); add one if it shows up.
 ghreparse='(^|[^A-Za-z0-9_.-])(eval|source|sh|bash|zsh|dash|ksh|fish|python3?|perl|ruby|node)([^A-Za-z0-9_.-]|$)'
 ghro='[[:space:]]+((pr|issue)[[:space:]]+(view|checks|list|status|diff)|run[[:space:]]+(view|list|watch)|repo[[:space:]]+view)([^A-Za-z0-9_.-]|$)'
@@ -261,6 +263,19 @@ ghl=$scan
 ghi=$ghl
 grep -qE "$ghreparse" <<<"$ghl" ||
   ghi=$(sed -E "s/((^|[^A-Za-z0-9_.-])(\\[|\\[\\[|test|case)[[:space:]]+\"(\\\$\\(|\`)[[:space:]]*)gh($ghro)/\\1_\\5/g" <<<"$ghl") || exit 1
+# And a line of nothing but echo calls (in one for loop too) whose words are plain text, $var and read-only
+# $(gh …) calls of plain words: echo "#$n $(gh pr view $n -R O/R --json state)", a coordinator's PR-state check. The
+# output is only printed. An allowlist of that one shape, since anything more can run it: a pipe, redirect, (, {, [
+# (arithmetic, a[$(cmd)]), a quote or backslash, a # (a comment hides a newline), any command but echo. The loop
+# variable is lower case (for PATH in … would pick the gh that runs). An unquoted $(gh …) is also
+# read as a call by the token walk below, which lets a plain $var through only past a read-only group and verb.
+ghrv=${ghro%'([^A-Za-z0-9_.-]|$)'}
+ghrp="\\\$\\([[:space:]]*gh$ghrv([[:space:]][A-Za-z0-9_.,/=:@%+\$[:space:]-]*)?\\)"
+ghph=$(sed -E "s#$ghrp#_GHRO_#g" <<<"$ghl") || exit 1
+ghew='[A-Za-z0-9_.,/=:@%+-]' ghv='\$[A-Za-z_][A-Za-z0-9_]*'
+ghe="echo([[:space:]]+(($ghew|$ghv)+|\"([A-Za-z0-9_.,/=:@%+#-]|[[:space:]]|$ghv)*\")+)*"
+grep -qE "^[[:space:]]*(for[[:space:]]+[a-z_][a-z0-9_]*[[:space:]]+in([[:space:]]+$ghew+)*[[:space:]]*;[[:space:]]*do[[:space:]]+)?$ghe([[:space:]]*;[[:space:]]*$ghe)*([[:space:]]*;[[:space:]]*done)?[[:space:]]*;?[[:space:]]*\$" <<<"$ghph" &&
+  ghi=$ghph
 grep -qE "$ghind" <<<"$ghi" &&
   attended "Blocked: gh reached through a variable or \$(…) can't be checked by the approval hook. Run it by its name (gh …), as one plain command."
 alone="Run that CLI call alone, as one plain command (the CLI, then its subcommand, then the arguments)."
