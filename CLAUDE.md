@@ -40,7 +40,9 @@
    Since no PR is tested on top of the others, `test.yml` runs again on each push to `main`. Once yours is merged, watch
    the run on its landing commit (`gh pr view <N> -R OWNER/REPO --json mergeCommit` names it;
    `gh run list -R OWNER/REPO -w test -c <sha>` finds the run, listed a few seconds after the merge;
-   `gh run watch <id> -R OWNER/REPO --exit-status` waits). Red, with the run on the commit before yours green: your
+   `gh run watch <id> -R OWNER/REPO --exit-status --interval 60` waits; the default 3 s polls spend the account's API
+   limit, and the watch then exits 1 on HTTP 403, which reads as red). A job cancelled for want of a runner ("not
+   acquired by Runner of type hosted") is re-run with `gh run rerun <id> --failed`, not reported as a red main. Red, with the run on the commit before yours green: your
    change broke `main` together with one that landed before it. Tell the coordinator, then fix it forward in a new PR
    through these same steps (`Release: patch`), or revert your commit that way when the fix isn't quick. Red before
    yours too: tell the coordinator; the fix is the session's whose landing turned it red first.
