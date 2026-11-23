@@ -2833,6 +2833,9 @@ echo '{"telemetry": "local", "plan": {"models": {"scan": "claude-fable-5-1/low",
   [ "$(tail -1 "$tmp/state/session-orchestration/usage.jsonl" | sed -E 's/"t":[0-9]+/"t":T/')" = "{\"t\":T,\"k\":\"start\",\"what\":\"mechanical\",\"model\":\"sonnet\",\"effort\":\"medium\",\"sess\":\"96bb4fcd0a71\"}" ] &&
   ! run --kind build 'two words' 2>/dev/null && ! run --kind build a b 2>/dev/null &&
   ! run --kind chunky 2>/dev/null && ! run --kind 2>/dev/null || { echo "--kind"; tail -3 "$tmp/state/session-orchestration/usage.jsonl"; exit 1; }
+echo '{"telemetry": "local", "start": {"sidebar": true}}' > "$tmp/.config/session-orchestration/config.json"
+[ "$(CLAUDE_CODE_ENTRYPOINT=claude-desktop run --kind build 2>&1)" = "$(printf -- '--model opus --effort medium\nstart_session: model "opus", effort "medium" (an effort the model doesn'"'"'t offer, the app moves to one it does)')" ] &&
+  [ "$(CLAUDE_CODE_ENTRYPOINT=cli run --kind build 2>&1)" = '--model opus --effort medium' ] || { echo "--kind in Desktop with start.sidebar"; exit 1; }
 # A fable kind: plan.models.scan fable/low starts on fable under an account fable.accounts lists, else the default.
 echo '{"fable": {"accounts": ["~/elsewhere"]}, "plan": {"models": {"scan": "fable/low"}}}' > "$tmp/.config/session-orchestration/config.json"
 [ "$(run --kind scan 2>/dev/null)" = '--model haiku --effort low' ] || { echo "--kind fable, account without it"; exit 1; }
