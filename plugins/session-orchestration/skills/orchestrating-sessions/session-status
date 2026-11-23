@@ -1599,7 +1599,7 @@ if [ "${1:-}" = --changes ]; then
           for (j = np - 1; j > 0 && ps[j] > pr; j--) ps[j + 1] = ps[j]; ps[j + 1] = pr   # sorted: an adapter may list them in another order
           rn = substr(pr, 1, index(pr, "#") - 1); sub(/.*\//, "", rn)
           sha = (rn in h) ? h[rn] : nh == 1 ? kv[2] : "-"; continue }
-        if (pr == "" || !open || $2 == "") continue
+        if (pr == "" || !open || $2 == "" || $7 != "") continue
         e = x == "CI-FAILED" ? "ci-failed" : x == "CONFLICT" ? "conflict" : \
           (x ~ /(^|,)!/ || (x == "changes" && w[i + 1] == "requested")) ? "changes-requested" : ""
         if (e == "") continue
@@ -1621,7 +1621,9 @@ if [ "${1:-}" = --changes ]; then
   fw=$(fwd_file forwarded) ob=$(fwd_file outbox) evl=
   if [ -n "$ev" ]; then
     while IFS=$'\037' read -r line id name text; do
-      if [ -n "${SESSION_STATUS_FORWARD:-}" ] && [ -z "${SESSION_STATUS_PEEK:-}" ] && [ -n "$id" ]; then
+      # the caller owns it (a sub-coordinator's own KEY): never a send to itself; it passes it to the session whose PR it is
+      if [ -n "$id" ] && [ "$id" = "${CLAUDE_CODE_SESSION_ID:-}" ]; then line+=" (not forwarded: yours: send it to the session whose PR it is)"
+      elif [ -n "${SESSION_STATUS_FORWARD:-}" ] && [ -z "${SESSION_STATUS_PEEK:-}" ] && [ -n "$id" ]; then
         r=$(SESSION_STATUS_WAIT_S=0 "$SELF" --send-when-idle "$id" "$text" </dev/null 2>/dev/null); rc=$?
         r=$(tail -1 <<<"$r"); r=${r:-exit $rc}
         if [ "$rc" = 0 ] && [[ $r != send:* ]]; then printf 'ok\t%s\t%s\n' "${line#  \* }" "$r" | locked_append "$fw"; continue; fi
@@ -2791,7 +2793,7 @@ keys=$(cut -f1 "$TMP/tasks")
 # \037 instead of tab: read drops empty tab-separated fields.
 # For --changes' PR events (SESSION_STATUS_PRS_OUT): KEY, owner id (empty: none), name, `REPO=SHA …` (each worktree's
 # pushed head: its upstream, else origin/BRANCH; never an unpushed commit), EXTRA, STATUS, per row naming a PR.
-pr_owner() {  # KEY EXTRA STATUS
+pr_owner() {  # KEY EXTRA STATUS [HELD: `sub`, its per-PR events are a sub's]
   local id name= r wt b sha shas=
   id=$(awk -v k="$1" '$1==k {print $2}' "$TMP/owners.exact")
   [ -z "$id" ] || name=$(awk -F'\t' -v id="$id" '$1==id {print $2}' "$TMP/agents.all")
@@ -2800,7 +2802,7 @@ pr_owner() {  # KEY EXTRA STATUS
     sha=$(git -C "$wt" rev-parse --short=12 '@{u}' 2>/dev/null || git -C "$wt" rev-parse --short=12 "refs/remotes/origin/$b" 2>/dev/null) &&
       shas+="${shas:+ }${r##*/}=$sha"
   done < <(worktrees_for "$1")
-  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$id" "${name:-${id:0:8}}" "$shas" "$2" "$3"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$id" "${name:-${id:0:8}}" "$shas" "$2" "$3" "${4:-}"
 }
 : > "$TMP/prs"
 tr '\t' '\037' < "$TMP/tasks" | while IFS=$'\037' read -r k st title extra; do
@@ -2808,7 +2810,10 @@ tr '\t' '\037' < "$TMP/tasks" | while IFS=$'\037' read -r k st title extra; do
   line=$(printf '%-9s %-14s %s%s | %s' "$k" "$st" "$extra" "$wt" "$(session_for "$k" "$extra" "$wt")")
   seg=$(sub_seg "$k"); [ -z "$seg" ] || title="$seg${title:+ | $title}"
   echo "$line${title:+ | $title}"
-  [ -z "${SESSION_STATUS_PRS_OUT:-}" ] || ! grep -qE '#[0-9]+( |$)' <<<"$extra" || pr_owner "$k" "$extra" "$st" >> "$TMP/prs"
+  # a key a live sub runs is the sub's watcher's (--watch KEY): the parent's run lists none of its per-PR events, only
+  # all-merged (to its owner, the sub: that wakes a sub whose watcher has stopped, so the task still moves on)
+  [ -z "${SESSION_STATUS_PRS_OUT:-}" ] || ! grep -qE '#[0-9]+( |$)' <<<"$extra" ||
+    pr_owner "$k" "$extra" "$st" "$(awk -v k="$k" -v me="${CLAUDE_CODE_SESSION_ID:-}" '$1 == k && $2 != me {print "sub"; exit}' "$TMP/subs")" >> "$TMP/prs"
 done | tee "$TMP/rows"
 [ -z "${SESSION_STATUS_PRS_OUT:-}" ] || cp "$TMP/prs" "$SESSION_STATUS_PRS_OUT"
 # The full sweep's rows, for the next sweep's messages module (it runs alongside this one, so it reads the last).
@@ -2928,7 +2933,8 @@ if [ -s "$TMP/cand" ] && [ -n "$ADAPTER" ]; then
       awk -F'\t' -v id="$id" -v kl="$kl" -v old=$((t < NOW - RESOLVE_S)) -v on=$on \
         '$1==id {printf "%s\t  %s — session \"%s\": %s stop %s\n", old && ($3 ~ /^(idle|done)$/ || ($3 == "blocked" && $8 == "idle" && !on)), kl, $2, $4, substr(id,1,8)}' "$TMP/agents"
       # For the watcher's stop (--changes): a background session at rest (finished its turn, not on a prompt), quiet
-      # STOP_AFTER_S (its last steps had time), not waiting on the user, and neither the caller nor a coordinator.
+      # STOP_AFTER_S (its last steps had time), not waiting on the user, and neither the caller nor a coordinator (a
+      # sub-coordinator is none: scan_one never marks it a watcher, so a finished key's sub stops like its workers).
       grep -qxF "$id" "$TMP/listed.ids" || [ "$id" = "${CLAUDE_CODE_SESSION_ID:-}" ] || grep -q "/$id\.jsonl$" "$TMP/watchers" ||
         [ "$t" -gt $(( NOW - ${SESSION_STATUS_STOP_AFTER_S:-600} )) ] ||
         awk -F'\t' -v id="$id" -v kl="$kl" '$1==id && ($3 ~ /^(idle|done)$/ || ($3 == "blocked" && $8 == "idle")) && $7 == "background" && $8 != "busy" && $8 != "waiting" {print id "\t" kl "\t" $2}' "$TMP/agents" >> "$TMP/finished"

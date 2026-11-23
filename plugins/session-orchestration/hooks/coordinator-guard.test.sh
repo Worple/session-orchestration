@@ -26,7 +26,7 @@ t() { jq -nc --arg p "$2" '{type: "user", message: {content: $p}}' > "$tmp/$1.js
     HOME=$tmp XDG_CACHE_HOME=$tmp/.cache XDG_CONFIG_HOME=$tmp/.config bash "$here/coordinator-guard.sh" | jq -r '.hookSpecificOutput.permissionDecision // empty' | grep . || echo allow; }
 check "$(t nk1 'Act as a coordinator')" deny 'no kind cached, a coordinator first prompt'
 check "$(t nk2 'Work on PROJ-1: fix it.')" allow 'no kind cached, a task first prompt'
-check "$(t nk3 $'Coordinate PROJ-1.\nAct as a coordinator for it')" allow 'no kind cached, a sub-coordinator'
+check "$(t nk3 $'Coordinate PROJ-1.\nAct as a coordinator for it')" deny 'no kind cached, a sub-coordinator (the cd rule is its too)'
 check "$(t nk4 $'Chunk: PROJ-1/2\nAct as a coordinator')" allow 'no kind cached, a chunk'
 check "$(t w1 'Act as a coordinator')" allow 'a cached task kind wins over the transcript'
 { for i in $(seq 60); do echo '{"type":"attachment"}'; done; jq -nc '{type: "user", message: {content: "Act as a coordinator"}}'; } > "$tmp/nk5.jsonl"
@@ -53,14 +53,15 @@ check "$(g u1 $ss '{"prompt":"x"}')" allow 'a session no coordinator started or 
 : > "$tmp/.cache/session-status/handoff-u1.msg"
 check "$(g u1 $ss '{"prompt":"x"}')" deny 'a keyless session once it was messaged'
 printf 'subcoordinator K-2 - 0 0\n' > "$tmp/.cache/session-status/handoff-s1.kind"
-check "$(g s1 $ss '{"prompt":"x"}')" allow 'a sub-coordinator'
+check "$(g s1 $ss '{"prompt":"x"}')" deny 'a sub-coordinator (starts with claude --bg only)'
 check "$(jq -nc --arg c "$root/src" '{session_id: "c1", agent_id: "a1", tool_name: "mcp__ccd_session__start_session", tool_input: {title: "PROJ-1-fix", prompt: "x"}, cwd: $c}' |
   HOME=$tmp XDG_CACHE_HOME=$tmp/.cache XDG_CONFIG_HOME=$tmp/.config bash "$here/coordinator-guard.sh" | jq -r .hookSpecificOutput.permissionDecision)" deny 'start_session from a subagent of the coordinator'
 echo '{"pending":{"file":"docs/pending.md"},"start":{"sidebar":true}}' > "$root/.claude/coordination.local.json"
 check "$(g c1 $ss '{"title":"PROJ-1-fix","prompt":"Work on PROJ-1: fix it."}')" allow 'a sidebar task with start.sidebar on'
 check "$(g w1 $ss '{"prompt":"x"}')" deny 'a task session with start.sidebar on'
 check "$(g c1 mcp__ccd_session__hand_off_to_session '{"title":"x"}')" allow 'hand_off_to_session from the coordinator with start.sidebar on'
-echo '{"pending":{"file":"docs/pending.md"},"start":{"sidebar":"yes"}}' > "$root/.claude/coordination.local.json"
+check "$(g c1 $ss '{"title":"PROJ-1-coordinator","prompt":"Coordinate PROJ-1: build it."}')" deny 'a sub-coordinator as a sidebar session, start.sidebar on'
+check "$(g c1 mcp__ccd_session__hand_off_to_session '{"title":"PROJ-1-coordinator","prompt":"Coordinate PROJ-1: build it."}')" deny 'a sub-coordinator as a hand-off, start.sidebar on'echo '{"pending":{"file":"docs/pending.md"},"start":{"sidebar":"yes"}}' > "$root/.claude/coordination.local.json"
 check "$(g c1 $ss '{"title":"PROJ-1-fix","prompt":"Work on PROJ-1: fix it."}')" deny 'start.sidebar not a boolean'
 echo '{"pending":{"file":"docs/pending.md"}}' > "$root/.claude/coordination.local.json"
 cl=$root/.claude/coordination.local.json
@@ -95,4 +96,55 @@ check "$(w "$root/CLAUDE.local.md")" allow 'an untracked CLAUDE.local.md'
 check "$(w "$root/src/CLAUDE.local.md")" deny 'an untracked CLAUDE.local.md below the root'
 git -C "$root" add CLAUDE.local.md
 check "$(w "$root/CLAUDE.local.md")" deny 'a tracked CLAUDE.local.md'
+
+# A sub-coordinator of PROJ-1 (s1): KEY's sessions only, KEY's replies files and the memory only.
+echo 'subcoordinator PROJ-1 - 0 0 0' > "$tmp/.cache/session-status/handoff-s1.kind"
+b() { g s1 Bash "$(jq -nc --arg c "$1" '{command: $c}')"; }
+sw() { g s1 Write "$(jq -nc --arg p "$1" '{file_path: $p, content: "x"}')"; }
+check "$(b 'cd /x')" deny 'sub: cd'
+check "$(b "claude --bg --model opus --effort medium -n PROJ-1-c2 'Session task: PROJ-1
+Chunk: PROJ-1/2
+Read /r/PROJ-1-c2.md and do it.'")" allow 'sub: what --plan --next prints'
+check "$(b "claude --bg -n PROJ-1-c2 'Work on PROJ-1: x.'
+claude --bg -n PROJ-2-x 'Work on PROJ-2: x.'")" deny 'sub: a second start on the next line'
+check "$(b "claude --bg -n PROJ-1-review 'Work on PROJ-1: review it. Why: x.'")" allow 'sub: a review'
+check "$(b "FOO=1 /usr/local/bin/claude --bg -n PROJ-1-fix 'Work on PROJ-1: fix it, don'\''t wait.'")" allow 'sub: a path, a VAR= prefix and an escaped quote'
+check "$(b "claude --bg -n PROJ-1-sub 'Coordinate PROJ-1: part two.'")" deny 'sub: a Coordinate prompt'
+check "$(b "claude --bg -n PROJ-2-fix 'Work on PROJ-2: fix it.'")" deny 'sub: another key'
+check "$(b "claude --bg -n PROJ-1-fix 'Work on PROJ-2: fix it.'")" deny 'sub: its name, another key'"'"'s prompt'
+check "$(b "claude --bg -n PROJ-12-fix 'Work on PROJ-12: fix it.'")" deny 'sub: a key KEY is a prefix of'
+check "$(b "claude --bg -n PROJ-1-coordinator 'Work on PROJ-1: x.'")" deny 'sub: a second KEY-coordinator'
+check "$(b "claude --bg 'Work on PROJ-1: fix it.'")" deny 'sub: no -n'
+check "$(b "ls; claude --bg -n PROJ-2-x 'Work on PROJ-2: x.'")" deny 'sub: a start after ;'
+check "$(b "claude --bg -n PROJ-1-x 'Work on")" deny 'sub: an unclosed quote'
+check "$(b "claude --bg --resume 0123abcd 'Continue: read PROJ-1-c2.md.'")" allow 'sub: a resume'
+check "$(b "claude --bg -r 0123abcd 'Coordinate PROJ-9: go.'")" deny 'sub: a resume as a Coordinate'
+check "$(b "claude --bg --model opus \\
+  -n PROJ-1-c2 'Work on PROJ-1: x.'")" allow 'sub: a start split by a backslash-newline'
+check "$(b "claude --bg -n PROJ-1-x 'Work on PROJ-1: x.' 2>&1 > /tmp/log")" allow 'sub: redirections after the prompt'
+check "$(b "claude --bg -n PROJ-1-x 'Work on PROJ-1: x.' --model opus")" allow 'sub: an option after the prompt'
+check "$(b "nohup claude --bg -n PROJ-2-x 'Coordinate PROJ-2: go.'")" deny 'sub: a start behind nohup'
+check "$(b "env FOO=1 claude --bg -n PROJ-2-x 'Work on PROJ-2: x.'")" deny 'sub: a start behind env'
+check "$(b "bash -c \"claude --bg -n PROJ-1-x 'Work on PROJ-1: x.'\"")" deny 'sub: a start inside bash -c'
+check "$(b "claude --bg -n PROJ-1-x 'Work on PROJ-2: x.
+Chunk: PROJ-1/2'")" deny 'sub: another key'"'"'s prompt with a Chunk line'
+check "$(jq -nc --arg c "$root/src" '{session_id: "s1", agent_id: "a1", tool_name: "Bash", tool_input: {command: "claude --bg -n PROJ-2-x '"'"'Work on PROJ-2: x.'"'"'"}, cwd: $c}' |
+  HOME=$tmp XDG_CACHE_HOME=$tmp/.cache bash "$here/coordinator-guard.sh" | jq -r .hookSpecificOutput.permissionDecision)" deny 'sub: a start from its subagent'
+check "$(b "grep -n 'claude --bg -n PROJ-2-x Coordinate' notes.md")" allow 'sub: a command that only quotes a start'
+check "$(b '/p/session-status --handover --self')" allow 'sub: its own handover'
+check "$(g s1 $ss '{"title":"PROJ-1-c1","prompt":"Session task: PROJ-1"}')" deny 'sub: a sidebar session'
+check "$(sw "$root/replies/PROJ-1.md")" allow 'sub: its plan'
+check "$(sw "$root/replies/PROJ-1-coordinator.md")" allow 'sub: its handoff'
+check "$(sw "$root/replies/PROJ-12.md")" deny 'sub: a key KEY is a prefix of'
+check "$(sw "$root/replies/PROJ-1-old/PROJ-2.md")" deny 'sub: a subfolder named KEY-…'
+check "$(sw "$root/replies/PROJ-2.md")" deny 'sub: another task'"'"'s file'
+check "$(sw "$root/docs/pending.md")" deny 'sub: the parent'"'"'s handoff'
+check "$(sw "$root/docs/mem/memory/misc.md")" allow 'sub: the memory'
+check "$(sw "$root/.claude/orchestration/x.md")" deny 'sub: .claude/'
+check "$(sw "$root/src/a.ts")" deny 'sub: a project file'
+check "$(sw "$tmp/scratch.md")" allow 'sub: outside the root and the replies folder'
+mkdir -p "$tmp/state/replies"; printf -- '- Replies folder (reports): `%s/state/replies/`.\n' "$tmp" > "$root/CLAUDE.md"
+check "$(sw "$tmp/state/replies/PROJ-1-c3.md")" allow 'sub: a brief, replies outside the root'
+check "$(sw "$tmp/state/replies/PROJ-2.md")" deny 'sub: another task'"'"'s file, replies outside the root'
+check "$(w "$tmp/state/replies/PROJ-2.md")" allow 'the parent: replies outside the root'
 echo ok

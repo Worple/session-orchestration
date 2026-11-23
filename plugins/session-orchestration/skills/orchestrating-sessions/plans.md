@@ -6,6 +6,12 @@ one, and on a `handoff ready: KEY cN` (a chunk) or `handoff ready: KEY` (a task)
 
 A multi-step task becomes chunks run by separate sessions, so none outgrows its context.
 
+**Three chunks or more: propose a sub-coordinator instead** (from the release after sub-coordinator stage 3). When
+your size estimate would split a task into 3 or more chunks (over about 3 × L), don't plan it yourself: queue one
+`ask_approval`, the same ask that would start the task, "Start KEY under its own coordinator (coordinator: M/E):
+<what>. It plans the chunks and asks you for the plan here.", and on the yes start it ([sessions.md](sessions.md),
+Sub-coordinators). Under a sub, the sub does everything below and you only start it; smaller plans stay yours.
+
 1. **Split.** One chunk per step with a done-when, an est and a clean stop point (everything committed, nothing running).
    The est is growth in context, kept within `handoff.at.chunk` − ~60K; a chunk with more than 3 separate pieces is split.
    Size classes: S ≤ 22K, M ≤ 43K, L ≤ 65K. Multiply a `build` chunk's first guess by 1.35 (measured: build chunks

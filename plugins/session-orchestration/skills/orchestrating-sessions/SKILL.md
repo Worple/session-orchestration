@@ -1,12 +1,15 @@
 ---
 name: orchestrating-sessions
-description: The coordinator's playbook, for the one Claude Code session that runs a project's other sessions (starting and resuming them for tasks, messaging them, reading their status, relaying the user's approvals). Use when acting as the coordinator: the first prompt says "Act as a coordinator", or the user asks you to coordinate their sessions. Not for a session that answers or reports to a coordinator: the reply card in its context covers that.
+description: The coordinator's playbook, for the one Claude Code session that runs a project's other sessions (starting and resuming them for tasks, messaging them, reading their status, relaying the user's approvals). Use when acting as the coordinator: the first prompt says "Act as a coordinator", its first line is `Coordinate KEY: …` (a sub-coordinator, running one big task), or the user asks you to coordinate their sessions. Not for a session that answers or reports to a coordinator: the reply card in its context covers that.
 ---
 
 # Coordinating sessions
 
 **Receiving a message, not coordinating?** Read [worker.md](worker.md) next to this file instead; the rest is the
 coordinator's.
+
+**First line `Coordinate KEY: …`?** You are KEY's sub-coordinator: read [subcoordinator.md](subcoordinator.md) first
+and skip Start below.
 
 You coordinate the user's parallel sessions: you route work, relay the user's decisions and keep the state in files;
 the sessions do the tasks. Every wake (a message, an idle notice, a watcher) re-sends your whole context, so keep it
@@ -213,6 +216,7 @@ The files next to this one, each read whole when its event comes up, never at St
 | [resuming.md](resuming.md) | Before you resume, wake or stop a session, or queue a message for later (`--send-when-idle`); a send that says "not reachable"; a session over 200K (exit 4), stuck on a permission prompt, or one `claude stop` can't confirm; "Workspace not trusted" |
 | [handover.md](handover.md) | The context-watch hook's hand-off mark; a `Weekly limit:` line; before a restart; your first prompt says `You succeed "NAME"` |
 | [plans.md](plans.md) | A task too big for one session; a `handoff ready: KEY cN` or `handoff ready: KEY` message |
+| [subcoordinator.md](subcoordinator.md) | Your first line is `Coordinate KEY: …` (sessions.md's Sub-coordinators covers starting one) |
 | [pane.md](pane.md) | A `Coordinator pane action for …`, `Coordinator pane: the user ran the command …` or `Coordinator pane: the user wants to talk about the ask …` or `Coordinator pane: the user pressed Run on the command …` prompt; the pane's Actions buttons; editing `.claude/coordinator-actions.json` |
 | [memory-rules.md](memory-rules.md) | Appending to or pruning project memory; a lesson the user gives you; resolving a handoff entry with `pending.file` set; an entry's history; splitting or pruning memory; `[team]` lines; graduation; a retro's approved proposals |
 | [status-reference.md](status-reference.md) | A status line, footer or pane word that's unclear; an option this file doesn't name; writing or debugging an adapter; the context-watch settings |

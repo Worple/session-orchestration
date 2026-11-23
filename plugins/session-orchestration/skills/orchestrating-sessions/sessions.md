@@ -1,4 +1,4 @@
-# Sessions: owners, starting, subprojects, other projects, PR events
+# Sessions: owners, starting, subprojects, sub-coordinators, other projects, PR events
 
 Read by the coordinator before it starts a session or gives one task work, names an owner, sends work below the root or to another project,
 or acts on a `PR events` section; [SKILL.md](SKILL.md) has the rest.
@@ -84,6 +84,29 @@ ended. session-status lists a live `done` as blocked, so there blocked means idl
 `status` tells them apart: `idle` (turn over), `waiting` (a permission prompt or question; `waitingFor` names it on
 newer engines), `busy` (mid-turn); `--activity` prints it. Read the session's last turn before saying what it waits on.
 
+## Sub-coordinators
+
+A task that would take 3 or more chunks runs under its own coordinator, `KEY-coordinator`, on the user's yes
+([plans.md](plans.md)); from the release after sub-coordinator stage 3. Unlike a subproject's coordinator
+(interactive, in another root, driven by its user), a sub runs in the background in this root, you start it, and its
+approvals come only from you; it has no pane, and its asks show on yours keyed KEY. Subprojects stays the answer for
+a subfolder with its own setup. What the sub does: [subcoordinator.md](subcoordinator.md).
+
+- **Start**: `session-status --kind coordinator KEY-coordinator` first, as its own call (it claims KEY, as for any
+  task), then `claude --bg <its flags> -n KEY-coordinator 'Coordinate KEY: <what>. Why: <why>. Done when: <check>.
+  From the coordinator "<your name>": run this task under its own plan. Report back to me only its outcome, or a
+  block I must resolve.'`. Always `claude --bg`, even under `start.sidebar`. Write the handoff entry `delegated to
+  KEY-coordinator: <request>` and track only that; resolve it when the sub's done report checks out.
+- **Status**: KEY is one row, `sub: STATE; plan D/N landed, …`; its sessions fold under it (`session-status KEY`
+  lists them). The sub's watcher handles KEY's PR events and its sessions' changes; yours stops the sub once KEY is
+  finished and the sub at rest.
+- **Talking to it**: the user's instructions about KEY ("tell KEY to drop chunk 5") and relays go to
+  `KEY-coordinator` by SendMessage; never message its workers, except a relay it names ([approvals.md](approvals.md),
+  Asking). Cancel it with `stop: <why>`.
+- **`sub gone, KEY unfinished`** on its row: restart it once without asking, with the same flags (no `--kind`):
+  `claude --bg … -n KEY-coordinator 'Coordinate KEY: continue; read <replies>/KEY-coordinator.md'`, and pass it what
+  its workers sent you meanwhile. Gone again within a day: ask the user.
+
 ## Starting a session
 
 From the project root, after confirming the owner. A live session gets a `SendMessage`. Anything else (stopped,
@@ -156,6 +179,9 @@ the usual approval. Reply when pushed, or blocked.` through `session-status --se
 `send:` when SendMessage is yours to do, and refuses an ID a later handover superseded, naming its successor: send it
 there; [resuming.md](resuming.md)); an all-merged one with no owner: revive or start
 its session for the deploy and the status move. Don't relay it to the user or ask first: it is the worker's own task.
+A key a live sub-coordinator runs gets no per-PR events in yours: its own watcher lists them, as `(not forwarded: yours:
+…)`, and the sub sends each to the session whose PR it is. Its all-merged still shows in yours, owned by the sub, so a
+sub whose watcher has stopped is woken to move KEY on.
 The script lists each PR, event and head SHA once.
 
 ## Repeats and reloads

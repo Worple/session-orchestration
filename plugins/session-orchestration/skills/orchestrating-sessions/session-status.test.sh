@@ -509,6 +509,22 @@ out=$(run --changes); grep -qxF '  * app#1,app#2 all-merged (ABC-12, -) → "fix
   rm "$tmp/prs" && run --changes >/dev/null && sed -i.bak '/^#all-merged$/d' "$tmp/.cache/session-status/"*.pr-events &&
   echo 'app#1 MERGED | ' > "$tmp/prs" && ! run --changes | grep -q 'all-merged' && grep -qx '#all-merged' "$tmp/.cache/session-status/"*.pr-events &&
   rm "$tmp/prs" && run --changes >/dev/null || { echo "all-merged failed: $out"; exit 1; }
+# A key a live sub-coordinator runs: its PR events are the sub's watcher's. The parent's run lists none; the sub's own
+# lists it, owned by the sub, and sends nothing (not forwarded: yours): the sub passes it to the chunk whose PR it is.
+bid=12121212-2222-3333-4444-555555555555
+printf '%s\n' '{"type":"user","message":{"content":"Coordinate ABC-12: run the plan"}}' '{"type":"assistant","input":{"command":"session-status --watch ABC-12"}}' > "$proj/$bid.jsonl"
+cp "$tmp/bin/claude" "$tmp/claude.keep"
+printf '#!/bin/sh\n[ "$1" = agents ] || { echo "$*" >> %s/sent; exit 0; }\necho %s\n' "$tmp" "'[{\"sessionId\":\"$sid\",\"name\":\"fix it\",\"cwd\":\"$root\",\"state\":\"blocked\"},{\"sessionId\":\"$cid\",\"name\":\"coord\",\"cwd\":\"$root\",\"status\":\"idle\"},{\"sessionId\":\"$bid\",\"name\":\"ABC-12-coordinator\",\"cwd\":\"$root\",\"status\":\"idle\"}]'" > "$tmp/bin/claude"
+echo 'app#1 OPEN | ' > "$tmp/prs"; run --changes >/dev/null; echo 'app#1 OPEN CONFLICT | ' > "$tmp/prs"
+out=$(CLAUDE_CODE_SESSION_ID=$cid SESSION_STATUS_FORWARD=1 run --changes) && ! grep -q 'app#1 conflict' <<<"$out" &&
+  out=$(CLAUDE_CODE_SESSION_ID=$bid SESSION_STATUS_FORWARD=1 run --changes) &&
+  grep -qxF '  * app#1 conflict @- (ABC-12) → "ABC-12-coordinator" 12121212 (not forwarded: yours: send it to the session whose PR it is)' <<<"$out" &&
+  [ ! -s "$tmp/sent" ] || { echo "a sub's PR events: $out / $(cat "$tmp/sent" 2>/dev/null)"; exit 1; }
+# all-merged still reaches the parent, owned by the sub (a sub whose watcher stopped after its done report wakes)
+echo 'app#1 MERGED | ' > "$tmp/prs"
+out=$(CLAUDE_CODE_SESSION_ID=$cid run --changes) && grep -qxF '  * app#1 all-merged (ABC-12, -) → "ABC-12-coordinator" 12121212' <<<"$out" ||
+  { echo "a sub's all-merged: $out"; exit 1; }
+mv "$tmp/claude.keep" "$tmp/bin/claude"; rm "$tmp/prs" "$proj/$bid.jsonl"
 fi
 
 if section watch; then
@@ -626,6 +642,18 @@ out=$(SESSION_STATUS_PEEK=1 SESSION_STATUS_FORWARD=1 run --changes) && [ ! -s "$
   [ "$(SESSION_STATUS_FORWARD=1 run --changes)" = "no changes" ] && [ "$(cat "$tmp/stops")" = aaaaaaaa ] &&
   [ "$(grep -c '"k":"auto","what":"stop"}$' "$tmp/state/session-orchestration/usage.jsonl")" = 1 ] &&
   [ -d "$root/wt2" ] || { echo "watcher's stop failed (or removed a worktree a live session holds): $out / $(cat "$tmp/stops")"; exit 1; }
+# A sub-coordinator of the finished key (first prompt `Coordinate ABC-34`, running its own `--watch ABC-34`) at rest is
+# stopped like a worker, though it runs a watcher; a live one of an open key (ABC-12) stays.
+s34=eeeeeeee-0000-0000-0000-000000000005 s12=ffffffff-0000-0000-0000-000000000006
+printf '%s\n' '{"type":"user","message":{"content":"Coordinate ABC-34: run the plan"}}' '{"type":"assistant","input":{"command":"session-status --watch ABC-34"}}' > "$proj/$s34.jsonl"
+printf '%s\n' '{"type":"user","message":{"content":"Coordinate ABC-12: run the plan"}}' '{"type":"assistant","input":{"command":"session-status --watch ABC-12"}}' > "$proj/$s12.jsonl"
+cp "$tmp/agents.json" "$tmp/agents.keep"
+jq --argjson a "[$(fs $s34 ABC-34-coordinator done idle),$(fs $s12 ABC-12-coordinator idle idle)]" '. + $a' "$tmp/agents.keep" > "$tmp/agents.json"
+run --changes >/dev/null; : > "$tmp/stops"
+out=$(SESSION_STATUS_FORWARD=1 run --changes) && [ "$(cat "$tmp/stops")" = eeeeeeee ] &&
+  grep -qxF '  * ABC-34 Done — "ABC-34-coordinator" (eeeeeeee)' <<<"$out" ||
+  { echo "a finished sub not stopped, or a live one stopped: $out / $(cat "$tmp/stops")"; exit 1; }
+mv "$tmp/agents.keep" "$tmp/agents.json"; rm "$proj/$s34.jsonl" "$proj/$s12.jsonl"
 # A prompt the blocked hook didn't record: Waiting on you names what it waits for when the engine says (waitingFor).
 cp "$tmp/agents.json" "$tmp/agents.keep"
 grep -qxF '  "ABC-34 asks" (claude attach bbbbbbbb) — blocked: a prompt' <<<"$l" &&

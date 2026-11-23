@@ -18,26 +18,38 @@
 #   hand_off_to_session refused (worker.md: a task session starts no session), but a start_session that only shows the
 #   user a card (initiation own_initiative or offer, no proposal_id). start.sidebar doesn't change this.
 #   shortcut: only a cached kind is tested, so a session's first call isn't; upgrade if one starts sessions that early
+# A sub-coordinator (cached kind `subcoordinator KEY`; uncached, a first line `Coordinate KEY`) gets the cd rule and
+# limits of its own (subcoordinator.md): it starts only KEY's sessions with claude --bg (never a sidebar session, never
+# a `Coordinate` prompt), and edits only <replies>/KEY.md, KEY-*.md and the project memory. Its open_pane is refused
+# in register.tsx. A parent's start_session of a `Coordinate` prompt is refused even under start.sidebar.
 # Any other session pays one bash start and a file test (and, until context-watch caches its kind, lib.sh and a
 # first-prompt read).
 input=$(cat)
-# a subagent: its cd and edits aren't the coordinator's, but a sidebar session it starts is just as unseen
-[[ $input =~ \"agent_id\":\ *\"[^\"]+\" ]] && ! [[ $input =~ \"tool_name\":\ *\"mcp__ccd_session__(start_session|hand_off_to_session)\" ]] && exit 0
+# a subagent: its cd and edits aren't the coordinator's, but a sidebar session it starts is just as unseen; a
+# sub-coordinator's subagent keeps the sub's limits (its starts and edits), all but the cd rule
+sa=; [[ $input =~ \"agent_id\":\ *\"[^\"]+\" ]] && ! [[ $input =~ \"tool_name\":\ *\"mcp__ccd_session__(start_session|hand_off_to_session)\" ]] && sa=1
 [[ $input =~ \"session_id\":\ *\"([A-Za-z0-9_-]+)\" ]] || exit 0
 k=${XDG_CACHE_HOME:-$HOME/.cache}/session-status/handoff-${BASH_REMATCH[1]}.kind
-kind=
-if [ -f "$k" ]; then read -r kind _ < "$k"
-# not cached yet (a first prompt or a resume classifies in a detached job): context-watch.sh's coordinator test inline
+kind= skey=
+if [ -f "$k" ]; then read -r kind skey _ < "$k"
+# a subagent's transcript_path is its own: only a cached kind counts for it
+elif [ -n "$sa" ]; then exit 0
+# not cached yet (a first prompt or a resume classifies in a detached job): context-watch.sh's coordinator and
+# sub-coordinator tests inline
 elif [[ $input =~ \"transcript_path\":\ *\"([^\"]+)\" ]] && [ -f "${BASH_REMATCH[1]}" ]; then
-  tp=${BASH_REMATCH[1]}
-  # in its order: a chunk or a `Coordinate KEY` start isn't one, whatever later lines say
-  ( . "${0%/*}/../lib.sh" && f=$(first_prompt "$tp" 50) && { [ -n "$f" ] || [ -z "$(sed -n '51{p;q;}' "$tp")" ] || f=$(first_prompt "$tp"); } &&
-    ! chunk_of "$f" >/dev/null && ! grep -m 1 . <<<"$f" | grep -qE '^[[:space:]]*Coordinate ' && grep -q '^Act as a coordinator' <<<"$f" ) 2>/dev/null && kind=coordinator
+  tp=${BASH_REMATCH[1]} c=.; [[ ! $input =~ \"cwd\":\ *\"([^\"]+)\" ]] || c=${BASH_REMATCH[1]}
+  # in its order: a chunk isn't one, whatever later lines say
+  read -r kind skey < <( cd "$c" 2>/dev/null; . "${0%/*}/../lib.sh" && f=$(first_prompt "$tp" 50) && { [ -n "$f" ] || [ -z "$(sed -n '51{p;q;}' "$tp")" ] || f=$(first_prompt "$tp"); } &&
+    ! chunk_of "$f" >/dev/null && if grep -m 1 . <<<"$f" | grep -qE '^[[:space:]]*Coordinate '; then
+      KEYRE=$(key_re "$(adapter_path . 2>/dev/null)") && echo "subcoordinator $(sub_key "$f")"
+    elif grep -q '^Act as a coordinator' <<<"$f"; then echo coordinator; fi 2>/dev/null )
 fi
-# A task, chunk or review session starts no session (worker.md), under start.sidebar too: only its start calls go on
+# A task, chunk or review session starts no session (worker.md), under start.sidebar too: only its start calls go on.
+# A sub-coordinator (KEY-coordinator, first line `Coordinate KEY`): the coordinator's rules, and its own limits below.
 task=
-case $kind in coordinator) ;;
-  task|chunk|review) task=1; [[ $input =~ \"tool_name\":\ *\"mcp__ccd_session__(start_session|hand_off_to_session)\" ]] || exit 0 ;;
+case $kind in coordinator) [ -z "$sa" ] || exit 0; skey= ;;
+  subcoordinator) [ -n "$skey" ] && [ "$skey" != - ] || exit 0 ;;
+  task|chunk|review) task=1 skey=; [[ $input =~ \"tool_name\":\ *\"mcp__ccd_session__(start_session|hand_off_to_session)\" ]] || exit 0 ;;
   *) exit 0 ;;
 esac
 
@@ -60,10 +72,67 @@ if [ -n "$task" ]; then
 fi
 if [ "$tool" = Bash ]; then
   cmd=$(jq -r '.tool_input.command // ""' <<<"$input")
-  [[ $cmd =~ ^[[:space:]]*(cd|pushd)([[:space:]]|$) ]] || exit 0
-  deny "Coordinator rule: never cd in your shell; use absolute paths. The Bash tool keeps a cd across calls, and claude --bg then starts the new session in that folder, outside the project's settings. Run it again without the cd." cd
+  [ -n "$sa" ] || [[ ! $cmd =~ ^[[:space:]]*(cd|pushd)([[:space:]]|$) ]] ||
+    deny "Coordinator rule: never cd in your shell; use absolute paths. The Bash tool keeps a cd across calls, and claude --bg then starts the new session in that folder, outside the project's settings. Run it again without the cd." cd
+  [ -n "$skey" ] && [[ $cmd =~ claude ]] && [[ $cmd =~ --bg ]] || exit 0
+  # A sub starts only KEY's sessions: each `claude … --bg` command word's -n NAME starts `KEY-`, its prompt (the last
+  # plain argument, past redirections and option values) names KEY at its start (first_key; a chunk's `Chunk: KEY/N`
+  # too, its first key, if any, being KEY) and isn't a `Coordinate` (one level). Wrapper words (env, nohup, …) are
+  # looked through; a `claude --bg` inside `sh -c` or `eval` is refused (`!`).
+  # shortcut: a `--resume ID` with no -n gets only the `Coordinate` check (the ID's key is in its transcript); check it if a sub misuses it
+  starts=$(python3 -I -c '
+import shlex, sys
+P = ";&|()\n<>"
+W = {"env", "nohup", "command", "exec", "time", "nice", "caffeinate", "sudo"}
+V = {"--model", "--effort", "--permission-mode", "--add-dir", "--agent", "--agents", "--settings", "--mcp-config",
+     "--append-system-prompt", "--system-prompt", "--fallback-model", "--allowedTools", "--allowed-tools",
+     "--disallowedTools", "--disallowed-tools", "--session-id", "--output-format", "--input-format", "--max-turns"}
+try:
+    lx = shlex.shlex(sys.argv[1].replace("\\\n", " "), posix=True, punctuation_chars=P); lx.whitespace = " \t\r"; lx.whitespace_split = True; toks = list(lx)
+except ValueError: print("!"); sys.exit()
+seg = []; skip = False
+for t in toks + [";"]:
+    if skip: skip = False; continue
+    if t and all(c in P for c in t) and ("<" in t or ">" in t):  # a redirection: drop its fd and its target
+        if seg and seg[-1].isdigit(): seg.pop()
+        skip = True; continue
+    if t and all(c in P for c in t):
+        s = seg; seg = []
+        w = False
+        while s and (("=" in s[0] and not s[0].startswith("-")) or s[0].rsplit("/", 1)[-1] in W or (w and (s[0].startswith("-") or s[0].isdigit()))):
+            w = w or s[0].rsplit("/", 1)[-1] in W; s = s[1:]
+        if not s: continue
+        if s[0].rsplit("/", 1)[-1] in ("sh", "bash", "zsh", "eval") and any("claude" in a and "--bg" in a for a in s): print("!"); sys.exit()
+        if s[0].rsplit("/", 1)[-1] != "claude" or "--bg" not in s: continue
+        name = res = ""; pos = []; i = 1
+        while i < len(s):
+            a = s[i]; v = s[i + 1] if i + 1 < len(s) else ""
+            if a in ("-n", "--name"): name = v; i += 1
+            elif a.startswith("--name="): name = a[7:]
+            elif a in ("-r", "--resume"): res = v; i += 1
+            elif a in V: i += 1
+            elif not a.startswith("-"): pos.append(a)
+            i += 1
+        sys.stdout.write(name + "\x1f" + res + "\x1f" + (pos[-1] if pos else "") + "\x1e")
+    else: seg.append(t)
+' "$cmd") || starts='!'
+  [ "$starts" != '!' ] || deny "Sub-coordinator rule: this command starts a session the guard can't read (an unclosed quote?). Start each of $skey's sessions with one plain claude --bg -n $skey-… '<first prompt>' command." sub-start
+  [ -n "$starts" ] || exit 0
+  cd "${cwd:-.}" 2>/dev/null; . "${0%/*}/../lib.sh"; KEYRE=$(key_re "$(adapter_path . 2>/dev/null)")
+  while IFS=$'\x1f' read -r -d $'\x1e' name res prompt; do
+    fk=$(first_key "$prompt"); ck=$(chunk_of "$prompt") && ck=${ck% *} || ck=$fk
+    { [ -z "$name" ] && [ -n "$res" ] && ! sub_key "$prompt" >/dev/null; } ||
+    { [[ $name == "$skey"-* ]] && [[ $name != "$skey"-coordinator* ]] && [ "$ck" = "$skey" ] && { [ -z "$fk" ] || [ "$fk" = "$skey" ]; } &&
+      ! sub_key "$prompt" >/dev/null; } ||
+      deny "Sub-coordinator rule: you start only $skey's sessions, one level deep: name it $skey-<what> (-n), and begin its first prompt with \`Work on $skey:\`, \`Session task: $skey\` or the chunk prompt --plan --next prints; never a \`Coordinate\` prompt (a task that big is two tasks: report it to your parent). Another key's work goes to your parent coordinator." sub-start
+  done <<<"$starts"
+  exit 0
 fi
 if [ "$tool" = mcp__ccd_session__start_session ] || [ "$tool" = mcp__ccd_session__hand_off_to_session ]; then
+  [ -z "$skey" ] || deny "Sub-coordinator rule: start $skey's sessions with claude --bg, never as Desktop sidebar sessions (archiving a Desktop session archives the side sessions it started)." sub-sidebar
+  # a sub always runs as a background session: a sidebar one would take its chunks with it when archived
+  jq -e '.tool_input.prompt // "" | strings | test("^\\s*Coordinate ")' <<<"$input" >/dev/null &&
+    deny "Coordinator rule: start a sub-coordinator (a \`Coordinate KEY\` first prompt) with claude --bg, even under start.sidebar: archiving a Desktop session archives the side sessions it started, its chunks included (sessions.md, Sub-coordinators)." sidebar
   # NAME whole: `--started p` inside `--started p-v2` isn't p's successor; a hand-off is never the successor
   # shortcut: NAME is checked against the title, not this coordinator's own name; upgrade if a task ever carries that exact text
   [ "$tool" = mcp__ccd_session__start_session ] && jq -e '.tool_input | (.title // "" | strings) as $t | ($t | endswith("-next") and length > 5) and
@@ -79,20 +148,31 @@ root=$(find_root 2>/dev/null) && [ -n "$root" ] || exit 0
 # realpath of a file that may not exist yet: like find_root's pwd -P, so /tmp and /private/tmp compare equal
 real() { python3 -I -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1"; }
 path=$(real "$path") || exit 0
-case $path in "$root"/*) ;; *) exit 0 ;; esac
 under() { [ -n "$2" ] && case $1 in "${2%/}"/*) true ;; *) false ;; esac; }
 cd "$root" && ROOT=$root
+abs() { local r=${1/#\~/$HOME}; case $r in '') ;; /*) real "$r" ;; *) real "$root/$r" ;; esac; }
+memory() { local m; m=$(abs "$(sed -nE 's/^[^`]*[Pp]roject memory[^`]*`([^`]+)`.*/\1/p' CLAUDE.md CLAUDE.local.md 2>/dev/null | head -1)")
+  [ -n "$m" ] && { [ "$path" = "$m" ] || under "$path" "$(dirname "$m")/memory"; }; }
+# A sub changes only its own files in the replies folder (KEY.md, KEY-*.md: the plan, briefs, its handoff) and the
+# project memory, wherever they live (the replies folder is often outside the root); anything else in the replies
+# folder or the root is the parent's or a session's. Outside both: scratch, not the rule's business.
+if [ -n "$skey" ]; then
+  rp=$(abs "$(replies_path)")
+  if under "$path" "$rp"; then case ${path#"$rp"/} in */*) ;; "$skey".md|"$skey"-*.md) exit 0 ;; esac
+  elif memory; then exit 0
+  else case $path in "$root"/*) ;; *) exit 0 ;; esac; fi
+  deny "Sub-coordinator rule: the only files you change are $skey's in the replies folder ($skey.md, $skey-*.md: the plan, the briefs, your handoff $skey-coordinator.md) and the project memory. ${path/#"$HOME"/\~} is your parent's or a session's: send it to the session that owns it, or report it to your parent." sub-edit
+fi
+case $path in "$root"/*) ;; *) exit 0 ;; esac
 [ "$path" = "$root/.claude/coordination.local.json" ] && jq -e '.tool_input | [.content, .new_string, (.edits // [] | .[].new_string)] | any(strings | test("sidebar"))' <<<"$input" >/dev/null &&
   deny "Coordinator rule: start.sidebar is the user's choice, never yours: leave it to them (README, Claude Code Desktop)." sidebar-config
-abs() { local r=${1/#\~/$HOME}; case $r in '') ;; /*) real "$r" ;; *) real "$root/$r" ;; esac; }
 if ! under "$path" "$root/.claude/worktrees" && ! under "$path" "$root/.worktrees"; then
   # .claude/ but its settings and hooks: those fixes are a session's too (SKILL.md, Rules)
   under "$path" "$root/.claude" && case ${path#"$root/.claude/"} in settings*.json|hooks/*) ;; *) exit 0 ;; esac
   under "$path" "$(abs "$(replies_path)")" && exit 0
   p=$(config pending.file 2>/dev/null) && [ -n "$p" ] && [ "$path" = "$(abs "$p")" ] && exit 0
   # the project memory: CLAUDE.md's "Project memory: `PATH`" (project-memory's setup line)
-  m=$(abs "$(sed -nE 's/^[^`]*[Pp]roject memory[^`]*`([^`]+)`.*/\1/p' CLAUDE.md CLAUDE.local.md 2>/dev/null | head -1)")
-  [ -n "$m" ] && { [ "$path" = "$m" ] || under "$path" "$(dirname "$m")/memory"; } && exit 0
+  memory && exit 0
   # an untracked CLAUDE.local.md: no worktree has it, so no session can make the edit
   [ "$path" = "$root/CLAUDE.local.md" ] && ! git ls-files --error-unmatch CLAUDE.local.md >/dev/null 2>&1 && exit 0
 fi
