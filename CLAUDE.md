@@ -7,8 +7,9 @@
    when the change lands, one push at a time, so two branches never claim the same number. Commit as
    `<plugin>: <what changed, in plain words>`; the release commit becomes `<plugin> <version>: <that text>`: the next
    minor, or the next patch when every commit of the change carries a `Release: patch` trailer
-   (`git commit --trailer 'Release: patch'`). Docs on the branch say "from the release after <feature>", never a
-   version that doesn't exist yet. A branch that bumped `version` in its last commit keeps that number.
+   (`git commit --trailer 'Release: patch'`). A plugin's docs ship with its code, so they carry no "from the release
+   after <feature>" note (`docs-lint.py` refuses one outside migrations.md, whose From column says it that way, never
+   with a version that doesn't exist yet). A branch that bumped `version` in its last commit keeps that number.
    A change to what setup writes, or to where a project's files live, ships its migration: see "Adding a migration" in
    `plugins/session-orchestration/skills/setting-up-coordination/migrations.md`. A change to where coordinator files
    live, or to what is kept out of git, says in its doc and migration what is shared and what stays personal: other
@@ -18,7 +19,9 @@
    engine's generated `.claude-plugin/types/`, untracked: copy it from the main checkout into a new worktree first, or
    tsc finds no tsconfig and writes stray `.js` next to the sources; if `claude plugin test` fails, compare with
    main before blaming your change), `claude plugin validate plugins/<plugin>` and
-   `./scrub-check.sh` (no personal or company names: examples use `PROJ-123`, paths `/home/u/…`), and only the shell
+   `./scrub-check.sh` (no personal or company names: examples use `PROJ-123`, paths `/home/u/…`), `./docs-lint.py`
+   on a docs change (a rule in one doc only, flags the scripts have, links that resolve; its header says how to list a
+   known hit in `docs-lint-allow.txt`), and only the shell
    suites (`*.test.sh`) beside the files you changed. In `session-status.test.sh` run only the sections your change
    touches: `bash session-status.test.sh NAME…`, picking each `if section NAME; then` block that runs the option or
    behaviour you changed (`grep -n -e '--yourflag' -e '^if section'` shows which; a fixture or helper change at the
@@ -26,7 +29,7 @@
 3. Land it through a PR: push the branch, open the PR and, once the task is approved, `gh pr merge <N> -R OWNER/REPO --auto --rebase`
    (`mergeStateStatus` already `CLEAN`: `gh pr merge <N> -R OWNER/REPO --rebase`, no `--auto`, which gh refuses there;
    a refused merge leaves the relay usable while the PR stays open with no auto-merge).
-   From the release after one-command landing, the steps below are one command on the same relay:
+   The steps below are one command on the same relay:
    `session-status --land OWNER/REPO#N`, alone, in the background (worker.md "Posting and merging"); it ends with
    `merged and green: SHA` or what failed. The steps stay for a run lost midway and for landing by hand.
    In a coordinated session, approved means the coordinator's relay naming that PR (`merge OWNER/REPO#N`): send the

@@ -26,8 +26,6 @@ changes. It only measures and proposes; the user approves.
 | `plan.models.research` | `model/effort` for a research task (`--kind research`): a question answered from sources outside the project | `opus/high` |
 | `plan.advisor.<kind>` | `fable` \| `opus` \| `sonnet`: the advisor trial's arm for that kind (`--kind` adds `--advisor A` where it pairs); `kinds` reports it as its own row (`build+fable`) | unset: off |
 
-A value outside its set falls back to the default with one warning line.
-
 ## Your part
 
 - **A report arrives** (the retro's `reply`: its path and top proposals): pass it to the user as it is, with the

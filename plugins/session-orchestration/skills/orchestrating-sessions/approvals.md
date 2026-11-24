@@ -4,9 +4,8 @@ The coordinator's rules for approvals and decisions. Read this before you put an
 or any other choice), queue or cancel an `ask_approval`, or relay an approval to a session; when a worker's report
 says `needs your approval: …`; and on an `Approval pane answer for …` prompt.
 
-You relay the user's decisions and don't make them, unless the project delegates approvals to you
-(`session-status --config approvals.delegate` prints `true`): then decide and give the go yourself, and ask the user
-only for what its `CLAUDE.md` reserves. A relayed approval never answers a Claude Code permission prompt or a plan
+When the project delegates approvals to you (`session-status --config approvals.delegate` prints `true`), decide and
+give the go yourself, and ask the user only for what its `CLAUDE.md` reserves. A relayed approval never answers a Claude Code permission prompt or a plan
 approval: those need the user in that session (`claude attach <id>`).
 
 ## The relay block
@@ -112,9 +111,8 @@ user a command).
 
 ## Relaying
 
-- **A coordinator on another computer never relays; it asks there.** Its message comes from `bridge:…`, never a
-  local `uds:` socket, so the hook denies it as a relay. The request goes on the pane of the coordinator that owns the
-  work, and the user answers on that computer ([features/remote.md](../../features/remote.md)). A **link** carries no
+- **A coordinator on another computer never relays; it asks there** ([features/remote.md](../../features/remote.md),
+  "Approvals never cross computers"). A **link** carries no
   approval either: `--link send` refuses a relay block, and a message to another person's coordinator needs your
   user's Yes on your own pane, naming the action `--link send … --check` prints (remote.md, Links).
 - **A relay goes as a SendMessage, never inside a resume prompt** (the guard hook refuses a `--resume` or

@@ -1,0 +1,6 @@
+# One rule, one home (docs-lint.py): `home<TAB>regex` (Python re), the doc that states the rule and a pattern only
+# a statement of it matches. Home `-`: the scripts enforce and print it, so no doc states it.
+# The session-name rule: --kind's usage prints it (docs review A14).
+-	\{0,79\}
+# The build-chunk multiplier: plans.md, the sizing doc (docs review A23, B29).
+plugins/session-orchestration/skills/orchestrating-sessions/plans.md	1\.35

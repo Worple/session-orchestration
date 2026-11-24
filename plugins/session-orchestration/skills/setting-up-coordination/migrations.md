@@ -3,7 +3,8 @@
 What a project set up by an older plugin version needs done when the layout changes. One row per migration; `session-status --init --migrate` runs them in this order: m1 m2 m3 m4 m5 m6 m8 m7 m9 m10 h1 h2 (m8 before m7, so the move sees the `pending.file` m8 brings over; m9 and m10 last). Design: the retro case `claude-plugins-auto-migrate`.
 
 Class: **auto** = applied without asking (personal, untracked, restorable); **ask** = one pane ask `migrate-<id>` (Apply / Decline, what it changes in its details); **hand** = a pane ask `migrate-<id>` (Start a session / Not now).
-"From" names the release after which a project needs it (docs say "from the release after <feature>", never a version that doesn't exist yet).
+"From" names the release after which a project needs it ("the release after <feature>", never a version that doesn't exist yet). This file alone says it: other docs ship with
+their code, so `docs-lint.py` refuses the note there.
 
 | id | From | Class | Detector (the `--check` line, prefixed `[id class]`, e.g. `[m7 auto]`; m8 prints `auto` or `ask`) | Fix |
 |---|---|---|---|---|

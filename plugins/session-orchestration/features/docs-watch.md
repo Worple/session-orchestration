@@ -36,8 +36,7 @@ prompting pages, since only the current models' pages are reviewed.
 Pass the line to the user and offer a review-kind session for it, one per doc, started on a yes with
 `session-status --launch <name> --kind review -- …`, the name built from DOC's file name without its folder or
 extension (`docs/prompting.md`: `docs-prompting-review`, or in a project whose task keys are session names, that
-project's prefix before it). A name that isn't a task key plus more owns its own task; from the release after
-key-less review launches.
+project's prefix before it). A name that isn't a task key plus more owns its own task.
 That session reads the new page (a platform page's URL plus `.md` gives its Markdown), updates the doc's rules
 where the page changes them, then adds the page to the list and updates the date; a page the doc deliberately
 leaves unreviewed (an older model's) goes on the `Skipped` list instead. After a major model release it also

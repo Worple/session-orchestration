@@ -50,7 +50,7 @@ that coordinator through claude.ai: a typed line counts as the user's own).
 
 ## Links: another account's coordinator, or another person's
 
-From the release after remote coordinators link core. A link is a private GitHub repo two coordinators share, one per
+A link is a private GitHub repo two coordinators share, one per
 pair: yours under another claude.ai account (a **self** link), or another person's (a friend debugging the plugin with
 you). It works with or without `features.remote`. Each side's watcher fetches it every 2 minutes, so a message takes
 that long; both computers may sleep in between.

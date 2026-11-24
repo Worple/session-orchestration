@@ -1,0 +1,50 @@
+# Known docs-lint.py hits: `check<TAB>key`, the line as docs-lint.py prints it, each under a `#` line saying why.
+# A line no hit matches fails, so the list can't go stale. Fix a hit before listing it.
+
+# gh's own flag, named alone in the approval hook's list of gated commands.
+flag	plugins/session-orchestration/skills/orchestrating-sessions/worker.md: --edit-last
+
+# project-memory installs without session-orchestration: its skill states its own rules, and the coordinator's and
+# worker's docs can't point into a plugin that may be missing.
+dup	plugins/project-memory/skills/project-memory/SKILL.md | plugins/session-orchestration/skills/orchestrating-sessions/feedback.md: seen file adds today to its seen line that count ranks it otherwise rerun
+dup	plugins/project-memory/skills/project-memory/SKILL.md | plugins/session-orchestration/skills/orchestrating-sessions/memory-rules.md: in passing delete an entry that is wrong superseded about a task state that
+dup	plugins/project-memory/skills/project-memory/SKILL.md | plugins/session-orchestration/skills/orchestrating-sessions/memory-rules.md: memory is an inbox not the home every session start pays for it so
+dup	plugins/project-memory/skills/project-memory/SKILL.md | plugins/session-orchestration/skills/orchestrating-sessions/memory-rules.md: what one task learned that another needs decisions the user made pitfalls conventions found
+dup	plugins/project-memory/skills/project-memory/SKILL.md | plugins/session-orchestration/skills/orchestrating-sessions/worker.md: tag an entry true and useful to a collaborator on another machine team date
+dup	plugins/project-memory/skills/project-memory/SKILL.md | plugins/session-orchestration/skills/orchestrating-sessions/worker.md: the project's claude.md names a project memory file read it when you start a
+
+# README is for people deciding to install; setup's SKILL.md is the model's copy of the same answers.
+dup	plugins/session-orchestration/README.md | plugins/session-orchestration/skills/setting-up-coordination/SKILL.md: 1 tracker none a task is a short name github issues and prs through
+dup	plugins/session-orchestration/README.md | plugins/session-orchestration/skills/setting-up-coordination/SKILL.md: is committed only to the outer repo unless a repo of its own lies
+
+# Each feature doc says where its own key lives; a pointer would cost as much as the sentence.
+dup	plugins/session-orchestration/features/notify.md | plugins/session-orchestration/features/remote.md: in the person's claude coordination.local.json or the person-wide config session-orchestration config.json a person key
+# A feature doc's config table and setup's table of every key (docs review B1 moves the latter to config.md).
+dup	plugins/session-orchestration/features/retro.md | plugins/session-orchestration/skills/setting-up-coordination/SKILL.md: json list of section names units context waste feedback coordinator memory protocol features sizing
+
+# A quoted line the scripts print, so the reader recognises it: status-reference.md records it, the doc that acts on
+# it quotes it.
+dup	plugins/session-orchestration/features/plugin-coordinator.md | plugins/session-orchestration/skills/orchestrating-sessions/feedback.md: footer reads plugin feedback n open m seen 2 for the plugin coordinator which
+dup	plugins/session-orchestration/features/remote.md | plugins/session-orchestration/skills/orchestrating-sessions/status-reference.md: peer a link to a coordinator on another account held by the coordinator of
+dup	plugins/session-orchestration/skills/orchestrating-sessions/handover.md | plugins/session-orchestration/skills/orchestrating-sessions/status-reference.md: an interactive claude model m effort e remote-control n name-next act as a coordinator
+dup	plugins/session-orchestration/skills/orchestrating-sessions/sessions.md | plugins/session-orchestration/skills/orchestrating-sessions/status-reference.md: ask_approval key reason start anyway on a separate branch leave it on start anyway
+dup	plugins/session-orchestration/skills/orchestrating-sessions/sessions.md | plugins/session-orchestration/skills/orchestrating-sessions/status-reference.md: keep working until done or blocked when finished reply with done and the check
+
+# A doc index row quotes its doc's trigger words, so a session matches them to what it sees.
+dup	plugins/session-orchestration/hooks/reply-card.txt | plugins/session-orchestration/skills/orchestrating-sessions/SKILL.md: you worked around this plugin or the project took an extra round trip misreported
+dup	plugins/session-orchestration/skills/orchestrating-sessions/SKILL.md | plugins/session-orchestration/skills/orchestrating-sessions/pane.md: coordinator pane the user wants to talk about the ask or coordinator pane the
+dup	plugins/session-orchestration/skills/orchestrating-sessions/SKILL.md | plugins/session-orchestration/skills/orchestrating-sessions/worker.md: took an extra round trip misreported because of a script's output or a file
+dup	plugins/session-orchestration/skills/choosing-model-effort/SKILL.md | plugins/session-orchestration/skills/research/SKILL.md: a question from sources outside the project the web docs other tools code judging
+
+# The reply card is worker.md's always-loaded summary; worker.md is read only on the card's triggers.
+dup	plugins/session-orchestration/hooks/reply-card.txt | plugins/session-orchestration/skills/orchestrating-sessions/worker.md: a report you send unasked only when you're done blocked a decision waits on
+
+# Two sides of one protocol: the coordinator reads approvals.md, the worker worker.md, never both; the relay block's
+# text must match word for word on both sides.
+dup	plugins/session-orchestration/skills/orchestrating-sessions/approvals.md | plugins/session-orchestration/skills/orchestrating-sessions/worker.md: a relayed approval never answers a claude code permission prompt or a plan approval
+dup	plugins/session-orchestration/skills/orchestrating-sessions/approvals.md | plugins/session-orchestration/skills/orchestrating-sessions/worker.md: approval relayed from the user quote the user's whole message their question-box answer clicked
+dup	plugins/session-orchestration/skills/orchestrating-sessions/approvals.md | plugins/session-orchestration/skills/orchestrating-sessions/worker.md: merge owner repo id session name within 24h of that approval later ask for
+
+# Each skill runs alone in its own session (a research or retro task) and loads no other doc.
+dup	plugins/session-orchestration/skills/research/SKILL.md | plugins/session-orchestration/skills/retro/SKILL.md: replies folder the one the project's claude.md names its replies folder line none named
+dup	plugins/session-orchestration/skills/research/SKILL.md | plugins/session-orchestration/skills/retro/SKILL.md: the coordinator at most 5 lines with the reply tool no to toolsearch mcp

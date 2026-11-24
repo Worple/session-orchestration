@@ -119,7 +119,7 @@ own call. It runs `--kind` (below), builds the brief, adds "Read <memory file> f
 starts the session and prints `started "NAME" (ID8) · KIND M/E`. Exit 3 or 2: nothing started, read on. Not for a
 review of another task (named `<KEY>-<more>`, it refuses: its own first prompt, Owners) or a coordinator start
 ([handover.md](handover.md)); a review that owns its own task (a docs audit) launches with a name that has no task
-key or is one whole, from the release after key-less review launches. In Desktop with
+key or is one whole. In Desktop with
 `start.sidebar` on it starts nothing and prints the `start_session` call to make instead. A started session
 needs no "started" line in your handoff file: the status lists it and `--owner` gives its first prompt.
 
@@ -140,7 +140,7 @@ check that proves it.'`
 - Its closing line stays, for every kind: Sonnet and Haiku sessions (mechanical, scan) skip a done report the brief
   doesn't ask for, and you end up polling and nudging them.
 - `--model`/`--effort`: size the task into a `plan.models` kind with the `choosing-model-effort` skill, run
-  `session-status --kind <kind> <session-name>` first (the `-n` value), as its own call, and paste the flags it prints whole (`--model M --effort E`, and ` --advisor A` when config `plan.advisor.<kind>` sets one; in Desktop with `start.sidebar` on it also prints the pair as `start_session` arguments (stderr); the app runs an effort the model doesn't offer at one it does, so `get_session` may show another)
+  `session-status --kind <kind> <session-name>` first (the `-n` value), as its own call, and paste the flags it prints whole (`--model M --effort E`, and ` --advisor A` when config `plan.advisor.<kind>` sets one; the Desktop `start.sidebar` pair too: status-reference.md, `--kind`)
   (exit 2: a wrong kind or name; fix it, don't start without them). It logs the start for retro. `fable` only as `--kind` prints it
   (config `fable.accounts`, `choosing-model-effort`) or when the user names it: then set it by hand. A handover or fresh restart of that task takes the same flags without running `--kind` again, so the task logs
   one start.

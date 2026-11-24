@@ -24,6 +24,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: ./scrub-check.sh
+      - name: docs lint
+        if: ${{ !cancelled() }}
+        run: ./docs-lint.py
       - name: shell suites
         if: ${{ !cancelled() }}   # independent of the scrub: a failed scrub still shows these
         run: |
