@@ -70,6 +70,16 @@ echo "{\"feedback\": {\"mode\": \"issue\", \"repo_dir\": \"$T/plugin-clone\"}}" 
 echo '{}' > .claude/coordination.local.json
 [ "$("$FB" mode)" = issue ] || fail "mode from the person-wide file: $("$FB" mode)"
 rm "$HOME/.config/session-orchestration/config.json"
+
+# brief: the apply brief, its PR line by approvals.pr_create; a missing case file refused.
+echo '{"approvals": {"pr_create": true}}' > .claude/coordination.local.json
+out=$("$FB" brief fix-x 'it breaks.' "$a")
+[[ $out == "Work on fix-x: Apply plugin feedback: $a. Follow feedback.md, Applying,"*" Open your PR yourself (approvals.pr_create is on). Why: it breaks. Done when:"* ]] || fail "brief, pr_create on: $out"
+echo '{"approvals": {"pr_create": false}}' > .claude/coordination.local.json
+[[ $("$FB" brief fix-x why "$a") == *" Ask before gh pr create. Why: why."* ]] || fail "brief, pr_create off"
+"$FB" brief fix-x why "$T/none.md" 2>/dev/null && fail "brief with a missing case file"
+[[ $("$FB" brief fix-x 'does it hang?' "$a") == *" Why: does it hang? Done when:"* ]] || fail "brief, a WHY ending in ?"
+echo '{}' > .claude/coordination.local.json
 [[ $("$FB" repo) =~ ^[^/]+/[^/]+$ ]] || fail "repo: $("$FB" repo)"
 [ "$("$FB" label)" = todo ] || fail "label: $("$FB" label)"
 

@@ -496,7 +496,7 @@ without them is read whole at Start).
 the project root, with `NOTICE_DIR` (its cache folder), `NOTICE_KEYRE` (the key regex, in parens), `NOTICE_ROWS`
 (the last sweep's rows), `NOTICE_MINE` (a file of the person's keys) and `adapter` set. It prints one line per item
 and exit 0, or exit 1 with the reason on stdout (the last good lines show, marked failed); it writes each line's
-full message to `$NOTICE_DIR/notices.jsonl` (`session-status --messages-file`), with `mine`: the line's keys in
+full message to `$NOTICE_DIR/notices.jsonl` (`session-status --messages-file`; `--messages-forward LINE` prints it as a forward), with `mine`: the line's keys in
 `NOTICE_MINE`. Optional `messages_dismiss LINE` (with `NOTICE_DIR`, for `--dismiss`): hide the messages behind
 that line from later runs; exit 1 when no current line is LINE. The plugin ships `msgraph` (Teams and Outlook, `messages/msgraph.md`).
 

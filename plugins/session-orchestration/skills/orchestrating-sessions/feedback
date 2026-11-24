@@ -32,6 +32,8 @@
 #        feedback scrub FILE…    lines that could name the person or their projects (FILE:LINE: why: text); exit 1
 #                                on any hit. The deny list covers every project root your sessions ran in
 #        feedback mark FILE sent URL | fixed WHAT | dropped
+#        feedback brief NAME WHY CASE…   an apply session's brief for these case files, its PR line from config
+#                                approvals.pr_create (true: it opens its PR itself; else it asks first)
 #        feedback mode           how cases are applied here: pr | fork-pr | issue | local (config feedback.mode, else
 #                                pr with feedback.repo_dir set, else fork-pr when gh is signed in, else issue)
 #        feedback repo           the plugin's GitHub repo (owner/name), from plugin.json's repository
@@ -112,6 +114,13 @@ footer)
   [ -z "$q" ] || l="${l:+$l · }project feedback: $q, for the next retro"
   echo "$l" ;;
 mark) [ -f "${2:-}" ] || die "usage: feedback mark FILE sent URL | fixed WHAT | dropped"; shift; cases mark "$@" ;;
+brief)
+  [ $# -ge 4 ] || die "usage: feedback brief NAME WHY CASE…"
+  n=$2 why=$3; shift 3; case $why in *[.?!]) ;; *) why=$why. ;; esac
+  for f in "$@"; do [ -f "$f" ] || die "no case file $f"; done
+  if [ "$(config approvals.pr_create 2>/dev/null)" = true ]; then pl="Open your PR yourself (approvals.pr_create is on)."
+  else pl="Ask before gh pr create."; fi
+  echo "Work on $n: Apply plugin feedback: $*. Follow feedback.md, Applying, for these cases only, and this repo's CLAUDE.md release checks. $pl Why: $why Done when: the change is implemented with the repo's checks passing, a PR is open, and each case is marked sent <url>. When finished: reply with done and the check that proves it." ;;
 mode)
   m=$(config feedback.mode 2>/dev/null)
   if [ -n "$m" ] && [ "$m" != auto ]; then echo "$m"

@@ -39,6 +39,9 @@ for n, title, kind, deps, touch, est, model, done in rows:
     ts = [] if nil(touch) or touch[:1] in "-–—" else re.findall(r"`([^`]+)`", touch) or re.split(r"\s*,\s*", touch)
     m = re.fullmatch(r"(\d+)\s*[Kk]", est)
     R[n] = dict(title=title, kind=kind, deps=ds, touch=ts, est=int(m[1]) * 1000 if m else None, raw_est=est, model=model, done=done)
+    # sized: what --check, --brief and --done use; a build chunk grows 1.35× its first guess (plans.md, Split)
+    R[n]["sized"] = R[n]["est"] and int(R[n]["est"] * (1.35 if kind == "build" else 1))
+    R[n]["est_txt"] = f"{est} (×1.35 as build: {R[n]['sized'] // 1000}K)" if R[n]["est"] and R[n]["sized"] != R[n]["est"] else est
 state = {}
 try:
     for m in re.finditer(r"^## c(\S+): (done|handoff)\b", open(os.path.join(d, f"{key}-build.md")).read(), re.M):
@@ -86,7 +89,7 @@ if mode == "--check":
         if not r["done"]: out.append(f"c{n}: no done-when")
         if r["model"] != "default" and not okme(r["model"]): out.append(f"c{n}: model/effort {r['model'] or '(none)'} is not like opus/medium (efforts: low medium high xhigh max; fable only under an account fable.accounts lists)")
         if r["est"] is None: out.append(f"c{n}: est {r['raw_est'] or '(none)'} is not like 60K")
-        elif AT > 0 and r["est"] > AT - START: out.append(f"c{n}: est {r['est'] // 1000}K over the {(AT - START) // 1000}K budget")
+        elif AT > 0 and r["sized"] > AT - START: out.append(f"c{n}: est {r['est_txt']} over the {(AT - START) // 1000}K budget")
     for cy in cycles:
         k = frozenset(cy)
         if k not in seen: seen.add(k); out.append("cycle: " + " → ".join(f"c{x}" for x in cy))
@@ -114,9 +117,9 @@ if mode == "--done":   # row N's kind, model/effort and est, and this session's 
         act = out[1].split("\t")[out[0].split("\t").index("act_K")] if len(out) > 1 else ""
     except (OSError, ValueError, IndexError, subprocess.SubprocessError): pass
     log = os.environ["PLAN_LOG"]; size = os.path.getsize(log) if os.path.exists(log) else 0
-    subprocess.run(["bash", "-c", '. "$0" && usage "$@"', os.environ["PLAN_LIB"], r["kind"], "chunk", m, e, str(r["est"] // 1000), act])
+    subprocess.run(["bash", "-c", '. "$0" && usage "$@"', os.environ["PLAN_LIB"], r["kind"], "chunk", m, e, str(r["sized"] // 1000), act])
     new = open(log).read()[size:].strip() if os.path.exists(log) else ""
-    print(new or f"nothing logged: usage refused or couldn't write kind {r['kind']}, model/effort {m}/{e}, est {r['est'] // 1000}, act {act or '-'}")
+    print(new or f"nothing logged: usage refused or couldn't write kind {r['kind']}, model/effort {m}/{e}, est {r['sized'] // 1000}, act {act or '-'}")
     sys.exit()
 
 if mode == "--brief":
@@ -125,7 +128,7 @@ if mode == "--brief":
     r = R[n]; me = KINDS.get(r["kind"], "?") if r["model"] == "default" else r["model"]
     print(f"""# {key} c{n} · {r['title']}
 
-Kind: {r['kind']} · Model: {me} · Est: {r['raw_est']} growth · Deps: {', '.join(r['deps']) or 'none'} · Wave {wave[n] or '?'}
+Kind: {r['kind']} · Model: {me} · Est: {r['est_txt']} growth · Deps: {', '.join(r['deps']) or 'none'} · Wave {wave[n] or '?'}
 
 **First:** read `{d}/{key}-chunk-rules.md` (paths, setup, interface, landing). N = {n}.
 
