@@ -13,6 +13,8 @@ permissions:
   contents: write
 jobs:
   release:
+    # Upstream's own release numbering; a fork never writes release commits.
+    if: github.repository == 'vargroozzz/session-orchestration'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
