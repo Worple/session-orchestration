@@ -43,6 +43,7 @@ and no heading.
 | `units` | $ and tokens per merged PR, finished ticket, review posted; time to done | the same over all projects, default commands only |
 | `context` | base context, average per request, requests over 200K, resume forks | the same over all projects |
 | `waste` | refusals, retries, `!` handoffs, wrong relayed claims, lost reports, long waits | the same over all projects; the hook's split hints counted apart |
+| `spend` | no | where the week's spend goes by account, project, session, kind, model and trigger; rebuilds of big contexts, wakes, test runs, gh calls, handovers |
 | `feedback` | this project's friction cases, grouped into patterns, one fix proposed per pattern | the plugin's case store: open cases most seen first, and which of last run's cases landed |
 | `coordinator` | this coordinator's wakes and cost by trigger; handoff entries (`pending.file`) | no |
 | `memory` | memory size; the graduate pass's Gather and Propose | no |
@@ -106,18 +107,23 @@ and no heading.
    sections (`retro.py sections`) and N as above.
 2. Run `retro.py` over 7 days into `<R>/retro/<scope>-<N>/`, only for the sections this run writes (`P` below is
    `--project <root>` in project scope, nothing in plugin scope). Look at three raw rows of each TSV before
-   tallying it.
+   tallying it. These commands are the analysis: tally from their output, and write no ad-hoc script for it (a
+   count they lack is a `retro.py` change to propose).
    - `units`: `units 7 P > units.tsv 2> units.txt`, adding `units <slice days> P` for the slice after last run's
      end. Project scope only: pass the brief's regexes with `--merge`/`--done`/`--post` when its commands differ
      from the defaults (`retro.py` usage). Where reviewers press merge, a session's merge command never runs: write
      the window's task keys with `units 7 P --keys keys.txt > /dev/null 2>&1`, then from the project root the
      adapter's merges for them to `merged.txt` (`.claude/session-status-adapter yesterday <window start, epoch s>
      $(cat keys.txt)`), and pass `--merged merged.txt` to both `units` calls. An adapter without `yesterday`, or a
-     non-zero exit: leave it out and say merges count only the ones sessions ran (`merge_ran`).
+     non-zero exit: leave it out and say merges count only the ones sessions ran (`merge_ran`). Time to merge, with
+     a GitHub host: the PR list to `prs.json` (`gh pr list --state all --limit 1000 --json
+     number,createdAt,mergedAt -R OWNER/REPO`), then `merges <dir> prs.json 7 P > merges.txt` (`waste`'s
+     `sessions.tsv` first: it reads it for $ per PR).
    - `context`: `context 7 <split> P > context.tsv` (split: last run's end, so the slice after it gets its own row).
    - `waste`: `sessions 7 P > sessions.tsv`, `events 7 P > events.tsv 2> events.txt`, `waits 7 5 P > waits.tsv 2> waits.txt`,
      `bgtasks 'session-status.*--watch' 7 P > bg-watch.tsv`, plus any `bgtasks` regex the project brief names
-     (project scope), and `replies 7 P > replies.tsv` (lost reports). Refusals: count them from `denied.jsonl` for
+     (project scope), `replies 7 P > replies.tsv` (lost reports), and once they are written `waste <dir> 7 P >
+     waste.txt` (the counts below, tallied from them and `denied.jsonl`). Refusals: count them from `denied.jsonl` for
      the window when it covers it (project scope: the lines whose `cwd` is the root or under it), else from `deny`
      rows in `events.tsv` whose `test` column is empty (`-p`/`dontAsk`: headless permission tests); say which
      source was used. A denial whose text (a deny row's `detail2`, after `source/reasonType: `) starts "Background
@@ -127,6 +133,7 @@ and no heading.
      `events.txt`'s `noverdict` line: report it beside the count. `hook_changed` and `sibling_changed` come from a
      PreToolUse hook that rewrites a call's input (`updatedInput`), which the user can fix in their own hooks;
      `ended` is the classifier's side.
+   - `spend`: `spend 7 <dir> > spend.md` (it writes `spend-*.tsv` into `<dir>` too).
    - `feedback`: project scope, `../orchestrating-sessions/feedback list --project` from the project root; plugin
      scope, `feedback list --plugin` and `feedback list --all --plugin` (the cases last run filed or named, and
      whether they are `fixed` now).
@@ -160,6 +167,10 @@ and no heading.
      totals). Not counted yet (known gaps, so figures stay comparable run to run): subagent transcripts
      (`<session>/subagents/*.jsonl`), and history a fork copied from its parent is counted again in the fork's row.
      Name them when a figure hinges on them.
+   - `spend`: from `spend.md`, the week's $ by account and the three largest shares by project, kind, model and
+     trigger; the cost of rebuilding big contexts (cache writes after a gap), wakes that did nothing, test runs (full
+     suites against sections), gh calls and handovers; each beside last run's, and one proposal for the largest
+     share that is waste rather than work.
    - `feedback`, project scope: group this project's cases (friction from its hosts, sign-ins, docs and scripts)
      into patterns (the same cause, place or fix; one case seen ≥2× is a pattern of its own) and propose one project
      fix per pattern (a doc, script or setting), naming its case files; the followups session applies the approved

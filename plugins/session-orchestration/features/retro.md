@@ -21,7 +21,7 @@ changes. It only measures and proposes; the user approves.
 | `retro.scope` | `project` (this project's sessions) \| `plugin` (every project and account, what the plugin can change) \| `both` (one run each) | `project` |
 | `retro.schedule` | `<day> HH:MM`, local time, day `mon`…`sun` (e.g. `mon 12:00`) | unset: by hand only |
 | `retro.account` | the Claude config dir a scheduled run starts under (`~` expanded) | the current account |
-| `retro.sections` | JSON list of section names: `units`, `context`, `waste`, `feedback`, `coordinator`, `memory`, `protocol`, `features`, `sizing` | unset: every section of the scope |
+| `retro.sections` | JSON list of section names: `units`, `context`, `waste`, `spend`, `feedback`, `coordinator`, `memory`, `protocol`, `features`, `sizing` | unset: every section of the scope |
 | `plan.models.retro` | `model/effort` a retro run starts on (`session-status --kind retro NAME`) | `fable/xhigh` under an account `fable.accounts` lists, else `opus/xhigh` |
 | `plan.models.research` | `model/effort` for a research task (`--kind research`): a question answered from sources outside the project | `opus/high` |
 | `plan.advisor.<kind>` | `fable` \| `opus` \| `sonnet`: the advisor trial's arm for that kind (`--kind` adds `--advisor A` where it pairs); `kinds` reports it as its own row (`build+fable`) | unset: off |

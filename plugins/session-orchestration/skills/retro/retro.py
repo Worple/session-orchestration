@@ -26,7 +26,18 @@ usage: python3 -I retro.py [--until YYYY-MM-DDTHH:MM[:SS]] CMD [args] [--project
   bgtasks REGEX [days=7]              background Bash launches vs. their completion notices (SILENT = died with
                                   its session); totals on stderr
   replies [days=7]                task sessions idle > 6 h that never wrote replies/<KEY>* (by hand, or the reply
-                                  tool's report with that key: lost reports); totals on stderr
+                                  tool's report with that key: lost reports); the key without the project's prefix,
+                                  any session's write during its life and a successor's (Supersedes:) count; totals
+                                  on stderr
+  waste DIR [days=7]              the waste counts of a retro folder's sessions/events/waits/usage.tsv (each
+                                  optional) and the denial log: spend totals, denials by class and their retries,
+                                  hook blocks (on landing commands too), `!` handoffs, waits by class, usage faults
+  merges DIR PRS_JSON [days=7]    DIR/units.tsv's merge rows against the host's PR list (number, createdAt,
+                                  mergedAt): distinct, duplicate, not merged, merge command -> merged, open -> merged,
+                                  session start -> merge command, the host's merged/opened in the window, $ per PR
+  spend [days=7] DIR              where the window's spend went, as Markdown: by account, project, session, kind,
+                                  model, trigger and context size; rebuilds of big contexts, wakes, test runs, gh
+                                  calls, handovers. Writes DIR/spend-{req,sess,wakes,ev}.tsv first
   triggers SESSION_PREFIX [days=7]     a session's wakes, requests and USD by trigger: human/xmsg/bgtask/cron/other
   usage [days=30]                 one row per plugin feature (pane button, tool, skill, doc, session-status flag,
                                   config key): uses in the window, first seen, `unused` when 0 uses all window;
@@ -75,7 +86,7 @@ sonnet 3,15,0.3,6, haiku 1,5,0.1,2, fable 8,40,0.8,16, older opus 4/4.1 and haik
 opus; 5-minute cache writes at 1.25x input); env RATES="in,out,cr,cw" prices every model alike. A request's advisor calls
 (usage.iterations of type advisor_message, left out of its totals) are added at the advisor model's rates.
 """
-import glob, html, json, os, re, statistics, sys, time
+import bisect, calendar, collections, csv, glob, hashlib, html, json, os, re, statistics, sys, time
 from datetime import datetime, timezone
 
 # Model id pattern -> list rates, first match wins: older generations before their family.
@@ -1012,59 +1023,101 @@ def task():
 def replies(days=7):
     """Lost replies: task sessions (first prompt "Work on KEY", or "Session task: KEY") idle > 6 h that never wrote
     replies/<KEY>* (Write/Edit on it, a Bash command that names it after `>`, mv, cp, tee, sed -i or python, or the
-    reply tool's report with key KEY)."""
+    reply tool's report with key KEY). KEY is the task key or the key without the project's prefix (the folder name
+    and a dash: proj-fix-x writes replies/fix-x.md); the write may be any session's during this one's life, or come
+    from a successor (Supersedes: its id, transitively), and a session is open while any of that chain is."""
     window(days)
     tot = {"task": 0, "wrote": 0, "lost": 0, "open": 0}
     untasked = 0
-    for f in transcripts():
-        key = last = name = None
-        wrote, rep = False, set()
+    ss, writes = [], []   # pass 1: every project's transcripts, since another session's write excuses one of ours
+    for f in transcripts(every=True):
+        s = dict(sid=os.path.basename(f)[:8], key=None, first="", last="", name="", sup="", root="",
+                 counted=not PROJECT or PROJECT(f))
+        rep = {}
         for line, o in lines(f):
             ts = o.get("timestamp") or ""
             if ts and ts[:19] > END_ISO:
                 break  # replaying an old window: what came after it doesn't count
-            last = ts or last
-            name = o.get("agentName") or name
+            s["first"] = s["first"] or ts
+            s["last"] = ts or s["last"]
+            s["name"] = o.get("agentName") or s["name"]
+            if not s["root"] and isinstance(o.get("cwd"), str):
+                s["root"] = os.path.basename(re.sub(r"/\.(?:claude/)?worktrees/.*", "", o["cwd"]))
             m = o.get("message") or {}
-            if key is None and o.get("type") == "user" and not o.get("isSidechain") and not o.get("isMeta"):
+            if s["key"] is None and o.get("type") == "user" and not o.get("isSidechain") and not o.get("isMeta"):
                 c = m.get("content")
                 txt = c if isinstance(c, str) else " ".join(b.get("text", "") for b in c or [] if isinstance(b, dict))
                 if txt.startswith("<") and "<cross-session-message" not in txt:
                     continue  # a slash command or caveat line, not the first prompt
                 if "<cross-session-message" not in txt and (k := task().search(txt[:400])):
-                    key = k.group(1)
+                    s["key"] = k.group(1)
                 elif txt.strip():
-                    key = ""  # the first prompt names no task: not a task session
+                    s["key"] = ""  # the first prompt names no task: not a task session
+                if txt.strip():
+                    s["sup"] = (SUP.search(txt) or [None, ""])[1]
             if rep and o.get("type") == "user" and (o.get("permissionDecision") or {}).get("decision") != "reject":
                 for b in m.get("content") if isinstance(m.get("content"), list) else []:
                     if isinstance(b, dict) and b.get("tool_use_id") in rep and not b.get("is_error"):
-                        wrote = True
-            if key and o.get("type") == "assistant" and (f"replies/{key}" in line or '"report"' in line):
-                path = rf"replies/{re.escape(key)}(?!\d)"  # ABC-12 isn't ABC-123
+                        writes.append((ts, "key", rep[b["tool_use_id"]]))
+            if o.get("type") == "assistant" and ("replies/" in line or '"report"' in line):
                 for b in m.get("content") if isinstance(m.get("content"), list) else []:
                     i = (b.get("input") or {}) if isinstance(b, dict) and b.get("type") == "tool_use" else {}
-                    cmd = i.get("command", "")
                     # the reply tool's report writes replies/<key>.md (no key: the session's task key) once it is sent
-                    if i and str(b.get("name")).endswith("__reply") and i.get("report") and i.get("key", key) == key:
-                        rep.add(b.get("id"))
-                    # shortcut: `cp replies/KEY… elsewhere`, or a script that reads the reply and writes another file,
-                    # still counts as a write; parse the command if that shows up
-                    if re.search(path, i.get("file_path", "")) or \
-                            re.search(rf"(>\s*|\b(?:mv|cp|tee|sed\s+-i)\b[^\n]*)\S*{path}", cmd) or \
-                            re.search(rf"open\([^)]*{path}[^)]*,\s*['\"][wa]", cmd) or \
-                            (re.search(r"\.write(?:_text)?\(|writeFile", cmd) and re.search(path, cmd)):
-                        wrote = True
-        if not key:
-            untasked += key == ""
+                    if i and str(b.get("name")).endswith("__reply") and i.get("report") and i.get("key", s["key"]):
+                        rep[b.get("id")] = i.get("key", s["key"])
+                    fp, cmd = str(i.get("file_path", "")), str(i.get("command", ""))
+                    if "replies/" in fp + cmd:
+                        writes.append((ts, "text", fp, cmd))
+        ss.append(s)
+    by_sup = collections.defaultdict(list)
+    for s in ss:
+        if s["sup"]:
+            by_sup[s["sup"]].append(s)
+
+    def wrote(s, keys):
+        """A write of replies/<one of keys> during s's life, by any session."""
+        path = rf"replies/(?:{'|'.join(map(re.escape, keys))})(?![\w-])"  # ABC-12 isn't ABC-123, x isn't x-s2
+        for w in writes:
+            if not (s["first"] <= w[0] <= s["last"]):
+                continue
+            if w[1] == "key":
+                if w[2] in keys:
+                    return True
+                continue
+            fp, cmd = w[2], w[3]
+            # shortcut: `cp replies/KEY… elsewhere`, or a script that reads the reply and writes another file,
+            # still counts as a write; parse the command if that shows up
+            if re.search(path, fp) or \
+                    re.search(rf"(>\s*|\b(?:mv|cp|tee|sed\s+-i)\b[^\n]*)\S*{path}", cmd) or \
+                    re.search(rf"open\([^)]*{path}[^)]*,\s*['\"][wa]", cmd) or \
+                    (re.search(r"\.write(?:_text)?\(|writeFile", cmd) and re.search(path, cmd)):
+                return True
+        return False
+
+    def chain(s, seen):
+        """s and its successors through Supersedes:, each once."""
+        if s["sid"] in seen:
+            return
+        seen.add(s["sid"])
+        yield s
+        for n in by_sup.get(s["sid"], []):
+            yield from chain(n, seen)
+
+    for s in ss:
+        key = s["key"]
+        if not s["counted"] or not key:
+            untasked += s["counted"] and key == ""
             continue
         tot["task"] += 1
-        if wrote:
+        links = list(chain(s, set()))
+        keys = {k for x in links if x["key"] for k in (x["key"], x["key"].removeprefix(x["root"] + "-") if x["root"] else x["key"])}
+        if any(wrote(x, keys) for x in links):
             tot["wrote"] += 1
-        elif last and P(last).timestamp() > END - 6 * 3600:
+        elif any(x["last"] and P(x["last"]).timestamp() > END - 6 * 3600 for x in links):
             tot["open"] += 1  # ponytail: active in the last 6 h stands in for "still working"
         else:
             tot["lost"] += 1
-            print(f"{os.path.basename(f)[:8]}\t{key}\t{(last or '')[:16]}\t{name or ''}")
+            print(f"{s['sid']}\t{key}\t{s['last'][:16]}\t{s['name']}")
     print(tot, file=sys.stderr)
     if untasked and not tot["task"]:
         hint = ("ROOT's key_pattern was read" if task() is not TASK else
@@ -1775,9 +1828,776 @@ def search(text="", days=7):
         sys.exit(1)
 
 
+def tsv(d, name):
+    """DIR/NAME's rows as dicts (tab-separated, no quoting); [] when the file is missing."""
+    csv.field_size_limit(10**9)
+    try:
+        with open(os.path.join(d, name), errors="replace", newline="") as f:
+            return list(csv.DictReader(f, delimiter="\t", quoting=csv.QUOTE_NONE))
+    except FileNotFoundError:
+        return []
+
+
+med = lambda xs: statistics.median(xs) if xs else 0
+ep = lambda s: calendar.timegm(time.strptime(s[:16], "%Y-%m-%dT%H:%M")) + (int(s[17:19]) if s[17:19].isdigit() else 0)
+UTC = lambda s: datetime.fromisoformat(s.replace("Z", "")[:19]).replace(tzinfo=timezone.utc)
+LAND = re.compile(r"gh pr (merge|view|checks)|gh run (watch|list|view)")
+
+
+def deny_class(d2):
+    """An events.tsv deny row's class, from its detail2 (`source/reasonType: message`)."""
+    src, _, msg = d2.partition(": ")
+    if msg.startswith("Background session: this compound command"):
+        return "split-hint"
+    if "gave no verdict" in msg or "Classifier unavailable" in msg:
+        return "no-verdict"
+    if src.startswith("hook"):
+        return "hook-block"
+    return "refusal" if "classifier" in src else "other:" + src[:30]
+
+
+def wait_class(r):
+    """A waits.tsv row's class: what the call waited on."""
+    c, tool = r.get("input") or "", r.get("tool") or ""
+    if re.search(r"gh pr checks|gh run watch|--watch", c):
+        return "ci-watch"
+    if re.search(r"\.test\.sh|plugin test|tsc ", c):
+        return "tests"
+    if tool in ("Edit", "Write", "NotebookEdit"):
+        return "edit"
+    if tool in ("AskUserQuestion", "ExitPlanMode") or "ask_approval" in tool:
+        return "ask"
+    if tool != "Bash":
+        return "tool:" + tool[:28]
+    return "cd…" if c.startswith("cd ") else "bash-other"
+
+
+def usage_faults(d):
+    return [u for u in tsv(d, "usage.tsv") if u.get("kind") in FAULTS or (u.get("feature") or "").startswith(("fold-", "unfold-", "card-"))]
+
+
+def waste(d="", days=7, opening_chars=24):
+    """The waste counts of a retro folder: DIR's sessions.tsv, events.tsv, waits.tsv and usage.tsv (each optional, as
+    this script's commands wrote them) and the denial log, in the window. Counts and ids only."""
+    if not d:
+        sys.exit("usage: retro.py waste DIR [days=7]")
+    window(days)
+    N = int(opening_chars)
+    s = tsv(d, "sessions.tsv")
+    if s:
+        n = lambda k: sum(float(r[k] or 0) for r in s)
+        co = [r for r in s if "coordinator" in r["name"]]
+        print(f"sessions {len(s)} usd {n('usd'):.2f} out {n('out_tok') / 1e6:.1f}M cw {n('cache_write') / 1e6:.1f}M "
+              f"cr {n('cache_read') / 1e6:.1f}M peak_ctx median {int(med([int(r['peak_ctx']) for r in s]))} "
+              f"compacted {sum(r['compacts'] not in ('', '0') for r in s)} ({int(n('compacts'))}) "
+              f"coordinator-named {len(co)} usd {sum(float(r['usd']) for r in co):.2f}")
+    live = [r for r in tsv(d, "events.tsv") if not r.get("test")]   # headless test sessions left out
+    if live:
+        opening = lambda cmd: re.sub(r"\s+", " ", cmd).strip()[:N]
+        by = collections.defaultdict(list)
+        for r in live:
+            by[r["session"]].append(r)
+        den, retry, hooks = collections.Counter(), collections.Counter(), collections.Counter()
+        land = 0
+        for rs in by.values():
+            for k, r in enumerate(rs):
+                if r["kind"] != "deny":
+                    continue
+                c = deny_class(r["detail2"] or "")
+                den[c] += 1
+                if c == "hook-block":
+                    hooks[re.sub(r"[0-9a-f]{8,}|\d+", "N", r["detail2"].partition(": ")[2])[:70]] += 1
+                    land += bool(LAND.search(r["detail"] or ""))
+                name, _, arg = (r["detail"] or "").partition(": ")
+                if name != "Bash":
+                    continue
+                t, o, own = ep(r["ts"]), opening(arg), True
+                for r2 in rs[k + 1:]:   # the same opening again within 5 minutes; the first is the denied call's own row
+                    if ep(r2["ts"]) - t > 300:
+                        break
+                    if r2["kind"] == "bash" and opening(r2["detail"] or "") == o:
+                        if own:
+                            own = False
+                            continue
+                        retry[c] += 1
+                        break
+        print("deny", sum(den.values()), dict(den))
+        print("retries", sum(v for k, v in retry.items() if k != "split-hint"), dict(retry))
+        print("hook blocks on landing commands", land)
+        print("hook block texts:")
+        for k, v in hooks.most_common(12):
+            print(f"  {v:4d}  {k}")
+        bang = {(r["session"], r["detail"]) for r in live if r["kind"] == "bang"}
+        cnt = collections.Counter(r["kind"] for r in live)
+        print("bang distinct", len(bang), "sessions", len({x for x, _ in bang}),
+              " ".join(f"{k} {cnt[k]}" for k in ("ran", "self", "ask", "human", "xmsg", "err")))
+        print("bang openings:", collections.Counter(re.sub(r"\s+", " ", c).split(" ")[0][:30] for _, c in bang).most_common(12))
+    w = tsv(d, "waits.tsv")
+    if w:
+        for tag in ("", "sleep"):
+            byc = collections.defaultdict(lambda: [0, 0])
+            for r in w:
+                if (r.get("sleep") or "") == tag:
+                    v = byc[wait_class(r)]
+                    v[0] += 1; v[1] += int(float(r["minutes"] or 0))
+            print(f"waits{' (sleep)' if tag else ''}", sum(v[0] for v in byc.values()), "minutes", sum(v[1] for v in byc.values()),
+                  sorted(((k, *v) for k, v in byc.items()), key=lambda x: -x[2])[:10])
+        print("waits by decision:", collections.Counter(r["decision"] for r in w).most_common(6))
+    dn, p = [], f"{HOME}/.cache/session-status/denied.jsonl"
+    for _, o in lines(p) if os.path.exists(p) else []:
+        if not isinstance(o, dict) or not isinstance(o.get("time"), (int, float)) or not CUT <= o["time"] <= END:
+            continue
+        cwd = str(o.get("cwd") or "")
+        if ROOT and not (cwd == ROOT.rstrip("/") or cwd.startswith(ROOT.rstrip("/") + "/")):
+            continue
+        rs = str(o.get("reason") or "")
+        o["k"] = ("noverdict" if "Classifier unavailable" in rs or "no verdict" in rs else
+                  "split" if "Background session: this compound command" in rs else "refusal")
+        dn.append(o)
+    print("denied.jsonl", len(dn), dict(collections.Counter(o["k"] for o in dn)))
+    print("refusal reasons:", collections.Counter(str(o.get("reason"))[:40] for o in dn if o["k"] == "refusal").most_common(8))
+    f = usage_faults(d)
+    if f:
+        print("usage faults:", "; ".join(f"{u['kind']} {u['feature']} {u['uses']}" for u in f))
+
+
+def merges(d="", prs_json="", days=7):
+    """The merge rows of DIR's units.tsv against the host's PR list (PRS_JSON: number, createdAt, mergedAt): how long a
+    merge command took to land, and $ per merged PR."""
+    if not d or not prs_json:
+        sys.exit("usage: retro.py merges DIR PRS_JSON [days=7]")
+    window(days)
+    prs = {p["number"]: p for p in json.load(open(prs_json))}
+    s = tsv(d, "sessions.tsv")
+    usd_all = sum(float(r["usd"] or 0) for r in s)
+    sstart = {r["session"]: r["start"] for r in s}
+    ms = [r for r in tsv(d, "units.tsv") if r["kind"] == "merge" and "#" in r["id"]]
+    nums = collections.Counter(int(r["id"].rsplit("#", 1)[1]) for r in ms)
+    mins = lambda a, b: (UTC(a) - UTC(b)).total_seconds() / 60
+    p90 = lambda x: sorted(x)[min(len(x) - 1, int(0.9 * len(x)))] if x else 0
+    m2m, o2m, s2m, notm = [], [], [], set()
+    for r in ms:
+        n = int(r["id"].rsplit("#", 1)[1])
+        p = prs.get(n) or {}
+        if not p.get("mergedAt"):
+            notm.add(n)
+            continue
+        m2m.append(mins(p["mergedAt"], r["ts"]))
+        o2m.append(mins(p["mergedAt"], p["createdAt"]))
+        if r["session"] in sstart:
+            s2m.append(mins(r["ts"], sstart[r["session"]]))
+    print(f"merge rows {len(ms)} distinct {len(nums)} dup {sorted(n for n, c in nums.items() if c > 1)} not merged {sorted(notm)}")
+    print(f"merge cmd -> merged min: median {med(m2m):.0f} p90 {p90(m2m):.0f}; open -> merged median {med(o2m):.0f}; "
+          f"session start -> merge cmd median {med(s2m):.0f} (n={len(s2m)})")
+    inwin = lambda ts: bool(ts) and not out_of(ts[:19])
+    gm = [p for p in prs.values() if inwin(p.get("mergedAt"))]
+    print(f"host: merged in window {len(gm)} opened {sum(inwin(p.get('createdAt')) for p in prs.values())}")
+    print(f"$ per merged PR: ran {usd_all / max(1, len(nums) - len(notm)):.2f} host {usd_all / max(1, len(gm)):.2f}")
+
+
+TEST_RX = [(k, re.compile(rx)) for k, rx in [
+    ("shell-suite", r"\S*\.test\.sh\b"), ("plugin-test", r"claude plugin (?:test|validate)"), ("tsc", r"\btsc\b"),
+    ("scrub", r"scrub-check"), ("js-test", r"\b(?:npm|pnpm|yarn|bun|npx)\b[^|;&]*\b(?:test|jest|vitest|lint|typecheck|build)\b"),
+    ("pytest", r"\bpytest\b|python3? -m (?:pytest|unittest)"), ("go-test", r"\bgo (?:test|build|vet)\b"),
+    ("cargo", r"\bcargo (?:test|build|check|clippy)\b"), ("gradle", r"gradlew?\b[^|;&]*\b(?:test|build|check|assemble)"),
+    ("mvn", r"\bmvn\b"), ("dotnet", r"\bdotnet (?:test|build)\b"), ("make", r"\bmake (?:test|check|build)\b"),
+    ("playwright", r"playwright test")]]
+RATE = re.compile(r"rate limit|HTTP 429|submitted too quickly|abuse detection|rate.?limited", re.I)
+GH = re.compile(r"(?:^|[;&|(`{]|\bthen|\bdo|\bif|\buntil|\bwhile|\$\()\s*(?:\w+=\S+\s+)*(?:rtk\s+(?:proxy\s+)?)?gh\s+(\w+)(?:\s+(\w[\w-]*))?")
+HANDOVER = re.compile(r"(?:-status[\"']?|\$\{?\w+\}?[\"']?)\s+--handover\b")
+SUITE = re.compile(r"(?:^|[;&|(){]|\bthen|\bdo|\btime|\bexec)\s*(?:\w+=\S+\s+)*(?:(?:bash|sh|zsh)\s+(?:-\w+\s+)*)?[\"']?([^\s=\"']*\.test\.sh)[\"']?([^;&|)\n]*)")
+
+
+def suite_runs(cmd):
+    """The *.test.sh files a command runs (in command position, or bash's argument; a variable holding one is
+    resolved), as 'name:full' or 'name:<n sections>'. A grep, sed or cat of the file is not a run."""
+    var = dict(re.findall(r"\b(\w+)=[\"']?(\S*\.test\.sh)\b", cmd))
+    c = re.sub(r"\$\{?(\w+)\}?", lambda m: var.get(m.group(1), m.group(0)), cmd)
+    out = []
+    for path, rest in SUITE.findall(c):
+        args = re.split(r"\d*[<>]", rest)[0].split()   # sections named before any redirect
+        out.append(f"{os.path.basename(path)}:{len(args) or 'full'}")
+    return out
+
+
+def account_dirs():
+    """Account dirs ($CLAUDE_CONFIG_DIR, ~/.claude, ~/.claude-*) as (label, path), each once; label ~/.claude-work style."""
+    out, seen = [], set()
+    for d in [os.environ.get("CLAUDE_CONFIG_DIR") or "", f"{HOME}/.claude"] + sorted(glob.glob(f"{HOME}/.claude-*")):
+        p = os.path.abspath(os.path.expanduser(d)) if d else ""
+        if p and os.path.isdir(p) and p not in seen:
+            seen.add(p)
+            out.append(("~" + p[len(HOME):] if p.startswith(HOME + "/") else p, p))
+    return out
+
+
+def spend_extract(d):
+    """One pass over the window's transcripts (main threads and subagents) into DIR/spend-{req,sess,wakes,ev}.tsv:
+    a row per request, session, wake (what started a turn) and event (test run, gh call, handover, compaction, rate
+    limit). Snippets are capped at 80 chars. Each request's account: its owner uuid, voted to an account dir by the
+    jobs/<id8>/state.json that dir holds and by a transcript tree only that dir holds."""
+    jobs, holds = {}, collections.defaultdict(set)
+    for label, p in account_dirs():
+        holds[os.path.realpath(f"{p}/projects")].add(label)
+        for sp in glob.glob(f"{p}/jobs/*/state.json"):
+            try:
+                s = json.load(open(sp))
+            except (OSError, ValueError):
+                continue
+            fl = (s.get("respawnFlags") if isinstance(s, dict) else None) or []
+            flag = lambda k: next((fl[i + 1] for i in range(len(fl) - 1) if fl[i] == k), "")
+            jobs.setdefault(os.path.basename(os.path.dirname(sp)), {})[label] = (flag("--model"), flag("--effort"))
+    home_enc = re.sub(r"[^A-Za-z0-9]", "-", HOME) + "-"
+    clip80 = lambda s: clip(s, 80).strip()
+    h8 = lambda s: hashlib.sha1(re.sub(r"\s+", " ", s).encode()).hexdigest()[:8]
+    votes, sess_acct, req_rows, sess_rows, wake_rows, ev_rows = collections.defaultdict(collections.Counter), {}, [], [], [], []
+    for f in transcripts():
+        sid = os.path.basename(f)[:8]
+        proj = os.path.basename(os.path.dirname(f)).replace(home_enc, "")
+        st = dict(owner="", name="", names=[], first="", entry="", coord=False, turn=0, trig="start", flag="first",
+                  owners=[], tl=[], edit="")
+        calls, bgids, seen, best, rows, wakes, evs = {}, {}, set(), {}, [], [], []
+
+        def wake(o, trig, cls, txt, hashed=None):
+            st["turn"] += 1
+            st["trig"] = trig
+            ts = (o.get("timestamp") or "")[:19]
+            if not out_of(ts):
+                wakes.append([sid, st["turn"], ts, trig, cls, len(txt), h8(hashed if hashed is not None else txt), clip80(txt)])
+
+        for _, o in lines(f):
+            if not isinstance(o, dict):
+                continue
+            t, ts = o.get("type"), (o.get("timestamp") or "")[:19]
+            if t == "session-owner":
+                st["owner"] = o.get("accountUuid") or st["owner"]
+                if st["owner"] and st["owner"] not in st["owners"][-1:]:
+                    st["owners"].append(st["owner"])
+                continue
+            if t in ("agent-name", "custom-title"):
+                n = o.get("agentName") or o.get("customTitle") or ""
+                st["name"] = n or st["name"]
+                if n and n not in st["names"]:
+                    st["names"].append(n)
+                continue
+            if o.get("isSidechain"):
+                continue
+            st["entry"] = st["entry"] or o.get("entrypoint") or ""
+            m = o.get("message") or {}
+            c = m.get("content")
+            inwin = not out_of(ts)
+            if t == "system":
+                sub = o.get("subtype")
+                if sub == "compact_boundary":
+                    cm = o.get("compactMetadata") or {}
+                    if inwin:
+                        evs.append([sid, ts, "compact", str(cm.get("trigger") or ""), "", "", cm.get("preTokens") or "", "", "", ""])
+                    st["flag"] = "postcompact"
+                elif sub == "scheduled_task_fire":
+                    wake(o, "cron", "cron", str(o.get("content") or ""))
+            elif t == "user":
+                blocks = [b for b in c if isinstance(b, dict)] if isinstance(c, list) else []
+                results = [b for b in blocks if b.get("type") == "tool_result"]
+                txt = c if isinstance(c, str) else " ".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+                for b in results:
+                    call = calls.pop(b.get("tool_use_id"), None)
+                    if not call:
+                        continue
+                    rc = b.get("content")
+                    rt = rc if isinstance(rc, str) else " ".join(x.get("text", "") for x in rc or [] if isinstance(x, dict))
+                    dur = ep(ts) - ep(call["ts"]) if ts and call["ts"] else ""
+                    err = int(bool(b.get("is_error")))
+                    mm = re.search(r"with ID: (\w+)", rt) if call["bg"] else None
+                    if mm:
+                        bgids[mm.group(1)] = call
+                    for typ, cls in call["tags"] if not out_of(call["ts"]) else []:
+                        if not (mm and typ == "test"):   # a background test is logged when its notice comes
+                            evs.append([sid, call["ts"], typ, cls, dur, err, len(rt), int(call["bg"]), call["cmd"],
+                                        call["what"] if typ == "test" else ""])
+                    rl = RATE.search(rt)
+                    if rl and inwin and (call["gh"] or re.search(r"github|GraphQL", rt)):
+                        evs.append([sid, ts, "ratelimit", call["gh"] or "-", dur, err, len(rt), int(call["bg"]), call["cmd"],
+                                    clip80(rt[max(0, rl.start() - 40): rl.start() + 60])])
+                if results or o.get("toolUseResult") or not txt.strip():
+                    continue
+                ok = (o.get("origin") or {}).get("kind") if isinstance(o.get("origin"), dict) else ""
+                if o.get("isCompactSummary") or txt.startswith(("This session is being continued from a previous conversation",
+                                                                 "Base directory for this skill:")):
+                    continue
+                if ok == "task-notification" or "<task-notification>" in txt:
+                    tid = (re.search(r"<task-id>(\w+)</task-id>", txt) or [None, ""])[1]
+                    summ = (re.search(r"<summary>([\s\S]*?)</summary>", txt) or [None, ""])[1]
+                    status = (re.search(r"<status>(\w+)</status>", txt) or [None, ""])[1]
+                    call, cls = bgids.pop(tid, None), "other"
+                    if call:
+                        cls = next((c2 for t2, c2 in call["tags"] if t2 == "test"), None)
+                        cls = "test:" + cls if cls else ("watch" if "--watch" in call["cmd"] and "status" in call["full"] else
+                                                          "gh-wait" if call["gh"] else "sleep" if re.search(r"\bsleep\b", call["full"]) else "other")
+                        for typ, c2 in call["tags"] if not out_of(call["ts"]) else []:
+                            if typ == "test":
+                                evs.append([sid, call["ts"], "test", c2, ep(ts) - ep(call["ts"]) if ts and call["ts"] else "",
+                                            int(status not in ("completed", "")), len(txt), 1, call["cmd"], call["what"]])
+                    elif "agent" in summ.lower() or tid.startswith("a") and len(tid) > 12:
+                        cls = "subagent"
+                    wake(o, "bgtask", cls, summ or txt, summ or txt)
+                elif ok == "peer" or "cross-session-message" in txt:
+                    frm = (re.search(r'from-name="([^"]*)"', txt) or [None, ""])[1]
+                    body = re.sub(r"^[\s\S]*?<cross-session-message[^>]*>", "", txt)
+                    wake(o, "xmsg", "from:" + ("coordinator" if "coordinator" in frm else "worker" if frm else "?"), body, body)
+                elif "<bash-input>" in txt:
+                    wake(o, "human", "ran", txt)
+                elif txt.startswith("<") or o.get("isMeta"):
+                    if o.get("promptSource") == "system" and not txt.startswith("<"):
+                        wake(o, "system", "meta-prompt", txt)   # a respawn's "Continue …" and the like
+                    elif re.match(r"<command-(name|message)>", txt):
+                        wake(o, "human", "slash", txt)
+                elif not st["first"]:
+                    st["first"] = txt
+                    wake(o, "start", "brief", txt)
+                else:
+                    wake(o, "human", "pane" if txt.startswith(("Coordinator pane", "Approval pane")) else "typed", txt)
+            elif t == "assistant":
+                for b in c if isinstance(c, list) else []:
+                    if not isinstance(b, dict) or b.get("type") != "tool_use":
+                        continue
+                    nm, inp = b.get("name", ""), b.get("input") or {}
+                    if nm in ("Edit", "Write", "NotebookEdit") and not st["edit"]:
+                        st["edit"] = ts
+                    if nm == "mcp__session-orchestration__open_pane":
+                        st["coord"] = True
+                    if nm != "Bash":
+                        continue
+                    cmd = str(inp.get("command", ""))
+                    if STATUS_CMD.search(cmd) and re.search(r"\s--(start|changes|watch|owner)\b", cmd):
+                        st["coord"] = True
+                    tags = [("test", k) for k, rx in TEST_RX if rx.search(cmd)][:1]
+                    what = ""
+                    if tags and tags[0][1] == "shell-suite":
+                        what = ",".join(suite_runs(cmd))
+                        tags = tags if what else []
+                    g = GH.search(cmd)
+                    gh = f"gh {g.group(1)} {g.group(2) or ''}".strip() if g else ""
+                    if gh:
+                        tags.append(("gh", gh))
+                    if HANDOVER.search(cmd):
+                        tags.append(("handover", "escalate" if "--escalate" in cmd else "handover"))
+                    calls[b.get("id")] = dict(ts=ts, bg=bool(inp.get("run_in_background")), tags=tags, gh=gh, cmd=clip80(cmd),
+                                              full=cmd[:2000], what=what)
+                mdl, rid, u = m.get("model"), o.get("requestId") or m.get("id"), m.get("usage") or {}
+                if mdl == "<synthetic>" or not rid or not u:
+                    continue
+                if u.get("output_tokens", 0) >= best.get(rid, {}).get("output_tokens", -1):
+                    best[rid] = u   # a request's lines repeat its usage as it streams: the most output is the final one
+                if rid in seen:
+                    continue
+                seen.add(rid)
+                if inwin:
+                    rows.append(dict(rid=rid, ts=ts, owner=st["owner"], model=mdl or "", effort=o.get("effort") or "",
+                                     turn=st["turn"], trig=st["trig"], flag=st["flag"]))
+                st["flag"] = ""
+                st["tl"].append((ts, st["owner"]))
+        if not rows:
+            continue
+        held = holds.get(os.path.dirname(os.path.dirname(f)), set()) if len(holds.get(os.path.dirname(os.path.dirname(f)), ())) == 1 else set()
+        j = jobs.get(sid, {})
+        voted = held | (set(j) if len(j) == 1 else set())
+        if len(voted) == 1:
+            sess_acct[sid] = next(iter(voted))
+            for ow in st["owners"]:   # shortcut: a session that moved accounts votes every owner; the majority decides
+                votes[ow][sess_acct[sid]] += 1
+        prev = None
+        for r in rows:
+            u = best[r["rid"]]
+            gap = ep(r["ts"]) - ep(prev) if prev and r["ts"] else ""
+            prev = r["ts"] or prev
+            req_rows.append([sid, 0, r["ts"], r["owner"], r["model"], r["effort"], *req_tokens(u)[:3],
+                             u.get("cache_creation_input_tokens", 0), (u.get("cache_creation") or {}).get("ephemeral_5m_input_tokens", 0),
+                             ctx_of(u), round(req_usd(u, r["model"]), 5), r["turn"], r["trig"], gap, r["flag"]])
+        tl_ts = [x[0] for x in st["tl"]]
+        for sf in sorted(glob.glob(f"{f[:-6]}/subagents/*.jsonl")):
+            reqs = {}
+            for _, o in lines(sf):
+                if not isinstance(o, dict) or o.get("type") != "assistant":
+                    continue
+                m = o.get("message") or {}
+                rid, u = o.get("requestId") or m.get("id"), m.get("usage") or {}
+                if m.get("model") == "<synthetic>" or not rid or not u:
+                    continue
+                r = reqs.setdefault(rid, dict(ts=(o.get("timestamp") or "")[:19], u=u, model=m.get("model") or "", effort=o.get("effort") or ""))
+                if u.get("output_tokens", 0) >= r["u"].get("output_tokens", 0):
+                    r["u"] = u
+            prev = None
+            for r in reqs.values():
+                ts, u = r["ts"], r["u"]
+                if out_of(ts):
+                    continue
+                k = bisect.bisect_right(tl_ts, ts) - 1
+                owner = st["tl"][max(k, 0)][1] if st["tl"] else st["owner"]
+                gap = ep(ts) - ep(prev) if prev and ts else ""
+                prev = ts or prev
+                req_rows.append([sid, 1, ts, owner, r["model"], r["effort"], *req_tokens(u)[:3], u.get("cache_creation_input_tokens", 0),
+                                 (u.get("cache_creation") or {}).get("ephemeral_5m_input_tokens", 0), ctx_of(u),
+                                 round(req_usd(u, r["model"]), 5), 0, "subagent", gap, ""])
+        first = st["first"]
+        mark = lambda rx: (re.search(rx, first, re.M) or [None, ""])[1]
+        rs = mark(r"^Session task: retro run, scope ([a-z]+)")
+        task_ = rs and "retro-" + rs or mark(r"^Session task: ([\w./-]*\w)") or mark(r"^Work on ([A-Za-z][\w]*-\d+)\b")
+        jm = next((v[0] for v in j.values() if v[0]), "")
+        je = next((v[1] for v in j.values() if v[1]), "")
+        tss = [r["ts"] for r in rows if r["ts"]]
+        sess_rows.append([proj, sid, st["name"], kind_of(first, st["name"], st["coord"]), task_, st["entry"], mark(SUP.pattern),
+                          "+".join(sorted(j)), jm, je, min(tss, default=""), max(tss, default=""),
+                          "+".join(x[:8] for x in st["owners"]), "|".join(st["names"])[:120], st["edit"]])
+        wake_rows += wakes
+        ev_rows += evs
+    own = {ow: c.most_common(1)[0][0] for ow, c in votes.items()}
+    for r in req_rows:
+        r[3] = own.get(r[3]) or sess_acct.get(r[0]) or "?"
+    for name, head, rows in (
+            ("req", "sid sub ts acct model effort inp out cr cw cw5 ctx usd turn trig gap_s flag", req_rows),
+            ("sess", "project sid name kind task entry sup job_accts job_model job_effort ts0 ts1 owners names first_edit", sess_rows),
+            ("wakes", "sid turn ts trig class chars hash snippet", wake_rows),
+            ("ev", "sid ts type class dur_s err chars bg detail what", ev_rows)):
+        with open(os.path.join(d, f"spend-{name}.tsv"), "w") as out:
+            out.write("\t".join(head.split()) + "\n")
+            for r in rows:
+                out.write("\t".join(str(x).replace("\t", " ").replace("\n", " ") for x in r) + "\n")
+
+
+def spend(*a):
+    """Where the window's spend went (Markdown): by account, project, session, kind, model, trigger and context size,
+    then rebuilds of big contexts, wakes, test runs, gh calls and handovers. Writes DIR/spend-*.tsv first."""
+    if len(a) not in (1, 2):
+        sys.exit("usage: retro.py spend [days=7] DIR")
+    days, d = a if len(a) == 2 else (7, a[0])
+    window(days)
+    os.makedirs(d, exist_ok=True)
+    spend_extract(d)
+    days = float(days)
+    sess = {s["sid"]: s for s in tsv(d, "spend-sess.tsv")}
+    home_enc = re.sub(r"[^A-Za-z0-9]", "-", HOME) + "-"
+    proj = lambda folder: re.sub(r"--(claude-)?worktrees-.*", "", folder.replace(home_enc, "")) or "?"
+    req = tsv(d, "spend-req.tsv")
+    for r in req:
+        for k in ("inp", "out", "cr", "cw", "cw5", "ctx", "turn"):
+            r[k] = int(r[k] or 0)
+        r["usd"], r["sub"] = float(r["usd"]), r["sub"] == "1"
+        s = sess.get(r["sid"], {})
+        r["proj"], r["kind"] = proj(s.get("project", "?")), "subagent" if r["sub"] else s.get("kind", "?")
+        r["gap"] = int(r["gap_s"]) if r["gap_s"] else None
+        m = r["model"]
+        # $ by token type; a 5-minute cache write costs 0.625 of a 1-hour one; the rest is advisor calls
+        r["$in"], r["$out"], r["$cr"] = usd(r["inp"], 0, 0, 0, m), usd(0, r["out"], 0, 0, m), usd(0, 0, r["cr"], 0, m)
+        r["$cw1"], r["$cw5"] = usd(0, 0, 0, r["cw"] - r["cw5"], m), usd(0, 0, 0, r["cw5"] * 0.625, m)
+        r["$rest"] = r["usd"] - r["$in"] - r["$out"] - r["$cr"] - r["$cw1"] - r["$cw5"]
+    main = [r for r in req if not r["sub"]]
+    TOTAL = sum(r["usd"] for r in req) or 1
+    accts = sorted({r["acct"] for r in req})
+    out = []
+    say = out.append
+    fmt = lambda c: (f"{c:,.2f}" if abs(c) < 100 else f"{c:,.0f}") if isinstance(c, float) else f"{c:,}" if isinstance(c, int) else str(c)
+    pct = lambda a, b: f"{100 * a / b:.0f}%" if b else "-"
+    Mt = lambda n: round(n / 1e6, 1)
+    BY = ["requests", "$", "% of $", "avg ctx", "$ per request"]
+    model = lambda r: r["model"].replace("claude-", "")
+    skind = lambda sid: sess.get(sid, {}).get("kind", "?")
+    sname = lambda sid: sess.get(sid, {}).get("name", "?")
+
+    def table(title, head, rows, note=""):
+        say(f"\n## {title}\n")
+        if note:
+            say(note + "\n")
+        say("| " + " | ".join(head) + " |")
+        say("|" + "---|" * len(head))
+        for row in rows:
+            say("| " + " | ".join(fmt(c) for c in row) + " |")
+
+    def by(rows, key, top=None):
+        """(key, requests, $, share %, average ctx, $ per request), biggest $ first."""
+        g = collections.defaultdict(lambda: [0, 0.0, 0])
+        for r in rows:
+            v = g[key(r)]
+            v[0] += 1; v[1] += r["usd"]; v[2] += r["ctx"]
+        t = sorted(([k, n, u, 100 * u / TOTAL, c // n, u / n] for k, (n, u, c) in g.items()), key=lambda x: -x[2])
+        return t[:top] if top else t
+
+    say(f"# Spend, {CUT_ISO} → {END_ISO[:16]} (UTC)\n")
+    say(f"{len(req):,} requests, ${sum(r['usd'] for r in req):,.0f}, {len({r['sid'] for r in req})} sessions. $ is the list price "
+        "of the tokens (retro.py's rates), a proxy for the plan limit, whose formula isn't visible.")
+    wins = [("all accounts", None)] + [(a_, a_) for a_ in accts]
+    rows = []
+    for name, acct in wins:
+        w = [r for r in req if acct is None or r["acct"] == acct]
+        u = sum(r["usd"] for r in w)
+        rows.append([name, len(w), len({r["sid"] for r in w}), Mt(sum(r["inp"] for r in w)), Mt(sum(r["out"] for r in w)),
+                     Mt(sum(r["cr"] for r in w)), Mt(sum(r["cw"] for r in w)), u, u / days])
+    table("Accounts", ["account", "requests", "sessions", "in Mtok", "out Mtok", "cache read Mtok", "cache write Mtok", "$", "$ per day"], rows)
+    for name, acct in wins:
+        table(f"Projects: {name}", ["project"] + BY, by([r for r in req if acct is None or r["acct"] == acct], lambda r: r["proj"], 10))
+    dd = collections.defaultdict(lambda: [collections.Counter(), 0, set(), 0])
+    for r in req:
+        v = dd[r["ts"][:10]]
+        v[0][r["acct"]] += r["usd"]; v[1] += 1; v[2].add(r["sid"]); v[3] += r["flag"] == "first" and not r["sub"]
+    table("$ per day and account (UTC days)", ["day", *accts, "all", "requests", "$ per request", "sessions active", "sessions started"],
+          [[k, *[c[a_] for a_ in accts], sum(c.values()), n, sum(c.values()) / n, len(ss), st_] for k, (c, n, ss, st_) in sorted(dd.items())])
+
+    def top_sessions(title, rows, n=15):
+        g = collections.defaultdict(list)
+        for r in rows:
+            g[r["sid"]].append(r)
+        t = []
+        for sid, rs in sorted(g.items(), key=lambda kv: -sum(r["usd"] for r in kv[1]))[:n]:
+            mn = [r for r in rs if not r["sub"]]
+            me = collections.Counter((model(r), r["effort"]) for r in mn or rs).most_common(1)[0][0]
+            t.append([rs[0]["proj"], sid, sname(sid), skind(sid), rs[0]["acct"], " ".join(me), len(rs),
+                      sum(r["ctx"] for r in mn) // max(len(mn), 1), sum(r["usd"] for r in rs), sum(r["usd"] for r in rs if r["sub"])])
+        table(title, ["project", "sid", "name", "kind", "account", "model effort", "requests", "avg ctx (main)", "$", "of it subagents $"], t)
+
+    top_sessions("Top 15 sessions", req)
+    for a_ in accts if len(accts) > 1 else []:
+        top_sessions(f"Top 10 sessions: {a_}", [r for r in req if r["acct"] == a_], 10)
+    nsess = collections.Counter(skind(s) for s in {r["sid"] for r in main})
+    table("Session kind (subagents as their own row)", ["kind", "sessions"] + BY, [[k, nsess.get(k, "-"), *v] for k, *v in by(req, lambda r: r["kind"])])
+    table("Model × effort", ["model", "effort", "thread"] + BY,
+          [[*k, *v] for k, *v in by(req, lambda r: (model(r), r["effort"] or "-", "sub" if r["sub"] else "main"), 20)])
+    ty = [("input", "$in", "inp"), ("output", "$out", "out"), ("cache read", "$cr", "cr"), ("cache write 1h", "$cw1", None),
+          ("cache write 5m", "$cw5", "cw5"), ("advisor", "$rest", None)]
+    tok = lambda k, f: sum(r[f] for r in req) if f else sum(r["cw"] - r["cw5"] for r in req) if k == "$cw1" else 0
+    nm = max(len(main), 1)
+    table("$ by token type", ["type", "Mtok", "$", "% of $", "main $", "subagents $"],
+          [[n, Mt(tok(k, f)), sum(r[k] for r in req), 100 * sum(r[k] for r in req) / TOTAL, sum(r[k] for r in main),
+            sum(r[k] for r in req if r["sub"])] for n, k, f in ty],
+          f"Main thread: average context {sum(r['ctx'] for r in main) // nm:,}, median {int(med([r['ctx'] for r in main])):,}; "
+          f"average cache read per request {sum(r['cr'] for r in main) // nm:,} tokens (${sum(r['$cr'] for r in main) / nm:.3f}), "
+          f"average output {sum(r['out'] for r in main) // nm:,} tokens (${sum(r['$out'] for r in main) / nm:.3f}).")
+    table("By trigger of the turn", ["trigger"] + BY, by(req, lambda r: r["trig"]))
+    table("Main thread against subagents", ["thread", "model"] + BY, [[*k, *v] for k, *v in by(req, lambda r: ("sub" if r["sub"] else "main", model(r)))])
+    ctxb = lambda r: "<50K" if r["ctx"] < 5e4 else "50-100K" if r["ctx"] < 1e5 else "100-150K" if r["ctx"] < 1.5e5 else "150K+"
+    table("Main-thread requests by context size", ["context"] + BY, sorted(by(main, ctxb), key=lambda x: x[0]))
+    coord = [r for r in main if r["kind"] == "coordinator"]
+    table("Coordinator sessions by model and effort", ["model", "effort"] + BY, [[*k, *v] for k, *v in by(coord, lambda r: (model(r), r["effort"]))])
+    table("Coordinator sessions by day", ["day"] + BY, sorted(by(coord, lambda r: r["ts"][:10]), key=lambda x: x[0]))
+    base = int(med([r["ctx"] for r in main if r["flag"] == "first"]))   # what a session reads before any work
+    re_read = sum(usd(0, 0, min(base, r["cr"]), 0, r["model"]) for r in main)
+    say(f"\nBase context (median at the first request of the sessions started in the window): {base:,} tokens. Re-reading it on "
+        f"every main-thread request costs ${re_read:,.0f} ({pct(re_read, TOTAL)} of the window's $); each 1K off it saves "
+        f"${sum(usd(0, 0, 1000, 0, r['model']) for r in main):,.0f} a window.")
+
+    # rebuilds: a request that writes at least half of a context of 100K+ to the cache again
+    extra = lambda r: r["$cw1"] + r["$cw5"] - usd(0, 0, r["cw"], 0, r["model"])   # the write, less what a cache read would have cost
+    gapb = lambda r: "none" if r["gap"] is None else "< 5 min" if r["gap"] < 300 else "5-60 min" if r["gap"] < 3600 else "> 60 min"
+    big = [r for r in req if r["cw"] >= r["ctx"] / 2 and r["ctx"] >= 100_000 and not r["flag"]]
+    X = sum(extra(r) for r in big)
+
+    def wrows(rows, key, top=None):
+        g = collections.defaultdict(lambda: [0, 0, 0.0, 0.0])
+        for r in rows:
+            v = g[key(r)]
+            v[0] += 1; v[1] += r["cw"]; v[2] += r["usd"]; v[3] += extra(r)
+        t = sorted(([k, n, Mt(cw), u, x] for k, (n, cw, u, x) in g.items()), key=lambda x: -x[4])
+        return t[:top] if top else t
+
+    W1 = ["rebuilds", "cache write Mtok", "$ of these requests", "extra $ over a cache read"]
+    say("\n# Rebuilds of big contexts\n")
+    say(f"A rebuild: a request that writes at least half of a context of 100K+ to the cache again (not the first, not after a "
+        f"compaction). {len(big)} rebuilds in {len({r['sid'] for r in big})} sessions, extra ${X:,.0f} ({pct(X, TOTAL)} of the "
+        f"window's $); 5-minute writes are {pct(sum(r['cw5'] for r in big), sum(r['cw'] for r in big))} of their cache-write "
+        f"tokens; subagents' rebuilds: {sum(r['sub'] for r in big)}.")
+    table("Rebuilds by idle gap before the request", ["gap"] + W1, wrows(big, gapb))
+    table("Rebuilds by trigger", ["trigger"] + W1, wrows(big, lambda r: r["trig"]))
+    table("Rebuilds by account", ["account"] + W1, wrows(big, lambda r: r["acct"]))
+    table("Rebuilds by session kind", ["kind"] + W1, wrows(big, lambda r: r["kind"]))
+    table("Rebuilds by project", ["project"] + W1, wrows(big, lambda r: r["proj"], 8))
+    table("Rebuilds: top sessions", ["sid", "name", "kind"] + W1, [[k, sname(k), skind(k), *v] for k, *v in wrows(big, lambda r: r["sid"], 12)])
+    allw = collections.defaultdict(lambda: [0, 0, 0, 0.0])
+    for r in main:
+        if not r["flag"]:
+            v = allw[gapb(r)]
+            v[0] += 1; v[1] += r["cw"]; v[2] += r["ctx"]; v[3] += extra(r)
+    table("All main-thread requests by idle gap (any context size)", ["gap", "requests", "cache write Mtok", "share of context rewritten", "extra $ over a cache read"],
+          [[k, n, Mt(cw), pct(cw, cx), x] for k, (n, cw, cx, x) in sorted(allw.items())],
+          "Extra $ here counts every cache write, the ordinary growth of a turn too: the '> 60 min' row is the price of an expired cache.")
+    moved = [s for s in sess.values() if s["sup"] in sess and sess[s["sup"]]["owners"] != s["owners"]]
+    say(f"\nAccount moves (a successor under another owner than the session it supersedes): {len(moved)}"
+        + (": " + ", ".join(f"{s['sid']} ({s['kind']})" for s in moved[:12]) if moved else "") + ".")
+
+    say("\n# Wakes\n")
+    rq = collections.defaultdict(list)
+    for r in main:
+        rq[r["sid"], r["turn"]].append(r)
+
+    def wname(w):
+        if (w["trig"], w["class"]) != ("bgtask", "other"):
+            return w["class"]
+        m = re.match(r'Background command "(\S+)', w["snippet"])
+        word = (m.group(1) if m else w["snippet"].split(":")[0][:22]).lower()
+        return "other:" + {"arm": "re-arm", "wait": "wait", "watch": "watch", "run": "run", "re-arm": "re-arm", "gh": "gh"}.get(word, "rest" if m else word)
+
+    wakes = sorted(tsv(d, "spend-wakes.tsv"), key=lambda w: (w["sid"], w["ts"]))
+    seen, G = set(), collections.defaultdict(lambda: {"n": 0, "reqs": 0, "usd": 0.0, "ctx": [], "noop": 0, "noop$": 0.0, "dup": 0, "dup$": 0.0, "none": 0})
+    for w in wakes:
+        rs = rq.get((w["sid"], int(w["turn"])), [])
+        g, u = G[w["trig"], wname(w)], sum(r["usd"] for r in rs)
+        w["usd"], w["noop"] = u, bool(rs) and len(rs) <= 2 and sum(r["out"] for r in rs) < 300
+        g["n"] += 1; g["reqs"] += len(rs); g["usd"] += u
+        if not rs:
+            g["none"] += 1
+        else:
+            g["ctx"].append(rs[0]["ctx"])
+            if w["noop"]:
+                g["noop"] += 1; g["noop$"] += u
+        if (w["sid"], w["hash"]) in seen:
+            g["dup"] += 1; g["dup$"] += u
+        seen.add((w["sid"], w["hash"]))
+    tot = {k: sum(g[k] for g in G.values()) for k in ("n", "reqs", "usd", "noop", "noop$", "dup", "dup$", "none")}
+    say(f"{tot['n']:,} wakes, {tot['reqs']:,} main-thread requests joined (${tot['usd']:,.0f}); {tot['none']} wakes with no request. "
+        f"No-op wakes (at most 2 requests, under 300 output tokens): {tot['noop']:,}, ${tot['noop$']:,.0f}. "
+        f"Duplicates (the same text woke the session before): {tot['dup']:,}, ${tot['dup$']:,.0f}.")
+    table("Wakes by trigger and class", ["trigger", "class", "wakes", "requests", "requests per wake", "$", "$ per wake", "median ctx at first request",
+                                         "no-op", "no-op $", "duplicate", "duplicate $"],
+          [[t, c, g["n"], g["reqs"], g["reqs"] / g["n"], g["usd"], g["usd"] / g["n"], int(med(g["ctx"])), g["noop"], g["noop$"], g["dup"], g["dup$"]]
+           for (t, c), g in sorted(G.items(), key=lambda kv: -kv[1]["usd"])])
+    wk = collections.defaultdict(lambda: [0, 0.0, 0, 0.0])
+    for w in wakes:
+        v = wk[skind(w["sid"]), w["trig"]]
+        v[0] += 1; v[1] += w["usd"]; v[2] += w["noop"]; v[3] += w["usd"] * w["noop"]
+    table("Wakes by session kind and trigger", ["kind", "trigger", "wakes", "$", "no-op", "no-op $"],
+          [[*k, *v] for k, v in sorted(wk.items(), key=lambda kv: -kv[1][1])][:14])
+    op = collections.defaultdict(lambda: [0, 0.0, 0])
+    for w in wakes:   # what the machine-written wakes say, digits and ids folded (a typed prompt's text stays out)
+        if w["trig"] in ("system", "bgtask", "cron"):
+            v = op[w["trig"], re.sub(r"[0-9a-f]{7,}|\d+", "#", w["snippet"])[:46]]
+            v[0] += 1; v[1] += w["usd"]; v[2] += w["noop"]
+    table("Machine-written wakes by their opening (top 40 by $)", ["trigger", "opening", "wakes", "$", "no-op"],
+          [[*k, *v] for k, v in sorted(op.items(), key=lambda kv: -kv[1][1])][:40])
+
+    say("\n# Test runs\n")
+    ev = tsv(d, "spend-ev.tsv")
+    tests = sorted((e for e in ev if e["type"] == "test"), key=lambda e: e["ts"])
+    CAP = 3600   # shortcut: a run's length is capped at an hour for the overlap count (the longest span the Mac's sleep)
+    for e in tests:
+        e["d"] = int(e["dur_s"] or 0)
+        e["t0"] = ep(e["ts"]); e["t1"] = e["t0"] + min(e["d"], CAP)
+    for i, e in enumerate(tests):   # overlapped: another session's run was going at some point of this one
+        e["ov"] = any(o["sid"] != e["sid"] and o["t0"] < e["t1"] and o["t1"] > e["t0"] for o in tests[max(0, i - 80):i + 80] if o is not e)
+    peak = cur = 0
+    for _, step in sorted([(e["t0"], 1) for e in tests if e["d"]] + [(e["t1"], -1) for e in tests if e["d"]]):
+        cur += step
+        peak = max(peak, cur)
+    say(f"{len(tests):,} test runs, {sum(e['d'] for e in tests) / 60:,.0f} minutes, {sum(e['err'] == '1' for e in tests)} failed; "
+        f"{sum(e['ov'] for e in tests)} overlapped another session's run; peak {peak} at once.")
+    TH = ["runs", "minutes", "median s", "failed", "in background", "overlapped"]
+    trow = lambda k, es: [k, len(es), sum(e["d"] for e in es) / 60, int(med([e["d"] for e in es])), sum(e["err"] == "1" for e in es),
+                          sum(e["bg"] == "1" for e in es), sum(e["ov"] for e in es)]
+    grp = lambda key, es: {k: [e for e in es if key(e) == k] for k in {key(e) for e in es}}
+    table("Test runs by class", ["class"] + TH, sorted((trow(k, es) for k, es in grp(lambda e: e["class"], tests).items()), key=lambda x: -x[2]))
+    sg = grp(lambda e: e["what"], [e for e in tests if e["class"] == "shell-suite"])
+    table("Shell suites by run", ["suite:sections"] + TH, sorted((trow(k, es) for k, es in sg.items()), key=lambda x: -x[2])[:14])
+    fulls = [k for k in sg if k.endswith(":full")]
+    if fulls:
+        name = max(fulls, key=lambda k: sum(e["d"] for e in sg[k]))   # the full suite that took the most minutes
+        full = sg[name]
+        real = [e for e in full if e["d"] >= 60]
+        say(f"\nFull `{name[:-5]}` runs: {len(full)}; of them {len(real)} ran a minute or more ({sum(e['d'] for e in real) / 60:,.0f} minutes). "
+            f"Median seconds alone {int(med([e['d'] for e in real if not e['ov']]))} (n={sum(not e['ov'] for e in real)}), "
+            f"overlapped {int(med([e['d'] for e in real if e['ov']]))} (n={sum(e['ov'] for e in real)}).")
+        fp = grp(lambda e: proj(sess.get(e["sid"], {}).get("project", "?")), full)
+        table(f"Full {name[:-5]} runs by project", ["project", "runs", "minutes", "sessions"],
+              [[p, len(es), sum(e["d"] for e in es) / 60, len({e["sid"] for e in es})] for p, es in sorted(fp.items(), key=lambda kv: -len(kv[1]))])
+        table(f"Full {name[:-5]} runs by day", ["day", "runs", "minutes"],
+              [[k, len(es), sum(e["d"] for e in es) / 60] for k, es in sorted(grp(lambda e: e["ts"][:10], full).items())])
+        fs = grp(lambda e: e["sid"], full)
+        table(f"Full {name[:-5]} runs: top sessions", ["sid", "name", "kind", "runs", "minutes", "failed"],
+              [[k, sname(k), skind(k), len(es), sum(e["d"] for e in es) / 60, sum(e["err"] == "1" for e in es)]
+               for k, es in sorted(fs.items(), key=lambda kv: -len(kv[1]))[:10]], f"{len(fs)} sessions ran it in full.")
+    tw = [g for k, g in G.items() if k[1].startswith("test:")]
+    say(f"\nWakes from a finished background test run: {sum(g['n'] for g in tw)}, ${sum(g['usd'] for g in tw):,.0f}.")
+
+    say("\n# gh calls and rate limits\n")
+    gh = [e for e in ev if e["type"] == "gh"]
+    gc = grp(lambda e: e["class"], gh)
+    table("gh calls by subcommand", ["call", "calls", "failed", "in background", "sessions"],
+          [[k, len(es), sum(e["err"] == "1" for e in es), sum(e["bg"] == "1" for e in es), len({e["sid"] for e in es})]
+           for k, es in sorted(gc.items(), key=lambda kv: -len(kv[1]))[:12]],
+          f"{len(gh):,} gh calls in {len({e['sid'] for e in gh})} sessions, {sum(e['err'] == '1' for e in gh)} failed.")
+    rl = [e for e in ev if e["type"] == "ratelimit"]
+    say(f"\nRate-limit rows: {len(rl)}, real (the call failed): {sum(e['err'] == '1' for e in rl)}"
+        + "".join(f"; {e['sid']} {e['ts'][:16]} {e['class']}" for e in sorted(rl, key=lambda e: e["ts"]) if e["err"] == "1") + ".")
+    gs = collections.Counter(e["sid"] for e in gh)
+    table("gh calls: top sessions", ["sid", "name", "kind", "calls", "pr view", "pr checks"],
+          [[k, sname(k), skind(k), n, sum(e["sid"] == k and e["class"] == "gh pr view" for e in gh),
+            sum(e["sid"] == k and e["class"] == "gh pr checks" for e in gh)] for k, n in gs.most_common(8)])
+    gw = G.get(("bgtask", "gh-wait"))
+    if gw:
+        say(f"\ngh-wait wakes: {gw['n']}, {gw['reqs']} requests, ${gw['usd']:,.0f} (${gw['usd'] / gw['n']:.2f} each).")
+    f = usage_faults(d)
+    if f:
+        say("\nusage.tsv fault rows: " + "; ".join(f"{u['kind']} {u['feature']} {u['uses']}" for u in f) + ".")
+
+    say("\n# Handovers\n")
+    ho = [e for e in ev if e["type"] == "handover"]
+    ok = [e for e in ho if e["err"] != "1"]
+    say(f"{len(ho)} handover calls ({sum(e['class'] == 'escalate' for e in ho)} escalations, {len(ho) - len(ok)} failed) in "
+        f"{len({e['sid'] for e in ho})} sessions. Failed calls by kind: {dict(collections.Counter(skind(e['sid']) for e in ho if e['err'] == '1'))}.")
+    hp = collections.Counter((skind(e["sid"]), proj(sess.get(e["sid"], {}).get("project", "?"))) for e in ho)
+    table("Handover calls by session kind and project", ["kind", "project", "calls"], [[*k, n] for k, n in hp.most_common()])
+    mreq = collections.defaultdict(list)
+    for r in main:
+        mreq[r["sid"]].append(r)
+    last = []
+    for e in ok:   # the context the predecessor had reached when it handed over
+        before = [r["ctx"] for r in mreq[e["sid"]] if r["ts"] <= e["ts"]]
+        if before:
+            last.append((before[-1], e))
+    hb = lambda c: "< 100K (premature)" if c < 1e5 else "100-140K" if c < 1.4e5 else "140-160K" if c < 1.6e5 else "160K+"
+    hk = collections.defaultdict(collections.Counter)
+    for c, e in last:
+        hk[skind(e["sid"])][hb(c)] += 1
+    cols = ["< 100K (premature)", "100-140K", "140-160K", "160K+"]
+    table("Context at the handover call, by session kind", ["kind"] + cols + ["median ctx"],
+          [[k, *[c[x] for x in cols], int(med([cx for cx, e in last if skind(e["sid"]) == k]))] for k, c in sorted(hk.items())],
+          f"Median over all: {int(med([c for c, _ in last])):,}. Premature ones: "
+          + ", ".join(f"{e['sid']} {c // 1000}K" for c, e in sorted(last, key=lambda x: x[0])[:14] if c < 1e5) + ".")
+    pk = collections.defaultdict(list)
+    succ = [s for s in sess.values() if s["sup"]]
+    for s in succ:
+        rs = mreq[s["sid"]]
+        pre = [r for r in rs if r["ts"] < s["first_edit"]] if s["first_edit"] else rs[:10]
+        if pre:
+            pk[s["kind"] + (", edits" if s["first_edit"] else ", never edits")].append((len(pre), sum(r["usd"] for r in pre), pre[-1]["ctx"], pre[0]["ctx"]))
+    picked = sum(p[1] for ps in pk.values() for p in ps)
+    table("Successors (sessions that supersede another) and their pick-up cost",
+          ["kind", "successors", "median requests before the first edit", "median $ to pick up", "sum $", "median first ctx", "median ctx at the first edit"],
+          [[k, len(ps), int(med([p[0] for p in ps])), med([p[1] for p in ps]), sum(p[1] for p in ps), int(med([p[3] for p in ps])),
+            int(med([p[2] for p in ps]))] for k, ps in sorted(pk.items())],
+          f"{len(succ)} successors, pick-up ${picked:,.0f} in all ({pct(picked, TOTAL)} of the window's $). "
+          "Pick-up: a successor's requests before its first Edit or Write (none: its first 10).")
+    root = lambda sid, n=0: root(sess[sid]["sup"], n + 1) if n < 50 and sid in sess and sess[sid]["sup"] else sid
+    chains = collections.defaultdict(list)
+    for s in succ:
+        chains[root(s["sid"])].append(s["sid"])
+    cl = sorted(((len(v) + 1, k) for k, v in chains.items()), reverse=True)
+    say(f"\nChains through Supersedes: {len(cl)}; with 3+ sessions: {sum(n >= 3 for n, _ in cl)}; longest: "
+        + ", ".join(f"{sname(k) if k in sess else sname(chains[k][0])} ({n})" for n, k in cl[:8]) + ".")
+    table("Chain length", ["sessions in the chain", "chains"], sorted(collections.Counter(n for n, _ in cl).items()))
+
+    st = [r for r in tsv(d, "start.tsv") if r.get("started", "").startswith("20")]   # the file ends with its own median row
+    if st:
+        num = lambda r, k: int(r[k] or 0)
+        sc = [sum(r["usd"] for r in mreq[s["session"]][:num(s, "reqs")]) for s in st]
+        busy = [r for r in st if num(r, "after_start") > 75_000]
+        say(f"\nCoordinator Starts: {len(st)}, ${sum(sc):,.0f} for their Start requests (median ${med(sc):.2f}). After Start over 75K: "
+            f"{len(busy)}; at or under 65K: {sum(num(r, 'after_start') <= 65_000 for r in st)}.")
+        K = ("reqs", "base", "after_start", "increment", "skill", "status", "rest")
+        table("Coordinator Starts by day (start.tsv)", ["day", "starts", *[f"median {k}" for k in K]],
+              [[k, len(rs), *[int(med([num(r, x) for r in rs])) for x in K]] for k, rs in sorted(grp(lambda r: r["started"][:10], st).items())]
+              + [["all", len(st), *[int(med([num(r, x) for r in st])) for x in K]]])
+    print("\n".join(out))
+
+
 # Report sections in order, and the scopes that have each (skills/retro/SKILL.md, Sections).
 BOTH, PROJ, PLUG = {"project", "plugin"}, {"project"}, {"plugin"}
-SECTIONS = {"units": BOTH, "context": BOTH, "waste": BOTH, "feedback": BOTH, "coordinator": PROJ, "memory": PROJ,
+SECTIONS = {"units": BOTH, "context": BOTH, "waste": BOTH, "spend": PLUG, "feedback": BOTH, "coordinator": PROJ, "memory": PROJ,
             "protocol": PLUG, "features": PLUG, "sizing": PLUG}
 
 
@@ -1802,7 +2622,7 @@ def sections(scope="", *names):
 
 CMDS = {"sessions": sessions, "events": events, "context": context, "units": units, "waits": waits, "bgtasks": bgtasks, "replies": replies,
         "triggers": triggers, "usage": usage, "chunks": chunks, "kinds": kinds, "trial": trial, "handoff": handoff, "start": start, "loads": loads, "search": search,
-        "sections": sections, "html": md2html}
+        "sections": sections, "html": md2html, "waste": waste, "merges": merges, "spend": spend}
 
 if __name__ == "__main__":
     a = sys.argv[1:]

@@ -324,7 +324,7 @@ detect_host() {
 #                       only)                                           default empty: by hand only
 #   retro.account       a Claude config dir (~ expanded) a scheduled run starts under (person only)
 #                                                                       default the current one
-#   retro.sections      JSON list of section names (units context waste feedback coordinator memory protocol features
+#   retro.sections      JSON list of section names (units context waste spend feedback coordinator memory protocol features
 #                       sizing), printed one per line (person only)     default empty: every section of the scope
 #   terminal            plain | ghostty | your own module's name (find_module terminals NAME): where the pane's
 #                       Attach in tab and Logs in split open             default plain
@@ -488,7 +488,7 @@ config() {
         { echo "warning: retro.scope=$v runs only from feedback.repo_dir's root ($pr): project" >&2; echo project; return 0; } ;; esac ;;
     retro.schedule) [[ $v =~ ^(mon|tue|wed|thu|fri|sat|sun)\ ([01][0-9]|2[0-3]):[0-5][0-9]$ ]] && ok=1 ;;
     retro.account) [[ $v == '~'/* ]] && v=$HOME/${v#'~/'}; [[ $v == /* ]] && [ -d "$v" ] && ok=1 ;;   # absolute: the launcher runs from elsewhere
-    retro.sections) local l; l=$(jq -r 'if type == "array" and length > 0 and all(.[]; IN("units", "context", "waste", "feedback", "coordinator", "memory", "protocol", "features", "sizing")) then .[] else error end' <<<"$v" 2>/dev/null) && v=$l && ok=1 ;;
+    retro.sections) local l; l=$(jq -r 'if type == "array" and length > 0 and all(.[]; IN("units", "context", "waste", "spend", "feedback", "coordinator", "memory", "protocol", "features", "sizing")) then .[] else error end' <<<"$v" 2>/dev/null) && v=$l && ok=1 ;;
     features.review_inbox) case $v in false) ok=1 ;;
       true) case $(config host 2>/dev/null) in bitbucket|forgejo) ok=1 ;; esac; [ -n "$ok" ] ||
               { echo "warning: features.review_inbox needs host=bitbucket or forgejo (GitHub support is a TODO): off" >&2; echo false; return 0; } ;;

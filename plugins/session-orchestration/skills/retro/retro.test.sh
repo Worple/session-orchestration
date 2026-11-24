@@ -138,6 +138,35 @@ grep -q $'\tMNO-6\t' <<<"$out" || fail "replies: a cp on another line or a pytho
 grep -q $'\tPQR-8\t' <<<"$out" && grep -q $'\tSTU-1\t' <<<"$out" || fail "replies: a report under another key, or refused, isn't written" "$out"
 grep -q "'wrote': 5," <<<"$out" || fail "replies: Bash writes and the reply tool's report count as written" "$out"
 rm "$a"/rrrrrrrr-000[1-7].jsonl
+# Written by its successor (Supersedes: its id), under the key without the project's prefix (folder ZZ: replies/7.md),
+# or by another session during its life; not by one after it ended.
+cat > "$a/a0000001-0001.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-10-11T08:00:00.000Z","message":{"content":"Work on VWX-1"}}
+EOF
+cat > "$a/a0000002-0001.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-10-11T10:00:00.000Z","message":{"content":"Work on VWX-1: continue. Supersedes: a0000001"}}
+{"type":"assistant","timestamp":"2026-10-11T10:00:05.000Z","requestId":"g1","message":{"content":[{"type":"tool_use","id":"g2","name":"Write","input":{"file_path":"/p/replies/VWX-1.md"}}]}}
+EOF
+cat > "$a/a0000003-0001.jsonl" <<'EOF'
+{"type":"user","cwd":"/home/u/ZZ/.worktrees/ZZ-7","timestamp":"2026-10-11T08:00:00.000Z","message":{"content":"Work on ZZ-7"}}
+{"type":"assistant","timestamp":"2026-10-11T08:00:05.000Z","requestId":"g3","message":{"content":[{"type":"tool_use","id":"g4","name":"Write","input":{"file_path":"/p/replies/7.md"}}]}}
+EOF
+cat > "$a/a0000004-0001.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-10-11T08:00:00.000Z","message":{"content":"Work on ABC-5"}}
+{"type":"user","timestamp":"2026-10-11T09:00:00.000Z","message":{"content":"still on it"}}
+EOF
+cat > "$a/a0000005-0001.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-10-11T08:00:00.000Z","message":{"content":"Work on ABC-6"}}
+{"type":"user","timestamp":"2026-10-11T08:10:00.000Z","message":{"content":"bye"}}
+EOF
+cat > "$a/a0000006-0001.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-10-11T08:30:00.000Z","message":{"content":"coordinate"}}
+{"type":"assistant","timestamp":"2026-10-11T08:30:05.000Z","requestId":"g5","message":{"content":[{"type":"tool_use","id":"g6","name":"Write","input":{"file_path":"/p/replies/ABC-5.md"}},{"type":"tool_use","id":"g7","name":"Write","input":{"file_path":"/p/replies/ABC-6.md"}}]}}
+EOF
+out=$(retro replies 7 2>&1)
+grep -qE $'^a000000[1-4]\t' <<<"$out" && fail "replies: a successor's write, the key without the project prefix, another session's write during its life" "$out"
+grep -q $'^a0000005\tABC-6\t' <<<"$out" || fail "replies: another session's write after it ended doesn't count" "$out"
+rm "$a"/a000000[1-6]-0001.jsonl
 
 # Added after the counts above too: a headless permission test (-p) with a denial; a review session that posted a
 # comment and whose user ran a `!` command; a task session with a merge that ran, one that was denied, and a heredoc
@@ -590,7 +619,7 @@ out=$(retro replies 7 --project '-kp$' 2>&1)
 grep -q "'task': 0," <<<"$out" && grep -q '^note: 1 sessions .*Pass --project ROOT' <<<"$out" || fail "replies: no task by the default keys, a note" "$out"
 
 # sections: a plugin run writes no project-only section, a project run no plugin-only one; retro.sections narrows them
-[ "$(retro sections plugin | tr '\n' ' ')" = "units context waste feedback protocol features sizing " ] || fail "sections plugin" "$(retro sections plugin)"
+[ "$(retro sections plugin | tr '\n' ' ')" = "units context waste spend feedback protocol features sizing " ] || fail "sections plugin" "$(retro sections plugin)"
 [ "$(retro sections project | tr '\n' ' ')" = "units context waste feedback coordinator memory " ] || fail "sections project" "$(retro sections project)"
 out=$(retro sections plugin memory units sizing 2>&1)
 [ "$out" = $'skipped: memory (not a plugin section)\nunits\nsizing' ] || fail "sections: the listed ones the scope has" "$out"
@@ -607,4 +636,43 @@ echo '{"type":"user","timestamp":"2026-10-12T13:00:00.000Z","message":{"content"
 {"type":"assistant","message":{"id":"m1","usage":{"input_tokens":5}}}' > "$tmp/rr.jsonl"
 out=$(cd "$here" && python3 -c 'import sys, retro; print(retro.stat(sys.argv[1])["task"])' "$tmp/rr.jsonl")
 [ "$out" = retro-plugin ] || fail "a retro run's task key" "$out"
+
+# spend's command readers: suite runs (full or by section), gh calls, handovers, rate limits
+out=$(cd "$here" && python3 -c '
+import retro
+T = "plugins/x/session-status.test.sh"
+assert retro.suite_runs(f"bash {T}") == ["session-status.test.sh:full"]
+assert retro.suite_runs(f"cd /w && bash {T} pane start 2>&1 | tail -5") == ["session-status.test.sh:2"]
+assert retro.suite_runs(f"t={T}; bash \"$t\" > /tmp/o 2>&1; echo $?") == ["session-status.test.sh:full"]
+assert retro.suite_runs(f"./retro.test.sh && bash -x {T} NAME") == ["retro.test.sh:full", "session-status.test.sh:1"]
+assert retro.suite_runs(f"grep -n section {T} | head") == [] and retro.suite_runs(f"sed -n 1,9p {T}") == []
+assert retro.suite_runs(f"git diff --stat -- {T}; wc -l {T}") == [] and retro.suite_runs(f"t={T}; grep -c section \"$t\"") == []
+assert retro.GH.search("cd x && gh pr view 3 --json state").group(1, 2) == ("pr", "view")
+assert retro.GH.search("[ \"$(gh pr view 3)\" = MERGED ]") and retro.GH.search("until gh pr checks 3; do sleep 9; done")
+assert not retro.GH.search("echo \"the gh calls that fail\"") and not retro.GH.search("grep -n \"gh pr merge\" hook.sh")
+assert retro.HANDOVER.search("/p/skills/orchestrating-sessions/session-status --handover --escalate")
+assert retro.HANDOVER.search("S=/p/session-status; \"$S\" --handover KEY")
+assert not retro.HANDOVER.search("grep -n -e --owner -e \"--handover\" session-status.test.sh")
+assert retro.RATE.search("GraphQL: API rate limit already exceeded for user ID 1")
+print("ok")' 2>&1)
+[ "$out" = ok ] || fail "spend: suite_runs, GH, HANDOVER, RATE" "$out"
+out=$(retro spend 7 "$tmp/sp" 2>&1) && grep -q '^# Spend' <<<"$out" && [ -s "$tmp/sp/spend-req.tsv" ] || fail "spend: runs on the fixture" "$out"
+out=$(TZ=UTC HOME=$tmp/empty python3 -I "$here/retro.py" --until 2026-10-13T12:00:00 spend 7 "$tmp/sp0" 2>&1) || fail "spend: no transcripts" "$out"
+# waste: a classifier refusal, the denied call's own bash row, then the same opening again: one retry
+mkdir -p "$tmp/w"
+printf '%s\n' $'session\tts\tkind\tdetail\tdetail2\ttest' \
+  $'s1\t2026-10-12T10:00:00\tdeny\tBash: gh pr merge 7 --rebase\tconfig/classifier: no\t' \
+  $'s1\t2026-10-12T10:00:00\tbash\tgh pr merge 7 --rebase\t\t' \
+  $'s1\t2026-10-12T10:01:00\tbash\tgh pr merge 7 --rebase\t\t' > "$tmp/w/events.tsv"
+printf '%s\n' $'session\tts\tminutes\ttool\tdecision\tinput\tsleep' $'s1\t2026-10-12T10:00:00\t9\tBash\t\tgh pr checks 7 --watch\t' > "$tmp/w/waits.tsv"
+out=$(retro waste "$tmp/w" 2>&1)
+grep -q "^deny 1 {'refusal': 1}" <<<"$out" && grep -q "^retries 1 " <<<"$out" && grep -q "^waits 1 minutes 9 \[('ci-watch', 1, 9)\]" <<<"$out" ||
+  fail "waste: deny class, retry, waits by class" "$out"
+# merges: units' merge rows against the host's PR list
+printf '%s\n' $'kind\tid\tsession\tts\tcommand' $'merge\to/r#5\ts1\t2026-10-12T10:00:00\tgh pr merge 5' \
+  $'merge\to/r#5\ts1\t2026-10-12T10:05:00\tgh pr merge 5' $'merge\to/r#6\ts1\t2026-10-12T11:00:00\tgh pr merge 6' > "$tmp/w/units.tsv"
+echo '[{"number":5,"createdAt":"2026-10-12T09:00:00Z","mergedAt":"2026-10-12T10:30:00Z"},{"number":6,"createdAt":"2026-10-12T09:00:00Z","mergedAt":null}]' > "$tmp/w/prs.json"
+out=$(retro merges "$tmp/w" "$tmp/w/prs.json" 2>&1)
+grep -q '^merge rows 3 distinct 2 dup \[5\] not merged \[6\]' <<<"$out" && grep -q '^host: merged in window 1 opened 2' <<<"$out" ||
+  fail "merges: distinct, dup, not merged, host counts" "$out"
 echo ok

@@ -20,7 +20,7 @@ dup	plugins/session-orchestration/README.md | plugins/session-orchestration/skil
 # Each feature doc says where its own key lives; a pointer would cost as much as the sentence.
 dup	plugins/session-orchestration/features/notify.md | plugins/session-orchestration/features/remote.md: in the person's claude coordination.local.json or the person-wide config session-orchestration config.json a person key
 # A feature doc's config table and setup's table of every key (docs review B1 moves the latter to config.md).
-dup	plugins/session-orchestration/features/retro.md | plugins/session-orchestration/skills/setting-up-coordination/SKILL.md: json list of section names units context waste feedback coordinator memory protocol features sizing
+dup	plugins/session-orchestration/features/retro.md | plugins/session-orchestration/skills/setting-up-coordination/SKILL.md: json list of section names units context waste spend feedback coordinator memory protocol features
 
 # A quoted line the scripts print, so the reader recognises it: status-reference.md records it, the doc that acts on
 # it quotes it.
