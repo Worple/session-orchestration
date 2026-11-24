@@ -10,6 +10,8 @@ dir=$tmp/.config/msgraph-cli; mkdir -p "$dir"; f=$dir/token.json
 cat > "$tmp/writer.mjs" <<'EOF'
 import { writeFileSync } from 'fs';
 const [file, n, start] = process.argv.slice(2);
+// A writer that starts after the shared moment proves nothing about the race: say so (start 0 means no race).
+if (Number(start) && Date.now() >= Number(start)) { console.error('writer started late'); process.exit(3); }
 while (Date.now() < Number(start)) {}
 writeFileSync(file, JSON.stringify({ refresh_token: 'r'.repeat(4000 + Number(n) * 7), n: Number(n) }, null, 2), 'utf-8');
 EOF
@@ -18,13 +20,14 @@ echo '{}' > "$f"; before=$(ls -i "$f" | awk '{print $1}')
 node "$tmp/writer.mjs" "$f" 1 0
 [ "$(ls -i "$f" | awk '{print $1}')" != "$before" ] || { echo "the preload didn't engage: token.json was written in place"; exit 1; }
 for r in $(seq 10); do
-  start=$(( $(node -p 'Date.now()') + 300 ))
-  for i in $(seq 12); do node "$tmp/writer.mjs" "$f" "$i" "$start" & done
-  wait
+  start=$(( $(node -p 'Date.now()') + 1500 )); pids=()
+  for i in $(seq 12); do node "$tmp/writer.mjs" "$f" "$i" "$start" & pids+=($!); done
+  for p in "${pids[@]}"; do wait "$p" || { echo "round $r: a writer started after the shared moment"; exit 1; }; done
   node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf-8"))' "$f" 2>/dev/null ||
     { echo "round $r: token.json doesn't parse: …$(tail -c 40 "$f")"; exit 1; }
 done
 [ "$(ls "$dir")" = token.json ] || { echo "temp files left: $(ls "$dir")"; exit 1; }
 # Another file keeps the plain write.
-node "$tmp/writer.mjs" "$tmp/other.json" 1 0 && [ -s "$tmp/other.json" ] && [ "$(ls "$tmp" | grep -c tmp)" = 0 ]
+node "$tmp/writer.mjs" "$tmp/other.json" 1 0 && [ -s "$tmp/other.json" ] && [ "$(ls "$tmp" | grep -c tmp)" = 0 ] ||
+  { echo "another file: not written plainly ($(ls "$tmp"))"; exit 1; }
 echo ok

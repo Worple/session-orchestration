@@ -43,6 +43,8 @@ echo '{"value":[{"id":"ev1","isOrganizer":false,"responseStatus":{"response":"no
 
 cat > "$tmp/bin/graph" <<EOF
 #!/bin/sh
+# Every call carries the atomic token write (msgraph-atomic-token.mjs); a call without it is logged.
+case "\$NODE_OPTIONS" in *"--import \"$here/msgraph-atomic-token.mjs\""*) ;; *) echo "\$*" >> $F/no-preload ;; esac
 case "\$1" in
   status) echo '{"user":{"id":"u-me","mail":"me@ex.org","displayName":"Max Power"}}' ;;
   chat) [ "\$3" = team ] && echo '{"members":[{"userId":"u-me"},{"userId":"u-tm"}]}' || echo '{"members":[{"userId":"u-dev"}]}' ;;
@@ -121,4 +123,5 @@ printf '#!/bin/sh\n[ "$1" = mail ] && [ ! -f %s ] && touch %s && echo %s >&2 && 
 rm "$tmp/cache/people.json"; printf '#!/bin/sh\necho %s >&2; exit 1\n' "'{\"error\":{\"type\":\"auth_error\"}}'" > "$tmp/bin/graph"
 out=$(run) && { echo "a failure exited 0"; exit 1; }
 [ "$out" = "teams: msgraph auth_error error" ] || { echo "failure: $out"; exit 1; }
+[ ! -s "$F/no-preload" ] || { echo "Graph calls without the token preload: $(head -3 "$F/no-preload")"; exit 1; }
 echo ok

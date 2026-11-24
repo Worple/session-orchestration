@@ -42,13 +42,15 @@ messages_notices() {
     *) bin=$cli ;;
   esac
   # The calls below run in parallel and each may refresh the token: the preload makes the CLI's token.json write
-  # atomic, or a shorter write over a longer one corrupts it and logs the user out (msgraph-atomic-token.mjs).
-  local nodeopts; nodeopts="--import \"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/msgraph-atomic-token.mjs\" ${NODE_OPTIONS:-}"
+  # atomic, or a shorter write over a longer one corrupts it and logs the user out (msgraph-atomic-token.mjs). The
+  # plugin's copy, so an overriding msgraph.sh (find_module) gets it too; local -x: every call in this run.
+  local preload=$LIB_DIR/messages/msgraph-atomic-token.mjs
+  [ ! -f "$preload" ] || local -x NODE_OPTIONS="--import \"$preload\" ${NODE_OPTIONS:-}"
   # graph OUTFILE ARGS…: stdout to OUTFILE; errors (JSON on stderr) to $T/err, and the call to $T/failed. An error
   # the CLI marks retryable (a Graph 5xx, a throttle) gets one more try after a pause: one blip fails no check.
   msgraph_call() { local out=$1 e; shift; e=$(mktemp "$T/e.XXXXXX")
-    NODE_OPTIONS=$nodeopts $bin "$@" > "$out" 2>"$e" ||
-      { grep -q '"retryable":true' "$e" && sleep "${MSGRAPH_RETRY_PAUSE:-1}" && NODE_OPTIONS=$nodeopts $bin "$@" > "$out" 2>"$e"; } ||
+    $bin "$@" > "$out" 2>"$e" ||
+      { grep -q '"retryable":true' "$e" && sleep "${MSGRAPH_RETRY_PAUSE:-1}" && $bin "$@" > "$out" 2>"$e"; } ||
       { cat "$e" >> "$T/err"; echo "$*" >> "$T/failed"; }; }
   msgraph_failed() { [ -s "$T/failed" ] || return 1
     echo "teams: msgraph $(grep -o '"type":"[a-z_]*"' "$T/err" | head -1 | cut -d'"' -f4) error"; }
