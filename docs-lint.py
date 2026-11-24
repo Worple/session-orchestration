@@ -18,6 +18,7 @@ import os
 import re
 import subprocess
 import sys
+from urllib.parse import unquote
 
 DUP_WORDS = 14
 EXTERNAL = {"gh", "git", "claude", "jq", "curl", "npm", "npx", "node", "tsc", "python3", "pip3", "brew", "crontab",
@@ -52,15 +53,25 @@ script_text = "\n".join(scripts)
 hits = []  # (check, key)
 
 # code: each fenced block line and each inline span, as (line number, text)
-FENCE = re.compile(r"^\s*(```|~~~)")
+FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
+
+
+def lines_of(text):
+    """(number, line, fenced) per line; a fence closes only on its own character, at least as long."""
+    opener = None
+    for n, line in enumerate(text.splitlines(), 1):
+        m = FENCE.match(line)
+        if m and opener is None:
+            opener = m.group(1)
+        elif m and m.group(1)[0] == opener[0] and len(m.group(1)) >= len(opener):
+            opener = None
+        else:
+            yield n, line, opener is not None
 
 
 def code_of(text):
-    fenced = False
-    for n, line in enumerate(text.splitlines(), 1):
-        if FENCE.match(line):
-            fenced = not fenced
-        elif fenced:
+    for n, line, fenced in lines_of(text):
+        if fenced:
             yield n, line
         else:
             for m in re.finditer(r"(`+)(.+?)\1", line):
@@ -68,22 +79,19 @@ def code_of(text):
 
 
 def prose_lines(text):
-    """Lines outside fenced blocks, with their numbers."""
-    fenced = False
-    for n, line in enumerate(text.splitlines(), 1):
-        if FENCE.match(line):
-            fenced = not fenced
-        elif not fenced:
-            yield n, line
+    return ((n, line) for n, line, fenced in lines_of(text) if not fenced)
 
 
 # rule
 rules = []
 if os.path.exists("docs-lint-rules.txt"):
-    for line in open("docs-lint-rules.txt", encoding="utf-8"):
+    for i, line in enumerate(open("docs-lint-rules.txt", encoding="utf-8"), 1):
         if line.strip() and not line.startswith("#"):
-            home, rx = line.rstrip("\n").split("\t", 1)
-            rules.append((home, rx, re.compile(rx)))
+            try:
+                home, rx = line.rstrip("\n").split("\t", 1)
+                rules.append((home, rx, re.compile(rx)))
+            except (ValueError, re.error) as e:
+                sys.exit(f"bad docs-lint-rules.txt line {i} (want home<TAB>regex): {line.strip()} ({e})")
 for home, rx, r in rules:
     if home != "-" and not r.search(docs.get(home, "")):
         hits.append(("rule", f"{rx} not in its home {home}"))
@@ -95,8 +103,10 @@ for home, rx, r in rules:
 FLAG = re.compile(r"(?<![\w-])--[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*")
 seen = set()
 for p, text in docs.items():
-    for _, span in code_of(text):
-        first = re.sub(r"^[!$]\s*", "", span.strip()).split(" ", 1)[0]
+    # each command of a chain or pipe by its own first word, past `!`, `$` and VAR=value words
+    spans = (s for _, code in code_of(text) for s in re.split(r"&&|\|\||[;|(]", code))
+    for span in spans:
+        first = (re.sub(r"^\s*[!$]?\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*", "", span).split() or [""])[0]
         if os.path.basename(first) in EXTERNAL:
             continue
         for flag in FLAG.findall(span):
@@ -107,13 +117,14 @@ for p, text in docs.items():
                 hits.append(("flag", f"{p}: {flag}"))
 
 # link
-LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
+# inline links (an optional <…> and "title") and reference definitions `[ref]: target`
+LINK = re.compile(r"\[[^\]]*\]\(<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\)|^\s*\[[^\]]+\]:\s*<?([^\s>]+)")
 for p, text in docs.items():
     for n, line in prose_lines(text):
-        for target in LINK.findall(re.sub(r"`[^`]*`", "", line)):
+        for target in (a or b for a, b in LINK.findall(re.sub(r"`[^`]*`", "", line))):
             if re.match(r"^[a-z][a-z0-9+.-]*:|^#", target):
                 continue
-            path = os.path.normpath(os.path.join(os.path.dirname(p), target.split("#")[0]))
+            path = os.path.normpath(os.path.join(os.path.dirname(p), unquote(target.split("#")[0])))
             if not os.path.exists(path):
                 hits.append(("link", f"{p}: {target}"))
 
@@ -121,12 +132,11 @@ for p, text in docs.items():
 for p, text in docs.items():
     if os.path.basename(p) == "migrations.md":
         continue
-    for n, line in enumerate(text.splitlines(), 1):
-        if re.search(r"from the release after", line, re.I):
-            hits.append(("release", f"{p}: {line.strip()}"))
-    # the phrase split over a line break
-    for m in re.finditer(r"from the release\s*\n\s*after", text, re.I):
-        hits.append(("release", f"{p}: line {text.count(chr(10), 0, m.start()) + 1}"))
+    # the phrase may wrap at any of its words; the key is the line it starts on
+    for m in re.finditer(r"from\s+the\s+release\s+after\b", text, re.I):
+        start = text.rfind("\n", 0, m.start()) + 1
+        end = text.find("\n", start)
+        hits.append(("release", f"{p}: {text[start:end if end >= 0 else None].strip()}"))
 
 # dup: word runs shared by two docs, each run reported once per pair
 words = {}
@@ -137,28 +147,30 @@ for p, ws in words.items():
     for i in range(len(ws) - DUP_WORDS + 1):
         where.setdefault(tuple(ws[i:i + DUP_WORDS]), set()).add(p)
 for p, ws in sorted(words.items()):
-    i = 0
-    while i <= len(ws) - DUP_WORDS:
-        others = sorted(o for o in where[tuple(ws[i:i + DUP_WORDS])] if o > p)
-        if not others:
-            i += 1
-            continue
-        j = i + 1  # extend the run while the same others share it
-        while j <= len(ws) - DUP_WORDS and set(others) <= where[tuple(ws[j:j + DUP_WORDS])]:
-            j += 1
-        for o in others:
+    prev = set()
+    for i in range(len(ws) - DUP_WORDS + 1):
+        cur = {o for o in where[tuple(ws[i:i + DUP_WORDS])] if o > p}
+        for o in sorted(cur - prev):  # a run with o starts here
             hits.append(("dup", f"{p} | {o}: {' '.join(ws[i:i + DUP_WORDS])}"))
-        i = j + DUP_WORDS - 1
+        prev = cur
 
 # allow list
 allowed = set()
-if os.path.exists("docs-lint-allow.txt"):
-    for line in open("docs-lint-allow.txt", encoding="utf-8"):
-        line = line.rstrip("\n")
-        if line.strip() and not line.startswith("#"):
-            allowed.add(line)
-found = {f"{c}\t{k}" for c, k in hits}
 bad = 0
+if os.path.exists("docs-lint-allow.txt"):
+    reason = False  # a `#` line above, in the same blank-line-separated group
+    for i, line in enumerate(open("docs-lint-allow.txt", encoding="utf-8"), 1):
+        line = line.rstrip("\n")
+        if not line.strip():
+            reason = False
+        elif line.startswith("#"):
+            reason = True
+        else:
+            allowed.add(line)
+            if not reason:
+                print(f"docs-lint-allow.txt line {i} has no # line saying why above it: {line}")
+                bad = 1
+found = {f"{c}\t{k}" for c, k in hits}
 for h in sorted(found - allowed):
     print(h)
     bad = 1

@@ -41,12 +41,28 @@ expect flag-missing 1 $'flag\tplugins/p/skills/s/b.md: --gone'
 expect flag-missing-in-block 1 $'flag\tplugins/p/skills/s/b.md: --also-gone'
 
 fixture
+printf 'Others: `FOO=1 gh pr merge --zzz`, `cd x && gh pr view --yyy`.\n````\n```\ntool --in-inner-fence\n```\n````\n' >>"$tmp/t/plugins/p/a.md"
+expect flag-other-tools 1 $'flag\tplugins/p/a.md: --in-inner-fence'
+grep -qF -e '--zzz' -e '--yyy' <<<"$out" && { echo "FAIL flag-other-tools: checked another tool's flag: $out"; fails=1; }
+
+fixture
 printf 'See [x](../nowhere.md#top) and [web](https://example.com) and [here](#a).\n' >>"$tmp/t/plugins/p/skills/s/b.md"
 expect link-broken 1 $'link\tplugins/p/skills/s/b.md: ../nowhere.md#top'
 
 fixture
+printf 'A [t](gone.md "title"), [e](b%%20c.md).\n\n[r]: gone2.md\n' >>"$tmp/t/plugins/p/a.md"
+: >"$tmp/t/plugins/p/b c.md"
+expect link-titled 1 $'link\tplugins/p/a.md: gone.md'
+expect link-reference 1 $'link\tplugins/p/a.md: gone2.md'
+grep -qF 'b%20c' <<<"$out" && { echo "FAIL link-encoded: $out"; fails=1; }
+
+fixture
 printf 'It prints more (from the release after the widget).\n' >>"$tmp/t/plugins/p/skills/s/b.md"
 expect release-note 1 $'release\tplugins/p/skills/s/b.md: It prints more (from the release after the widget).'
+
+fixture
+printf 'It prints more, from the\nrelease after the widget.\n' >>"$tmp/t/plugins/p/skills/s/b.md"
+expect release-note-wrapped 1 $'release\tplugins/p/skills/s/b.md: It prints more, from the'
 
 fixture
 printf '| m1 | the release after x | from the release after x |\n' >"$tmp/t/plugins/p/skills/s/migrations.md"
@@ -57,12 +73,27 @@ dup='A session that ends its turn waiting on CI sends no report until the run is
 printf '%s.\n' "$dup" >>"$tmp/t/plugins/p/a.md"
 printf 'Note: %s, always.\n' "$dup" >>"$tmp/t/plugins/p/skills/s/b.md"
 expect dup-text 1 $'dup\tplugins/p/a.md | plugins/p/skills/s/b.md: a session that ends its turn'
+dupline=$(grep '^dup' <<<"$out")
+# listed without a reason: still fails
+printf '%s\n' "$dupline" >"$tmp/t/docs-lint-allow.txt"
+expect dup-allowed-no-reason 1 'has no # line saying why'
 # listed with a reason: passes
-grep '^dup' <<<"$out" >"$tmp/t/docs-lint-allow.txt"
+printf '# a fixture\n%s\n' "$dupline" >"$tmp/t/docs-lint-allow.txt"
 expect dup-allowed 0 ok
 
 fixture
-printf 'flag\tplugins/p/a.md: --never\n' >"$tmp/t/docs-lint-allow.txt"
+dup2='the second passage is shared by three docs and runs on well past the first one by several words'
+printf 'Alpha one two three four five six seven %s.\n' "$dup2" >>"$tmp/t/plugins/p/a.md"
+printf 'Alpha one two three four five six seven %s and more.\n' "${dup2% by several words}" >>"$tmp/t/plugins/p/skills/s/b.md"
+printf 'Zed %s.\n' "$dup2" >"$tmp/t/plugins/p/c.md"
+expect dup-overlapping 1 $'dup\tplugins/p/a.md | plugins/p/c.md: the second passage'
+
+fixture
+printf -- 'no tab here\n' >"$tmp/t/docs-lint-rules.txt"
+expect rules-malformed 1 'bad docs-lint-rules.txt line 1'
+
+fixture
+printf '# a fixture\nflag\tplugins/p/a.md: --never\n' >"$tmp/t/docs-lint-allow.txt"
 expect allow-stale 1 $'stale docs-lint-allow.txt line: flag\tplugins/p/a.md: --never'
 
 exit $fails
