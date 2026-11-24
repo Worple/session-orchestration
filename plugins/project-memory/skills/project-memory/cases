@@ -63,7 +63,22 @@ field() { sed -n "s/^- $1: //p" "$2" | head -1; }
 title_of() { sed -n '1s/^# //p' "$1"; }
 all_cases() { find "$STORE" -mindepth 2 -maxdepth 2 -name '*.md' 2>/dev/null | sort; }
 open_cases() { all_cases | while read -r f; do [ "$(field status "$f")" = open ] && echo "$f"; done; }
-seen_n() { field seen "$1" | tr ',' '\n' | grep -c .; }
+# rows [open]: each case's list row (seen count, status's first word, path, title; tabs), in all_cases' order; open:
+# only the cases whose status is exactly open. One awk over every file, not field's sed and head per file and field.
+rows() {
+  local fs=() f
+  while read -r f; do fs+=("$f"); done < <(all_cases)
+  [ ${#fs[@]} = 0 ] || awk -v only="${1:-}" 'function val(l, k) { return substr(l, length(k) + 1) }
+    BEGIN { for (i = 1; i < ARGC; i++) { f = ARGV[i]; n = 0; st = ""; se = 0; ss = 0; t = ""; hs = 0
+      while ((getline l < f) > 0) {
+        if (++n == 1 && l ~ /^# /) t = substr(l, 3)
+        if (!hs && index(l, "- status: ") == 1) { hs = 1; st = val(l, "- status: ") }
+        if (!ss && index(l, "- seen: ") == 1) { ss = 1; k = split(val(l, "- seen: "), a, ","); for (j = 1; j <= k; j++) se += a[j] != "" }
+      }
+      close(f)
+      if (only == "open" && st != "open") continue
+      w = st; sub(/ .*/, "", w); printf "%s\t%s\t%s\t%s\n", se, w, f, t } }' "${fs[@]}"
+}
 # Title words for the dedup: 4+ letters, without the ones nearly every case has.
 words() { tr 'A-Z' 'a-z' <<<"$1" | tr -cs 'a-z0-9' '\n' | awk 'length >= 4' |
   grep -vxE 'session|sessions|status|plugin|when|with|that|this|from|does|into|than|them|they|have|after' | sort -u; }
@@ -118,14 +133,9 @@ seen)
   field seen "$f" | tr -d ' ' | tr ',' '\n' | grep -qxF "$TODAY" && exit 0
   sed -i.bak -E "s/^(- seen: .*)$/\1, $TODAY/" "$f" && rm -f "$f.bak" ;;
 list)
-  case ${2:-} in --all) sel=all_cases ;; '') sel=open_cases ;; *) die "usage: cases list [--all]" ;; esac
-  $sel | while read -r f; do
-    printf '%s\t%s\t%s\t%s\n' "$(seen_n "$f")" "$(field status "$f" | cut -d' ' -f1)" "$f" "$(title_of "$f")"
-  done | sort -t$'\t' -k1,1nr ;;
-count)
-  n=0 m=0
-  while read -r f; do [ -n "$f" ] || continue; n=$((n + 1)); [ "$(seen_n "$f")" -lt 2 ] || m=$((m + 1)); done <<<"$(open_cases)"
-  [ "$n" = 0 ] || echo "$n open ($m seen ≥2×)" ;;
+  case ${2:-} in --all) sel= ;; '') sel=open ;; *) die "usage: cases list [--all]" ;; esac
+  rows $sel | sort -t$'\t' -k1,1nr ;;
+count) rows open | awk -F'\t' '{ n++; m += $1 >= 2 } END { if (n) print n " open (" m " seen ≥2×)" }' ;;
 mark)
   f=${2:-}; [ -f "$f" ] || die "usage: cases mark FILE sent URL | fixed WHAT | dropped"
   case ${3:-} in sent) [ -n "${4:-}" ] || die "sent needs the URL"; s="sent $4" ;; fixed) [ -n "${4:-}" ] || die "fixed needs what changed"; s="fixed $4" ;;
