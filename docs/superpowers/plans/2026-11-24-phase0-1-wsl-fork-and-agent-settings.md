@@ -39,7 +39,7 @@
   | 3 | busy, waiting, locked, or interactive and needs resume |
   | 4 | over `SESSION_STATUS_MAX_RESUME` (200000) tokens for a resume |
   | 5 | outside policy; last line is `needs your approval: set "NAME" (ID8) to <changes>` |
-- **Scrubbing:** repo text must pass `./scrub-check.sh`: no personal names, emails or `/Users/` paths.
+- **Scrubbing:** repo text must pass `./scrub-check.sh`: no personal names, emails or macOS home paths (`/[U]sers/…`).
 - **Branches:** `setup/wsl` for Phase 0 and `feat/agent-settings` for Phase 1. Each is merged to the fork's `main` by a PR.
 
 ## Calls this plan makes beyond the spec
