@@ -2270,6 +2270,20 @@ worktrees_for() {
   done < "$TMP/repos"
 }
 
+# adapter_done KEY…: `adapter done`'s lines, less each key K with a worktree on branch K-N (N digits: the task's next
+# PR) that `done` doesn't call finished too, so a task whose first PR merged stays open while its second one runs.
+adapter_done() {
+  local out pairs fin=
+  out=$(adapter done "$@") || return
+  [ -n "$out" ] || return 0
+  pairs=$(while read -r r; do git -C "$r" worktree list --porcelain 2>/dev/null; done < "$TMP/repos" | sed -n 's|^branch refs/heads/||p' |
+    awk -F'\t' 'NR == FNR { d[$1]; next } { for (k in d) if (index($0, k "-") == 1 && substr($0, length(k) + 2) ~ /^[0-9]+$/) print k "\t" $0 }' <(printf '%s\n' "$out") -)
+  [ -z "$pairs" ] || fin=$(adapter done $(cut -f2 <<<"$pairs") | cut -f1)
+  awk -F'\t' -v pairs="$pairs" -v fin="$fin" 'BEGIN { n = split(fin, a, "\n"); for (i = 1; i <= n; i++) f[a[i]]
+      n = split(pairs, a, "\n"); for (i = 1; i <= n; i++) { split(a[i], p, "\t"); if (!(p[2] in f)) open[p[1]] } }
+    !($1 in open)' <<<"$out"
+}
+
 # --peek ID [N]: what a session said and did lately, for the pane's Peek (one parser: session-peek.jq).
 if [ -n "$PEEK" ]; then
   want=${1:-} n=${2:-12}
@@ -3081,7 +3095,7 @@ else
   # An adapter that didn't answer the sweep may still describe these keys: finished ones (`done`) are left out
   # for Leftovers, the rest looked up (`tasks KEY…`); not answered or failed, they're bare rows.
   if [ -n "$ADAPTER" ] && [ -s "$TMP/pointed" ]; then
-    adapter done $(cat "$TMP/pointed") 2>/dev/null | cut -f1 | grep . > "$TMP/pointed.done"
+    adapter_done $(cat "$TMP/pointed") 2>/dev/null | cut -f1 | grep . > "$TMP/pointed.done"
     grep -vxF -f "$TMP/pointed.done" "$TMP/pointed" > "$TMP/pointed.open"
     mv "$TMP/pointed.open" "$TMP/pointed"
   fi
@@ -3114,6 +3128,8 @@ pr_owner() {  # KEY EXTRA STATUS [HELD: `sub`, its per-PR events are a sub's]
 : > "$TMP/prs"
 tr '\t' '\037' < "$TMP/tasks" | while IFS=$'\037' read -r k st title extra; do
   wt=$(local_for "$k")
+  # a stamp with no PR words drops its " | ": --changes strips the stamp, and the row must read as the stampless one
+  case $extra in ("(PRs "*") | ") extra="${extra% | } " ;; esac
   line=$(printf '%-9s %-14s %s%s | %s' "$k" "$st" "$extra" "$wt" "$(session_for "$k" "$extra" "$wt")")
   seg=$(sub_seg "$k"); [ -z "$seg" ] || title="$seg${title:+ | $title}"
   echo "$line${title:+ | $title}"
@@ -3226,7 +3242,7 @@ leftover_wt() {
 pointed_keys | sort -u | grep -vxF -f <(printf '%s\n' $keys) > "$TMP/cand" || true
 for k in $keys; do awk -v k="$k" '$1==k {print $2}' "$TMP/owners.exact" "$TMP/owners.guess"; done | sort -u > "$TMP/busy_ids"
 if [ -s "$TMP/cand" ]; then
-  : > "$TMP/done"; [ -z "$ADAPTER" ] || adapter done $(cat "$TMP/cand") > "$TMP/done" 2>/dev/null || : > "$TMP/done"
+  : > "$TMP/done"; [ -z "$ADAPTER" ] || adapter_done $(cat "$TMP/cand") > "$TMP/done" 2>/dev/null || : > "$TMP/done"
   grep -vxF -f <(cut -f1 "$TMP/done" "$TMP/reported") "$TMP/cand" | while read -r k; do
     l=$(reported_done "$k") && printf '%s\t%s\n' "$k" "$l"
   done >> "$TMP/reported"
@@ -3318,7 +3334,7 @@ done > "$TMP/st.wtgone"
 { jq -r '.[]?.key' "$af" 2>/dev/null; cut -f1,3 "$TMP/st.entries" | grep -oE "$KEYRE"; } | sort -u | grep -vxF -f <(cut -f1 "$TMP/tasks") > "$TMP/st.keys"
 # Leftovers' call answered its candidates already: ask only about the others.
 cut -f1 "$TMP/done" 2>/dev/null > "$TMP/st.done"; touch "$TMP/cand"; grep -vxF -f "$TMP/cand" "$TMP/st.keys" > "$TMP/st.ask" || true
-[ ! -s "$TMP/st.ask" ] || adapter done $(cat "$TMP/st.ask") 2>/dev/null | cut -f1 >> "$TMP/st.done"
+[ ! -s "$TMP/st.ask" ] || adapter_done $(cat "$TMP/st.ask") 2>/dev/null | cut -f1 >> "$TMP/st.done"
 # The asks' still_applies PRs (ask_approval), each looked up once under a 10 s cap: REF<TAB>STATE of those merged or
 # closed. Re-checked here (the store is anyone's to write) and run as argv; a gh error or timeout flags nothing.
 jq -r '[.[]? | .still_applies | select(type == "string" and test("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#[0-9]+$"))] | unique[]' "$af" 2>/dev/null |
