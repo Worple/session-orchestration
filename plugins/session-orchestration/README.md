@@ -65,6 +65,9 @@ the same settings. Then:
   `"start": {"sidebar": true}` in `.claude/coordination.local.json`: the hook
   lets the coordinator start tasks as sidebar sessions, which then get no status row, idle notice, resume after a
   restart or stop, and you answer their questions in the app rather than through the coordinator.
+  A sidebar session also cannot run above the coordinator's own model: `start_session` takes the same family or a
+  cheaper one, and a higher `plan.models` kind (opus under a sonnet coordinator) silently starts at the coordinator's
+  model. `claude --bg` (`session-status --launch`) has no such cap, so a task that needs the bigger model starts that way.
 
 ## Install
 
