@@ -427,6 +427,9 @@ if [ "${1:-}" = --address ]; then
   exit 0
 fi
 ROOT=$(find_root); cd "$ROOT" || exit 1
+# The sweep and the watcher's poll write no config: one merge for all their config reads (--start's comes after its
+# migration).
+case $SS_FLAG in ''|--changes) coord_memo=$(coord_json 2>/dev/null) coord_memo_pwd=$PWD ;; esac   # --init --check reports its warnings
 # This project's coordinator names (and its handoff's -next, -prev-K): never read as a task key, which a name-shaped
 # key_pattern (tracker none) would otherwise match (issue 44).
 CNRE="$(coord_name "$ROOT")(-next)?(-prev-[0-9]+)?"
@@ -1245,6 +1248,7 @@ if [ "${1:-}" = --start ]; then
   # an older setup's layout made current first, so the reads below see the moved files; shown when it did or asks something
   mg=$("$SELF" --init --migrate 2>&1) || :
   ! grep -qE '^\[|failed' <<<"$mg" || printf '## Migration (answer an ask: session-status --init --migrate --apply=ID or --decline=ID)\n%s\n\n' "$mg"
+  coord_memo=$(coord_json 2>/dev/null) coord_memo_pwd=$PWD
   # Bounded: every task row and actionable footer, but at most 5 lines of Leftovers (the watcher stops those) and of
   # Other sessions; the plain status prints them whole.
   echo '## Status';"$SELF" "$@" | tee "$TMP/rows" | awk -v cmd="$SELF${*:+ $*}" '
@@ -2000,8 +2004,8 @@ else
   # the adapter) writes $TMP/notices.SOURCE and its exit code.
   MSG=$(config messages 2>/dev/null); NSRC=
   # docs_watch (features/docs-watch.md): one line per watched docs page a listed doc wasn't reviewed against
-  DOCS=; [ -n "$BY_KEY" ] || { coord_memo=$(coord_json); [ "$(config features.docs_watch 2>/dev/null)" != true ] ||
-    { DOCS=$(config docs_watch.files 2>/dev/null); DOCS_RE=$(config docs_watch.pattern 2>/dev/null); }; coord_memo=; }
+  DOCS=; [ -n "$BY_KEY" ] || { m0=$coord_memo; [ -n "$m0" ] || coord_memo=$(coord_json); [ "$(config features.docs_watch 2>/dev/null)" != true ] ||
+    { DOCS=$(config docs_watch.files 2>/dev/null); DOCS_RE=$(config docs_watch.pattern 2>/dev/null); }; coord_memo=$m0; }
   [ -n "$BY_KEY" ] || { [ "$MSG" = none ] || NSRC=messages; [ -z "$ADAPTER" ] || NSRC="$NSRC adapter"; [ -z "$PENDING" ] || NSRC="$NSRC pending"; [ -z "$DOCS" ] || NSRC="$NSRC docs"; }
   if [ -n "$NSRC" ]; then
     { [ "$MSG" = none ] || { messages_job > "$TMP/notices.messages" 2>/dev/null; echo $? > "$TMP/notices.messages.rc"; } &

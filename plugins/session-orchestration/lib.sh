@@ -73,10 +73,11 @@ person_keys_drop() {
   echo "del(.approvals, .terminal, .messages, .msgraph, .trusted, .team, .feedback, .telemetry, .handoff, .compact, .pending, .history, .fable, .start, .retro, .docs_watch, .pane, .coordinator, .report_artifacts$( [[ ${1:-} =~ ^[A-Za-z0-9_-]+$ ]] && echo ", .[\"$1\"]")) | if .features | type == \"object\" then del(.features.accounts, .features.accounts_weekly_switch, .features.notify, .features.retro, .features.remote, .features.docs_watch, .features.report_artifacts) else . end"
 }
 
-coord_memo=   # never inherited: valid only for the cwd its caller built it in
+coord_memo= coord_memo_pwd=   # never inherited: valid only for the cwd its caller built it in
 coord_json() {
-  # a caller that reads several keys sets coord_memo=$(coord_json) once: each build spawns ~15 processes
-  [ -n "${coord_memo:-}" ] && { echo "$coord_memo"; return 0; }
+  # a caller that reads several keys sets coord_memo=$(coord_json) once: each build spawns ~15 processes. With
+  # coord_memo_pwd set too, the memo holds only there (a `cd ROOT` subshell reading another project builds its own).
+  [ -n "${coord_memo:-}" ] && [ "${coord_memo_pwd:-$PWD}" = "$PWD" ] && { echo "$coord_memo"; return 0; }
   local f out='{}' j s m p d drop
   # The block of the person's messages module too (e.g. .slack): its settings can name a command to run.
   # Its name from either person's file, the project's winning.
@@ -577,7 +578,7 @@ person_set() {
   [ -s "$f" ] || echo '{}' > "$f" || return 1
   out=$(jq "$@" "if type == \"object\" then $jf else error(\"not a JSON object\") end" "$f") ||
     { echo "$who: $f isn't a JSON object: not written" >&2; return 1; }
-  printf '%s\n' "$out" > "$f"
+  printf '%s\n' "$out" > "$f" && coord_memo=
 }
 
 # usage NAME [KIND [MODEL EFFORT EST [ACT]]]: with telemetry=local or full, one line in the local usage log:
@@ -641,12 +642,20 @@ key_re() {
 # first_key FIRST: the key a first prompt names: only at its start (`Work on KEY`, `Session task: KEY`, `Coordinate
 # KEY`, `KEY:`), not one it mentions further on (history, an example key in docs work). Needs KEYRE (key_re).
 first_key() {
-  grep -m 1 . <<<"$1" | grep -oE "^[[:space:]]*(([Ww]ork on|Session task:|Coordinate) +$KEYRE([^0-9]|$)|$KEYRE:)" | grep -oE "$KEYRE" | head -1
+  local l re="^[[:space:]]*(([Ww]ork on|Session task:|Coordinate) +$KEYRE([^0-9]|$)|$KEYRE:)"
+  # bash's regex (the system regcomp) has no \w, \< or \b, which grep -E takes: a pattern with a \ goes through grep
+  [[ $KEYRE != *\\* ]] || { grep -m 1 . <<<"$1" | grep -oE "$re" | grep -oE "$KEYRE" | head -1; return; }
+  while IFS= read -r l; do [ -z "$l" ] || break; done <<<"$1"   # its first non-empty line, in bash: no process per call
+  [[ $l =~ $re ]] && l=${BASH_REMATCH[0]} && [[ $l =~ $KEYRE ]] && echo "${BASH_REMATCH[0]}"
 }
 # sub_key FIRST: KEY when FIRST starts `Coordinate KEY` (a sub-coordinator, KEY-coordinator, run by the project's
 # coordinator for one big task: it owns KEY although it runs the coordinator commands); fails otherwise. Needs KEYRE.
 sub_key() {
-  grep -m 1 . <<<"$1" | grep -oE "^[[:space:]]*Coordinate +$KEYRE([^0-9]|$)" | sed -E 's/^[[:space:]]*Coordinate +//' | grep -oE "^$KEYRE"
+  local l re="^[[:space:]]*Coordinate +" k="^$KEYRE" c="^[[:space:]]*Coordinate +$KEYRE([^0-9]|$)"
+  [[ $KEYRE != *\\* ]] || { grep -m 1 . <<<"$1" | grep -oE "$c" | sed -E "s/$re//" | grep -oE "$k"; return; }   # as first_key
+  while IFS= read -r l; do [ -z "$l" ] || break; done <<<"$1"
+  [[ $l =~ $c ]] && l=${BASH_REMATCH[0]} && [[ $l =~ $re ]] && l=${l:${#BASH_REMATCH[0]}} &&
+    [[ $l =~ $k ]] && echo "${BASH_REMATCH[0]}"
 }
 # first_prompt TRANSCRIPT [N]: its first prompt (within its first N lines: the hook passes 50), a string or text
 # blocks, skipping isMeta lines and a compaction summary; "" when none. The hook and session-status.

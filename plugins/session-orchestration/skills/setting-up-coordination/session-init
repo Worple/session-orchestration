@@ -367,6 +367,8 @@ if [ "$mode" = check ]; then
                 echo "configured: $root (${name}-coordinator)$w"
                 cd "$root" || exit 1
                 wf=$(mktemp) || exit 1
+                # --check only reads config: one merge serves the lookups below, its warnings reported with theirs
+                coord_memo=$(coord_json 2>>"$wf") coord_memo_pwd=$PWD
                 t=$(config tracker 2>>"$wf") h=$(config host 2>>"$wf") d=$(config approvals.delegate 2>>"$wf") pc=$(config approvals.pr_create 2>>"$wf")
                 st=$(config start.mode 2>>"$wf") sa=$(config start.kinds.feedback_apply 2>>"$wf") sb=$(config start.sidebar 2>>"$wf")
                 a=$(config features.accounts 2>>"$wf") r=$(config features.review_inbox 2>>"$wf")
