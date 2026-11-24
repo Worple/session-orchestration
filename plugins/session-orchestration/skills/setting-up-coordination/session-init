@@ -224,7 +224,8 @@ drift_tbl=$(
   r - '- **Reserved**, whatever' '- **Reserved**, whatever the above says: the user approves in your session, or via a verified relayed approval:' \
     '- **Reserved**, even when approvals are delegated: the user approves in your session, or via a verified relayed approval:'
   r - $'- Replies folder (the plugin\'s' $'- Replies folder (the plugin\'s "folder for this"): `{{k}}`.' '- Replies folder (status reports, plans, review reports): `{{k}}`.'
-  s3=$'- A task is its session\'s name, `{{k}}`: start it with `claude --bg --model M --effort E -n {{k}}` (M, E: what `session-status --kind <kind> {{k}}` prints; paste a ` --advisor A` it prints too).'
+  s3=$'- A task is its session\'s name, `{{k}}`: start it with `claude --bg --model M --effort E -n {{k}}` (M, E: what `session-status --kind <kind> {{k}}` prints; paste the rest it prints too: ` --advisor A`, ` --disallowedTools=…`).'
+  r - '' $'- A task is its session\'s name, `{{k}}`: start it with `claude --bg --model M --effort E -n {{k}}` (M, E: what `session-status --kind <kind> {{k}}` prints; paste a ` --advisor A` it prints too).' "$s3"
   r - $'- A task is its session\'s name, `' $'- A task is its session\'s name, `{{k}}`: start it with `claude --bg -n {{k}}`.' "$s3"
   r - '' $'- A task is its session\'s name, `{{k}}`: start it with `claude --bg --model M --effort E -n {{k}}` (M, E: what `session-status --kind <kind>` prints).' "$s3"
   r - '' $'- A task is its session\'s name, `{{k}}`: start it with `claude --bg --model M --effort E -n {{k}}` (M, E: what `session-status --kind <kind> {{k}}` prints).' "$s3"

@@ -24,7 +24,7 @@ LIB_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # The project layout this plugin migrates to (session-status --init --migrate, stamped in P/setup.json): the highest
 # migration id (m1…) whose detector session-init's --check has, 10 once h1 and h2 joined m9. A release that adds a
 # migration adds 1.
-LAYOUT=11
+LAYOUT=12
 
 # pm_dir: the project-memory plugin's folder (plugin.json lists it as a dependency): the sibling in a checkout of the
 # marketplace, else the installed copy of this account (installed_plugins.json) that has the scripts, this

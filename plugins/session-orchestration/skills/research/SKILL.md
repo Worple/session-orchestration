@@ -1,6 +1,6 @@
 ---
 name: research
-description: Answer a question from outside sources (web, docs, other tools' code), judging what is reliable and applies here, changing nothing. Use for /research <question>, /research other-tools, a research-kind task, or when asked to compare libraries or find how another tool solves a problem.
+description: Answer a question from outside sources (web, docs, other tools' code), judging what is reliable and applies here, changing nothing. Use for /research <question>, /research other-tools (scan other orchestration tools for ideas), a research-kind task, or when asked to compare libraries or find how another tool solves a problem.
 ---
 
 # research
