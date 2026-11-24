@@ -8,7 +8,8 @@
 #   it, else a `Work on KEY` start (lib.sh first_key), or a bare `KEY:` one in a coordinated project (an adapter or
 #   key_pattern), else a `Work on NAME` start naming its own -n name (a tracker-less project: keyed by NAME); a session with none isn't coordinated: no messages, until its name_session call finds a later
 #   `Session task: KEY` line in its tail). A task
-#   or review whose tail matches lib.sh's coord_re (session-status's coordinator test) is a coordinator from then on;
+#   or review whose tail matches lib.sh's coord_re (session-status's coordinator test; a keyed task or a review:
+#   coord_pane_re, its open_pane branch alone) is a coordinator from then on;
 #   one without messages tests this call's own stdin instead, so it never reads the transcript.
 # - Chunk and task texts end with the self-handover (session-status --handover --self), coordinator or not; they message
 #   the coordinator only when it fails or makes no progress.
@@ -86,7 +87,9 @@ else
     fi
   fi
   key=${key//[^A-Za-z0-9_.-]/}; while [[ $key == *. ]]; do key=${key%.}; done; key=${key:--}   # retro.py strips .,;:!) too
-  case $kind in task|review) [ -z "$a" ] || names=$("$a" status-names 2>/dev/null); re=$(coord_re "${names:-}") ;; esac
+  # a keyed task or a review runs session-status --start/--watch only to test or measure it: only open_pane counts
+  case "$kind $key" in 'task -') [ -z "$a" ] || names=$("$a" status-names 2>/dev/null); re=$(coord_re "${names:-}") ;;
+    task*|review*) re=$(coord_pane_re) ;; esac
 fi
 thresholds() {   # at, hard and note for $kind, cached
   declare -F config >/dev/null || { cd "${cwd:-.}" 2>/dev/null; . "$here/../lib.sh"; }
@@ -139,6 +142,7 @@ if (( at <= 0 )); then
       grep -oE '^Session task: [A-Za-z0-9_.-]+( review([^a-z]|$))?' | tail -1) &&   # its own text and messages, as marks_of
     [[ $c != *' review'* ]]; then
     key=${c#*Session task: }; while [[ $key == *. ]]; do key=${key%.}; done; [ -n "$key" ] || exit 0
+    declare -F coord_pane_re >/dev/null || { cd "${cwd:-.}" 2>/dev/null; . "$here/../lib.sh"; }; re=$(coord_pane_re)   # keyed now
   else exit 0
   fi
   thresholds; (( at > 0 )) || exit 0

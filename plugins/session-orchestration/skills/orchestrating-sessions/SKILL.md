@@ -167,7 +167,8 @@ without asking the user: they signed in for it.
 
 ## Rules
 
-- **The only files you change are the memory files, the handoff file and your handover**, plus what these docs have
+- **The only files you change are the memory files, the handoff file, your handover and the replies folder** (where
+  a draft, a report or notes go, never beside the project's code), and files outside the project root, plus what these docs have
   you write (setup's `--init --write`, a note in a review's header) and an untracked person file at the project root
   (`CLAUDE.local.md`, `.claude/coordination.local.json`) when the user asks *you* for that edit directly, or a pane
   yes or approved proposal names that file and the change: no session can make it (a worktree hasn't the file, and

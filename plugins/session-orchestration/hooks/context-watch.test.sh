@@ -66,6 +66,13 @@ out=$(LINE=$pane fire pane1 'Fix the bug.' 146000); grep -q 'handover file' <<<"
 LINE=$pane expect pane2 "$task" 130000 ''
 out=$(fire pane3 "$task" 146000); grep -q 'handover file' <<<"$(LINE=$pane fire pane3 "$task" 150000)" || fail 'task turned coordinator'
 grep -qF -- "orchestrating-sessions/session-status --handover --self -- '<next step>'" <<<"$out" || fail "task self-handover: $out"
+# A keyed task running session-status --start (testing or measuring it) stays a task; a keyless one turns coordinator.
+start='{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"bash ./session-status --start"}}]}}'
+out=$(LINE=$start fire start1 "$task" 146000); grep -qF -- '--handover --self' <<<"$out" && ! grep -q 'handover file' <<<"$out" ||
+  fail "keyed task turned coordinator by --start: $out"
+grep -q '^task PROJ-123 ' "$t/cache/session-status/handoff-start1.kind" || fail "keyed task .kind: $(cat "$t/cache/session-status/handoff-start1.kind")"
+EXTRA='{"tool_name": "Bash", "tool_input": {"command": "bash ./session-status --start"}}' expect start2 'Fix the bug.' 144000 ''
+grep -q 'handover file' <<<"$(fire start2 'Fix the bug.' 146000)" || fail 'keyless --start run: not a coordinator'
 out=$(fire chunk4 "$chunk" 151000); grep -qF -- '--handover --self' <<<"$out" && ! grep -qF -- '--coordinator' <<<"$out" || fail "chunk hard self-handover: $out"
 [ -z "$(grep -l window "$t"/cache/session-status/* 2>/dev/null)" ] || fail 'window line under the expected window'
 
@@ -260,6 +267,9 @@ LINE=$late expect late 'Fix the bug.' 126000 ''
 LINE='{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"cat <<EOF\nSession task: PROJ-8\nEOF"}}]}}' \
   EXTRA='{"tool_name": "mcp__session-orchestration__name_session"}' expect late2 'Fix the bug.' 126000 ''
 LINE=$late EXTRA='{"tool_name": "mcp__session-orchestration__name_session"}' expect late 'Fix the bug.' 146000 'handoff ready: PROJ-9"'
+# keyed now: a session-status --start run (testing it) no longer makes it a coordinator, nor a review
+LINE="$late"$'\n'"$start" expect late 'Fix the bug.' 150000 ''
+EXTRA='{"tool_name": "Bash", "tool_input": {"command": "bash ./session-status --start"}}' expect review2 'Session task: PROJ-123 review' 146000 ''
 
 # Config: defaults, a bad value, and a repo file can't set the person keys.
 rm "$XDG_CONFIG_HOME/session-orchestration/config.json"

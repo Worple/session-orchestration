@@ -143,7 +143,8 @@ if [ "$tool" = Bash ]; then
     deny "Sub-coordinator rule: you stop only $skey's sessions; $o's belong to your parent: report it to your parent." sub-stop
   [[ $cmd =~ claude ]] && [[ $cmd =~ --bg ]] || exit 0
   # A sub starts only KEY's sessions: each `claude … --bg` command word's -n NAME starts `KEY-`, its prompt names KEY
-  # at its start (first_key; a chunk's `Chunk: KEY/N` too, its first key, if any, being KEY) and isn't a `Coordinate`
+  # at its start (first_key; a chunk's `Chunk: KEY/N` too, its first key, if any, being KEY; a plan file KEY-*.md's
+  # `Chunk: KEY-*/N` under a `Session task:` line naming KEY) and isn't a `Coordinate`
   # (one level). A `claude --bg` inside `sh -c` or `eval` is refused (`!`).
   # shortcut: a `--resume ID` with no -n gets only the `Coordinate` check (the ID's key is in its transcript); check it if a sub misuses it
   starts=$(starts "$cmd")
@@ -153,7 +154,7 @@ if [ "$tool" = Bash ]; then
   while IFS=$'\x1f' read -r -d $'\x1e' name res prompt; do
     fk=$(first_key "$prompt"); ck=$(chunk_of "$prompt") && ck=${ck% *} || ck=$fk
     { [ -z "$name" ] && [ -n "$res" ] && ! sub_key "$prompt" >/dev/null; } ||
-    { [[ $name == "$skey"-* ]] && [[ $name != "$skey"-coordinator* ]] && [ "$ck" = "$skey" ] && { [ -z "$fk" ] || [ "$fk" = "$skey" ]; } &&
+    { [[ $name == "$skey"-* ]] && [[ $name != "$skey"-coordinator* ]] && { [ "$ck" = "$skey" ] || { [[ $ck == "$skey"-* ]] && [ "$fk" = "$skey" ]; }; } && { [ -z "$fk" ] || [ "$fk" = "$skey" ]; } &&
       ! sub_key "$prompt" >/dev/null; } ||
       deny "Sub-coordinator rule: you start only $skey's sessions, one level deep: name it $skey-<what> (-n), and begin its first prompt with \`Work on $skey:\`, \`Session task: $skey\` or the chunk prompt --plan --next prints; never a \`Coordinate\` prompt (a task that big is two tasks: report it to your parent). Another key's work goes to your parent coordinator." sub-start
   done <<<"$starts"
@@ -213,4 +214,5 @@ if ! under "$path" "$root/.claude/worktrees" && ! under "$path" "$root/.worktree
   # an untracked CLAUDE.local.md: no worktree has it, so no session can make the edit
   [ "$path" = "$root/CLAUDE.local.md" ] && ! git ls-files --error-unmatch CLAUDE.local.md >/dev/null 2>&1 && exit 0
 fi
-deny "Coordinator rule: the only files you change are the memory files, the handoff file and your handover (SKILL.md, Rules). ${path#"$root"/} is a session's to change, however small: give it to the session that owns it, or start one. A CLAUDE.md or settings change goes to a new session (one already running refuses it from a message); a rule for how the sessions work can go in the project memory instead, which you change yourself." edit
+rp=$(abs "$(replies_path 2>/dev/null)"); rp=${rp/#"$HOME"/\~}
+deny "Coordinator rule: the only files you change are the memory files, the handoff file, your handover and the replies folder${rp:+ ($rp)}, where a draft, a report or notes go (SKILL.md, Rules). ${path#"$root"/} is a session's to change, however small: give it to the session that owns it, or start one. A CLAUDE.md or settings change goes to a new session (one already running refuses it from a message); a rule for how the sessions work can go in the project memory instead, which you change yourself." edit

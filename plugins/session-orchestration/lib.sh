@@ -630,8 +630,10 @@ usage() {
 # status-names alternation) with --start, --changes, --watch or --owner, or an open_pane tool use. A plain run (a worker
 # checking its own task) doesn't match, nor a command that only mentions it (`grep 'session-status --watch' f`): it
 # must be a command word, at the start or after ;, &, |, ( or a newline, with optional VAR=value prefixes, `bash `
-# and a path. session-status and hooks/context-watch.sh both read it.
-coord_re() { echo "\"command\":\"([^\"]*([;&|(]|\\\\n))? *([A-Za-z_][A-Za-z0-9_]*=[^\" ]* +)*(bash +)?([^\" ;&|]*/)?(session-status${1:+|$1}) +--(start|changes|watch|owner)|\"(tool_)?name\":\"mcp__session-orchestration__open_pane\""; }
+# and a path. session-status and hooks/context-watch.sh both read it; context-watch tests a keyed task or a review
+# against coord_pane_re alone (the open_pane branch): one runs session-status --start only to test or measure it.
+coord_pane_re() { echo '"(tool_)?name":"mcp__session-orchestration__open_pane"'; }
+coord_re() { echo "\"command\":\"([^\"]*([;&|(]|\\\\n))? *([A-Za-z_][A-Za-z0-9_]*=[^\" ]* +)*(bash +)?([^\" ;&|]*/)?(session-status${1:+|$1}) +--(start|changes|watch|owner)|$(coord_pane_re)"; }
 
 # key_re [ADAPTER]: the task-key ERE, in parentheses: config key_pattern, else ADAPTER's key-pattern, else the default.
 key_re() {

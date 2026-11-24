@@ -103,6 +103,10 @@ check "$(w "$root/.claude/../src/a.ts")" deny 'a .. out of .claude/'
 check "$(w "$root/.claude/worktrees/PROJ-1/src/a.ts")" deny 'a task worktree under .claude/'
 check "$(w "$root/.worktrees/PROJ-1/replies/x.md")" deny 'a task worktree'
 ln -s "$root" "$tmp/link"; check "$(w "$tmp/link/src/a.ts")" deny 'through a symlink'
+# the denial names the replies folder, by path, as the place for a draft
+jq -nc --arg c "$root/src" --arg p "$root/notes/draft.md" '{session_id: "c1", tool_name: "Write", tool_input: {file_path: $p, content: "x"}, cwd: $c}' |
+  HOME=$tmp XDG_CACHE_HOME=$tmp/.cache XDG_CONFIG_HOME=$tmp/.config bash "$here/coordinator-guard.sh" | jq -r .hookSpecificOutput.permissionDecisionReason |
+  grep -qE "the replies folder \([^)]*/proj/replies\), where a draft" || { echo 'FAIL edit denial: no replies folder path'; exit 1; }
 printf -- '- Never edit memory by hand: `scripts/x.sh`.\n' > "$root/CLAUDE.local.md"
 check "$(w "$root/scripts/x.sh")" deny 'a line that only mentions memory'
 check "$(g w1 Write "{\"file_path\":\"$root/src/a.ts\"}")" allow 'a task session writing'
@@ -121,6 +125,12 @@ check "$(b 'cd /x')" deny 'sub: cd'
 check "$(b "claude --bg --model opus --effort medium -n PROJ-1-c2 'Session task: PROJ-1
 Chunk: PROJ-1/2
 Read /r/PROJ-1-c2.md and do it.'")" allow 'sub: what --plan --next prints'
+check "$(b "claude --bg --model opus --effort medium -n PROJ-1-rollout-c1 'Session task: PROJ-1-rollout
+Chunk: PROJ-1-rollout/1
+Read /r/PROJ-1-rollout-c1.md and do it.'")" allow 'sub: what --plan --next prints for a plan file PROJ-1-rollout.md'
+check "$(b "claude --bg -n PROJ-1-x 'Session task: PROJ-12-rollout
+Chunk: PROJ-12-rollout/1'")" deny 'sub: a chunk of a key KEY is a prefix of'
+check "$(b "claude --bg -n PROJ-1-x 'Chunk: PROJ-1-rollout/1'")" deny 'sub: a KEY-* chunk with no Session task line'
 check "$(b "claude --bg -n PROJ-1-c2 'Work on PROJ-1: x.'
 claude --bg -n PROJ-2-x 'Work on PROJ-2: x.'")" deny 'sub: a second start on the next line'
 check "$(b "claude --bg -n PROJ-1-review 'Work on PROJ-1: review it. Why: x.'")" allow 'sub: a review'
