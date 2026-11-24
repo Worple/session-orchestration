@@ -2,7 +2,7 @@ import type { On, ToolCallResult } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { HANDED_TTL, handedId, handedProblem, onYouOf, parseHanded, ranText, retryText, runConsent, runTail, sameCommand, USER_NO } from './register'
+import { bashOutcome, HANDED_TTL, handedId, handedProblem, onYouOf, ownRelay, parseHanded, ranText, relayBlock, retryText, runConsent, runTail, sameCommand, USER_NO } from './register'
 
 const PANE = { plugin: 'session-orchestration', component: 'Pane', requestId: 'coordinator' } as const
 const PROPS = { title: 'Coordinator', isFocused: false, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} } as const
@@ -38,6 +38,19 @@ test('a handed-over command is one plain line; a file that fails the same checks
   expect(runTail('a\nreleased 1.0\n', 'warn: x', true)).toBe('released 1.0')
   expect(runTail('a\nreleased 1.0\n', '', true)).toBe('released 1.0')
   expect(runTail('checking for errors... done\nnothing pushed', 'error', false)).toBe('checking for errors... done | nothing pushed | error')
+  // A relay's Run passes its whole block on, not only the Source line.
+  const blk = 'APPROVAL relayed from the user\nQuote: q\nAction: merge o/r#1 (s)\nSource: id /w'
+  expect(relayBlock(`note\n${blk}\nsent\n`)).toBe(blk) // up to the Source line, not what follows
+  expect(relayBlock('released 1.0')).toBe('')
+  expect(ranText(h, true, 'Source: id /w', blk)).toEndWith(`\nIt was your own session-status --relay; its relay block, whole:\n${blk}`)
+  const rel = { ...h, command: "session-status --relay PROJ-1 'merge o/r#1 (s)'" }
+  expect(ownRelay(rel, 's1')).toBe(true)
+  expect(ownRelay(rel, 's2')).toBe(false) // another session's command
+  expect(ownRelay({ ...rel, command: `printf '${blk}'` }, 's1')).toBe(false)
+  expect(ownRelay({ ...rel, command: `${rel.command} && echo sent` }, 's1')).toBe(false)
+  const res = { stdout: blk, stderr: '', interrupted: false }
+  expect(bashOutcome({ text: blk, result: res }).block).toBe(blk)
+  expect(bashOutcome({ isError: true, text: blk, result: res }).block).toBe('') // a failed run passes no block
 })
 
 test('hand_command writes the command for the pane, with who handed it', async ($, on) => {
