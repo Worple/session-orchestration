@@ -59,7 +59,7 @@ calls() { cat "$tmp/calls" 2>/dev/null; : > "$tmp/calls"; }
 notices_adapter() { cat > "$root/.claude/session-status-adapter" <<EOF
 #!/bin/sh
 case \$1 in
-  tasks) [ -f $tmp/fail ] && { echo boom; exit 1; }; printf 'ABC-12\t-\t\t%s\n' "\$([ -f $tmp/stale ] && echo '(PRs as of 04:13) ')\$(cat $tmp/prs 2>/dev/null)"; [ ! -f $tmp/fix ] || echo 'fix: Sign in → gh auth login' ;;
+  tasks) [ -f $tmp/fail ] && { echo boom; exit 1; }; printf 'ABC-12\t-\t\t%s\n' "\$([ -f $tmp/stale ] && { [ -s $tmp/prs ] && echo '(PRs as of 04:13) ' || echo '(PRs as of 04:13) | '; })\$(cat $tmp/prs 2>/dev/null)"; [ ! -f $tmp/fix ] || echo 'fix: Sign in → gh auth login' ;;
   notices) cat $tmp/notices; exit \$(cat $tmp/rc) ;;
   *) exit 2 ;;
 esac
@@ -484,7 +484,8 @@ out=$(run --changes) && { echo "failure not reported"; exit 1; }
 out=$(run) && [ "$(head -1 <<<"$out")" = "adapter tasks failed (exit 1): boom; the board below has no tracker columns" ] &&
   grep -q '^ABC-12 .*sess:"fix it"' <<<"$out" || { echo "failed adapter hid the board: $out"; exit 1; }
 rm "$tmp/fail"
-# A stale-PR marker appearing or clearing alone doesn't wake --changes.
+# A stale-PR marker appearing or clearing alone doesn't wake --changes, also on a row with no PRs (the GitHub adapter
+# then prints the stamp and " | " alone).
 run --changes >/dev/null; touch "$tmp/stale"; [ "$(run --changes)" = "no changes" ] && rm "$tmp/stale" &&
   [ "$(run --changes)" = "no changes" ] || { echo "stale marker woke --changes"; exit 1; }
 # Two PRs listed the other way round don't wake --changes; one changing state does.
@@ -630,6 +631,11 @@ run --changes >/dev/null
   [ "$(SESSION_STATUS_RESOLVE_DAYS=0 run | sed -n '/^Resolved/,$p')" = "$(printf 'Resolved (idle a week):\n%s' "$left")" ] &&
   [ "$(SESSION_STATUS_RESOLVE_DAYS=0 run | grep -c Leftovers)" = 0 ] &&
   [ "$(SESSION_STATUS_RESOLVE_DAYS=0 run --changes)" = "no changes" ] || { echo "resolved failed"; exit 1; }
+# A worktree on branch ABC-34-2 (the task's next PR) that `done` doesn't call finished keeps ABC-34 open: no leftover.
+git -C "$root" worktree add -q -b ABC-34-2 "$root/wt3"
+out=$(run); ! grep -q 'ABC-34 Done' <<<"$out" || { echo "ABC-34 finished while ABC-34-2 runs: $out"; exit 1; }
+git -C "$root" worktree remove "$root/wt3" && git -C "$root" branch -q -D ABC-34-2
+run | grep -qF "$left" || { echo "ABC-34 not finished again once ABC-34-2 is gone"; exit 1; }
 # Under --watch a committing run stops a finished task's background session at rest and lists it under Stopped, once;
 # a peek stops nothing but names it (so the watcher confirms). Left alone: one on a prompt (status waiting: it stays a
 # leftover), an interactive one, and an open task's session. STOP_AFTER_S 0: no transcripts here to age.
