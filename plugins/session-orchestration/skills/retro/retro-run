@@ -121,7 +121,7 @@ run)
     task="Session task: retro run, scope $sc. Use the session-orchestration:retro skill and follow it."
     if [ -n "$dry" ]; then   # --config: no start line for a run that starts nothing
       me=$(cfg plan.models.retro) && { a=$(cfg plan.advisor.retro 2>/dev/null) && (cd "$root" && advisor_ok "${me%%/*}" "$a") && a=" --advisor $a" || a=
-        me="--model ${me%%/*} --effort ${me#*/}$a"; } || me=   # --kind's --advisor, as the real run gets it
+        me="--model ${me%%/*} --effort ${me#*/}$a$(cd "$root" && denied_tools retro)"; } || me=   # --kind's --advisor and tools, as the real run gets them
     else me=$(cd "$root" && bash "$ss" --kind retro "$name") || me=; fi
     read -ra me <<<"$me"   # words, not globs: a [1m] model stays literal
     [ ${#me[@]} = 0 ] || me=("${me[@]//\\/}")   # --kind prints them %q-escaped (opus\[1m\])

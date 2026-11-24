@@ -2733,6 +2733,7 @@ rp="- Replies folder (the plugin's \"folder for this\"): \`$rd\`."
 s1="- A task is its session's name, \`$k\`: start it with \`claude --bg -n $k\`."
 s2="- A task is its session's name, \`$k\`: start it with \`claude --bg --model M --effort E -n $k\` (M, E: what \`session-status --kind <kind>\` prints)."
 s3="- A task is its session's name, \`$k\`: start it with \`claude --bg --model M --effort E -n $k\` (M, E: what \`session-status --kind <kind> $k\` prints)."
+s4="- A task is its session's name, \`$k\`: start it with \`claude --bg --model M --effort E -n $k\` (M, E: what \`session-status --kind <kind> $k\` prints; paste a \` --advisor A\` it prints too)."
 g1='        | select(.) | (if .state == "APPROVED" then "+" else "!" end) + .author.login]) as $r'
 g2='      + (if any($r[]; startswith("+")) then "" else " no-human-approval" end)'
 gn=$(grep -F -e '"approved by "' -e 'startswith("approved by ")' "$here/../setting-up-coordination/templates/github-adapter")
@@ -2740,8 +2741,8 @@ gn=$(grep -F -e '"approved by "' -e 'startswith("approved by ")' "$here/../setti
 # old FILE PARA START: the render with PARA as the approvals paragraph, START as the task line, Reserved and Replies old
 old10() { cp "$tmp/g8.md" "$1"; sw "$1" '- Whether a coordinator' "$2"; sw "$1" '  `.claude/coordination.local.json`' ''
   sw "$1" '- **Reserved**' "$rs"; sw "$1" '- Replies folder' "$rp"; sw "$1" '- A task is its' "$3"; }
-paras=("$dl" "$nd" "$nd" "$nd") starts=("$s1" "$s1" "$s2" "$s3")
-for v in 0 1 2 3; do
+paras=("$dl" "$nd" "$nd" "$nd" "$nd") starts=("$s1" "$s1" "$s2" "$s3" "$s4")
+for v in 0 1 2 3 4; do
   rm -f "$pm/setup.json"; old10 "$c" "${paras[v]}" "${starts[v]}"
   jq --argjson t "$([ "$v" = 0 ] && echo true || echo false)" '.approvals.delegate = $t' "$pf" > "$tmp/x.json" && mv "$tmp/x.json" "$pf"
   printf '#!/bin/sh\n%s\n%s\n' "$g1" "$g2" > "$a"

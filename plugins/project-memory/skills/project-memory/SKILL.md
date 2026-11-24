@@ -1,6 +1,6 @@
 ---
 name: project-memory
-description: A project's shared memory across sessions, and its friction cases. Use when CLAUDE.md names a project memory file (read it at task start, append what another task needs), on "remember this" about the project, to set it up, or the moment the project (hosts, sign-ins, docs, scripts, setup) cost you a workaround, round trip, whole-tree search or the user's help.
+description: A project's shared memory across sessions, and its friction cases. Use when CLAUDE.md names a project memory file (read it at task start, append what another task needs), on "remember this" about the project, to set it up, or the moment the project (hosts, sign-ins, docs, scripts, setup) cost you a workaround, round trip, whole-tree search or the user's help, on any task, coding or not.
 ---
 
 # Project memory
