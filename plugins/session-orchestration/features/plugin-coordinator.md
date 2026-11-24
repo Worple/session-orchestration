@@ -56,9 +56,9 @@ wrong>' <case files…>` prints (an apostrophe in it: `'\''`). Its PR line follo
 their PR without asking; off, it reaches you as an ask like any other (the approval hook refuses it without your relay).
 Because they work in your project, relayed approvals verify for them ([approvals.md](../skills/orchestrating-sessions/approvals.md)).
 
-**Releases.** A batch's PR lands the way the repo's `CLAUDE.md` says. Once the release is on the repo's main (check it
+**Releases.** A batch's PR lands the way the repo's `CLAUDE.md` says (or the landing doc it points to). Once the release is on the repo's main (check it
 yourself, and take the version from it):
-1. Install it as the repo's `CLAUDE.md` says (its install step, if it has one): a reload without the install loads the old version.
+1. Install it as that doc says (its install step, if it has one): a reload without the install loads the old version.
 2. Mark each of its cases `fixed <version>` (`feedback mark FILE fixed …`).
 3. Call `reload_plugins`.
 4. Tell the user that other running coordinators keep the old version until they call `reload_plugins` themselves.

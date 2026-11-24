@@ -1,8 +1,9 @@
 # Landing a plugin change
 
-Read before you push the branch (CLAUDE.md "Releasing a plugin change" steps 1-2 come first).
+CLAUDE.md "Releasing a plugin change" steps 3-5. Read it before you push a branch, and before you install or reload
+a release.
 
-1. Land it through a PR: push the branch, open the PR and, once the task is approved, `gh pr merge <N> -R OWNER/REPO --auto --rebase`
+3. Land it through a PR: push the branch, open the PR and, once the task is approved, `gh pr merge <N> -R OWNER/REPO --auto --rebase`
    (`mergeStateStatus` already `CLEAN`: `gh pr merge <N> -R OWNER/REPO --rebase`, no `--auto`, which gh refuses there;
    a refused merge leaves the relay usable while the PR stays open with no auto-merge).
    The steps below are one command on the same relay:
@@ -28,26 +29,24 @@ Read before you push the branch (CLAUDE.md "Releasing a plugin change" steps 1-2
    change broke `main` together with one that landed before it. Tell the coordinator, then fix it forward in a new PR
    through these same steps (`Release: patch`), or revert your commit that way when the fix isn't quick. Red before
    yours too: tell the coordinator; the fix is the session's whose landing turned it red first.
-2. Install it: the project's coordinator runs the install once per release commit (until the user says otherwise):
+4. Install it: the project's coordinator runs the install once per release commit (until the user says otherwise):
    `claude plugin update <plugin>@session-orchestration` once the marketplace source has the release commit, then it
    checks `installed_plugins.json` lists `<plugin>` at the new version. A worker's done report says "released", with
    no command handed to the user.
-3. Reload. Running sessions pick up a new tool or hook after `/reload-plugins`: the coordinator calls
+5. Reload. Running sessions pick up a new tool or hook after `/reload-plugins`: the coordinator calls
    session-orchestration's `reload_plugins` tool, which runs it in its own session when the turn ends (from
    0.27.1; a worker reloads the same way when messaged to). Restart a session where the new tool doesn't show.
 
 ## On the maintainer's machine
 
-The repo is `vargroozzz/session-orchestration`, and its main checkout is the `session-orchestration` marketplace
-source, so the installed plugin only changes once that checkout has the release commit.
+A machine with `~/bin/plugin-release` is the maintainer's; elsewhere skip this section. There the repo (`OWNER/REPO`) is
+`vargroozzz/session-orchestration`, and the main checkout is the `session-orchestration` marketplace source, so the
+installed plugin only changes once that checkout has the release commit.
 
-- A session whose task the user approved opens its PR, sends its done report (`reply` with `done: pr` and `key`) and
-  waits for the coordinator's relay naming that PR number; only then does it merge (the approval hook refuses the
-  merge before the relay). Each command alone in its own call, no loop or `$(…)` around `gh`:
-  `gh pr merge <N> --auto --rebase -R vargroozzz/session-orchestration`, then
-  `gh pr checks <N> -R vargroozzz/session-orchestration --watch --interval 60`, then
-  `gh pr view <N> -R vargroozzz/session-orchestration --json state,mergeStateStatus`.
-- Installing (step 2): `~/bin/plugin-release` (no argument) fast-forwards the main checkout once the release commit is
-  on origin/main, updates every changed plugin in both accounts and prints the installed versions. Until the user says
-  otherwise, the coordinator runs it itself, once per release commit on origin/main, checks the versions it prints and
-  reloads. A worker never hands `! plugin-release`: its done report says "released".
+- Step 3 runs each `gh` command alone in its own call: no wait loop or `$(…)` around it, which the approval hook
+  refuses here; repeat `gh pr checks <N> -R OWNER/REPO --watch --interval 60` and the `gh pr view` instead.
+- Step 4's install is `~/bin/plugin-release` (no argument), on this machine only: it fast-forwards the main checkout once
+  the release commit is on origin/main, updates every changed plugin in both accounts (`~/.claude` and
+  `~/.claude-work`) and prints the installed versions. Since 2026-11-18, until the user says otherwise, the coordinator
+  runs it itself, once per release commit on origin/main, checks the versions it prints and reloads. A worker never
+  hands `! plugin-release`: its done report says "released".
