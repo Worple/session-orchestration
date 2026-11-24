@@ -1,6 +1,6 @@
 ---
 name: orchestrating-sessions
-description: The coordinator's playbook, for the one Claude Code session that runs a project's other sessions (starting and resuming them for tasks, messaging them, reading their status, relaying the user's approvals). Use when acting as the coordinator: the first prompt says "Act as a coordinator", its first line is `Coordinate KEY: …` (a sub-coordinator, running one big task), or the user asks you to coordinate their sessions. Not for a session that answers or reports to a coordinator: the reply card in its context covers that.
+description: The coordinator's playbook - start, resume and message a project's sessions, read their status, relay the user's approvals. Use when acting as the coordinator (first prompt "Act as a coordinator", or first line `Coordinate KEY: …`) or asked to coordinate sessions. Not for a session that reports to a coordinator: its reply card covers that.
 ---
 
 # Coordinating sessions

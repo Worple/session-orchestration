@@ -1,6 +1,6 @@
 ---
 name: choosing-model-effort
-description: Size a piece of work into a plan.models kind (scan, mechanical, build, design, review, release, research) and get the model and effort to run it on. Use before starting a session for a task (claude --bg), before proposing sessions so each line shows its kind, before choosing a subagent's model in a coordinated project, and in a retro comparing cost per kind.
+description: Size work into a plan.models kind and get its model and effort. Use before starting or proposing a task session (claude --bg), before picking a subagent's model in a coordinated project, and in a retro comparing cost per kind.
 ---
 
 # Choosing a model and effort

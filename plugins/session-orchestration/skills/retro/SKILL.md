@@ -1,6 +1,6 @@
 ---
 name: retro
-description: Retro run over the multi-session setup, one scope per run — a project's own sessions, or the plugin's view over every project — measuring how efficiently Claude Code sessions turn tokens into finished work (cost per merged PR, finished ticket and review, context size, waste counts, time to done), checking whether last run's proposals landed, and ranking the next changes. Use when invoked as /retro [project|plugin|both], when started as a scheduled retro (retro-run), or when asked to measure how the sessions perform.
+description: Measure how efficiently sessions turn tokens into finished work (cost per merged PR, context size, waste, time to done) for one project or the plugin, check last run's proposals, rank the next changes. Use for /retro [project|plugin|both], a scheduled retro (retro-run), or when asked how the sessions perform.
 ---
 
 # retro
