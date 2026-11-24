@@ -27,7 +27,7 @@ usage: python3 -I retro.py [--until YYYY-MM-DDTHH:MM[:SS]] CMD [args] [--project
                                   its session); totals on stderr
   replies [days=7]                task sessions idle > 6 h that never wrote replies/<KEY>* (by hand, or the reply
                                   tool's report with that key: lost reports); the key without the project's prefix,
-                                  any session's write during its life and a successor's (Supersedes:) count; totals
+                                  its project's sessions' writes during its life and a successor's (Supersedes:) count; totals
                                   on stderr
   waste DIR [days=7]              the waste counts of a retro folder's sessions/events/waits/usage.tsv (each
                                   optional) and the denial log: spend totals, denials by class and their retries,
@@ -1024,8 +1024,8 @@ def replies(days=7):
     """Lost replies: task sessions (first prompt "Work on KEY", or "Session task: KEY") idle > 6 h that never wrote
     replies/<KEY>* (Write/Edit on it, a Bash command that names it after `>`, mv, cp, tee, sed -i or python, or the
     reply tool's report with key KEY). KEY is the task key or the key without the project's prefix (the folder name
-    and a dash: proj-fix-x writes replies/fix-x.md); the write may be any session's during this one's life, or come
-    from a successor (Supersedes: its id, transitively), and a session is open while any of that chain is."""
+    and a dash: proj-fix-x writes replies/fix-x.md), not another task's longer key (x-s2 for x) nor a folder; the write
+    may be any session's of the same project folder during this one's life, or come from a successor (Supersedes: its id, transitively), and a session is open while any of that chain is."""
     window(days)
     tot = {"task": 0, "wrote": 0, "lost": 0, "open": 0}
     untasked = 0
@@ -1058,7 +1058,7 @@ def replies(days=7):
             if rep and o.get("type") == "user" and (o.get("permissionDecision") or {}).get("decision") != "reject":
                 for b in m.get("content") if isinstance(m.get("content"), list) else []:
                     if isinstance(b, dict) and b.get("tool_use_id") in rep and not b.get("is_error"):
-                        writes.append((ts, "key", rep[b["tool_use_id"]]))
+                        writes.append((ts, "key", rep[b["tool_use_id"]], "", s))
             if o.get("type") == "assistant" and ("replies/" in line or '"report"' in line):
                 for b in m.get("content") if isinstance(m.get("content"), list) else []:
                     i = (b.get("input") or {}) if isinstance(b, dict) and b.get("type") == "tool_use" else {}
@@ -1067,18 +1067,24 @@ def replies(days=7):
                         rep[b.get("id")] = i.get("key", s["key"])
                     fp, cmd = str(i.get("file_path", "")), str(i.get("command", ""))
                     if "replies/" in fp + cmd:
-                        writes.append((ts, "text", fp, cmd))
+                        writes.append((ts, "text", fp, cmd, s))
         ss.append(s)
     by_sup = collections.defaultdict(list)
     for s in ss:
         if s["sup"]:
             by_sup[s["sup"]].append(s)
 
+    def short(x):
+        return x["key"].removeprefix(x["root"] + "-") if x["root"] else x["key"]
+    every_key = {k for x in ss if x["key"] for k in (x["key"], short(x))}
+
     def wrote(s, keys):
-        """A write of replies/<one of keys> during s's life, by any session."""
-        path = rf"replies/(?:{'|'.join(map(re.escape, keys))})(?![\w-])"  # ABC-12 isn't ABC-123, x isn't x-s2
+        """A write of replies/<one of keys>[-suffix] during s's life, by s or another session of its project."""
+        longer = [k2[len(k):] for k2 in every_key - keys for k in keys if k2.startswith(k + "-")]   # x-s2 is another task's, not x's
+        path = (rf"replies/(?:{'|'.join(map(re.escape, keys))})(?![\d/])"   # ABC-12 isn't ABC-123; replies/x/ is a folder
+                + (rf"(?!(?:{'|'.join(map(re.escape, longer))})(?![\w-]))" if longer else ""))
         for w in writes:
-            if not (s["first"] <= w[0] <= s["last"]):
+            if not (s["first"] <= w[0] <= s["last"]) or (w[4] is not s and w[4]["root"] != s["root"]):
                 continue
             if w[1] == "key":
                 if w[2] in keys:
@@ -1110,7 +1116,7 @@ def replies(days=7):
             continue
         tot["task"] += 1
         links = list(chain(s, set()))
-        keys = {k for x in links if x["key"] for k in (x["key"], x["key"].removeprefix(x["root"] + "-") if x["root"] else x["key"])}
+        keys = {k for x in links if x["key"] for k in (x["key"], short(x))}
         if any(wrote(x, keys) for x in links):
             tot["wrote"] += 1
         elif any(x["last"] and P(x["last"]).timestamp() > END - 6 * 3600 for x in links):
