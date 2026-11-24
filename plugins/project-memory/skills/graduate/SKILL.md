@@ -1,6 +1,6 @@
 ---
 name: graduate
-description: The graduate pass over a project's memory, friction cases and deferred tasks - moves proven memory entries into the docs that own them, prunes the rest, turns open project cases into fixes, and resolves deferred task files (ticket it, fix it or drop it), each on the user's yes. Use when invoked as /graduate, when asked to graduate, prune or tidy project memory, review deferred tasks or project cases, or when an R&D run's approved proposals include graduation.
+description: The graduate pass over a project's memory, friction cases and deferred tasks - proven entries into their docs, the rest pruned, cases fixed, task files resolved, each on the user's yes. Use for /graduate, when asked to graduate, prune or tidy project memory or review deferred tasks or cases, or when an R&D run's approved proposals include graduation.
 ---
 
 # Graduate

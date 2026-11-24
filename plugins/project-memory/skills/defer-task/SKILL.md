@@ -1,6 +1,6 @@
 ---
 name: defer-task
-description: Use the moment you notice — OR catch yourself mentioning — a bug, missing feature, refactor, or docs, config or setup gap that is OUT OF SCOPE of the current task, coding or not. Invoke it PROACTIVELY on your own findings, not only when asked; capturing it as a task file in the project's tasks folder IS the action, instead of fixing it now or offering to "file a ticket later". Fires on "latent bug", "out of scope", "while I'm here I noticed", "worth a follow-up", "leave that for now". A docs or setup gap that already cost you (a workaround, round trip, whole-tree search or the user's help) is a friction case instead (project-memory).
+description: Use PROACTIVELY the moment you notice or mention a bug, missing feature, refactor, or docs/config/setup gap OUT OF SCOPE of the current task. Writing it as a task file in the project's tasks folder IS the action, not fixing it now or offering a ticket later. Fires on "latent bug", "out of scope", "while I'm here I noticed", "worth a follow-up", "leave that for now". A gap that already cost you is a friction case instead (project-memory).
 ---
 
 # Defer Out-of-Scope Task
