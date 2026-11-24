@@ -29,6 +29,7 @@ check "ghostty tab, its account" 0 "tab|/tmp|x attach|$HOME/.claude-work|1|claud
 check "ghostty: the default account sets none, a gone folder opens in HOME" 0 "tab|$HOME|t||1|" --open view --account "$HOME/.claude/" t /nonexistent -- claude attach ab
 check "ghostty: no folder known opens in HOME" 0 "right|$HOME|" --open split "" -- claude logs ab
 TERMINAL_QUIET=1 check "ghostty quiet (a handover): the AppleScript keeps the frontmost app" 0 "tab|/tmp|t||1|claude x|1|" --open view t /tmp -- claude x
+check "ghostty: a title alone (no folder, no command) opens in HOME, no unbound variable" 0 "tab|$HOME|t||1|" --open view t
 check "ghostty split" 0 "right|/tmp|||0|claude logs ab|" --open split /tmp -- claude logs ab
 check "ghostty split, its account" 0 "right|/tmp||$HOME/.claude-work|0|" --open split --account "$HOME/.claude-work" /tmp -- claude logs ab
 PS_OUT= check "Ghostty not running" 2 "Ghostty is not running" --open split /tmp -- claude logs ab

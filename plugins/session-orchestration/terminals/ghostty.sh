@@ -17,7 +17,7 @@ _ghostty() {
   local mode=$1 reuse=$2 account= title= dir out; shift 2
   [ "${1:-}" != --account ] || { account=${2/#\~/$HOME}; shift 2; }
   [ "$mode" = right ] || { title=$1; shift; }
-  dir=$([ -n "$1" ] && cd "${1/#\~/$HOME}" 2>/dev/null && pwd) || dir=$HOME; shift
+  dir=$([ -n "${1:-}" ] && cd "${1/#\~/$HOME}" 2>/dev/null && pwd) || dir=$HOME; shift || true
   [ "${account%/}" != "$HOME/.claude" ] || account=
   # ps, not pgrep: pgrep missed the running Ghostty from a background session (2026-10-19)
   command -v osascript >/dev/null || { echo "no osascript: the ghostty terminal is macOS only" >&2; return 2; }
