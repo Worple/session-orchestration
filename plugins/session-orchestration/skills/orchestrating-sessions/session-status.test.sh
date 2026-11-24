@@ -671,7 +671,7 @@ mv "$tmp/agents.keep" "$tmp/agents.json"
 # (wt7: `worktree remove` would delete it), a live session working in it with no key in its name (wt8), an ignored
 # folder holding a file the main checkout's lacks (wt9) or an untracked file status.showUntrackedFiles=no hides (wt10),
 # each still a Leftovers line. An ignored folder the main checkout has too, same files (cache/: build output), doesn't
-# keep wt2, nor does an ignored symlink at a path the main checkout has too, wherever it points (tasks: removal drops
+# keep wt2, nor does a node_modules/ only wt2 has, nor an ignored symlink at a path the main checkout has too, wherever it points (tasks: removal drops
 # only the link), but one only the worktree has (wt12) does. Nor is anything removable while a listing of the sessions fails: a live one could be missing from it.
 jq '[.[] | if (.name | startswith("ABC-34")) then .pid = null else . end]' "$tmp/agents.json" > "$tmp/agents.t" && mv "$tmp/agents.t" "$tmp/agents.json"
 gc() { git -C "$1" -c user.name=t -c user.email=t@t commit -qm "$2"; }
@@ -681,6 +681,8 @@ git -C "$root" worktree add -q -b feature/ABC-34-dirty "$root/wt4" origin/main &
 git -C "$root" worktree add -q -b feature/ABC-34-extra "$root/wt5" origin/main && echo y > "$root/wt5/y" && git -C "$root/wt5" add y && gc "$root/wt5" y
 git -C "$root" worktree add -q -b feature/ABC-34-merge "$root/wt6" origin/main~1 && git -C "$root/wt6" -c user.name=t -c user.email=t@t merge -q --no-ff -m m origin/main
 printf 'cache/\n*.env\n' >> "$root/.git/info/exclude" && mkdir -p "$root/cache" "$root/wt2/cache" && touch "$root/cache/a" "$root/cache/b" "$root/wt2/cache/a"
+# a dependency folder only wt2 has (node_modules/: an install makes it again) doesn't keep it either, and isn't read
+printf 'node_modules/\n' >> "$root/.git/info/exclude" && mkdir -p "$root/wt2/node_modules/pkg" && echo x > "$root/wt2/node_modules/pkg/index.js"
 printf 'tasks\n' >> "$root/.git/info/exclude" && ln -s cache "$root/tasks" && ln -s /nonexistent "$root/wt2/tasks"
 git -C "$root" worktree add -q -b feature/ABC-34-env "$root/wt7" origin/main && echo k=v > "$root/wt7/local.env"
 git -C "$root" worktree add -q -b feature/ABC-34-used "$root/wt8" origin/main

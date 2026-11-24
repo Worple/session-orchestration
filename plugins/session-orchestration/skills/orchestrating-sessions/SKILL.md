@@ -153,7 +153,7 @@ merged and released, or, with nothing on the board to say so, its own `done` rep
 (its after-release steps had time) is stopped by the watcher, with no ask; it shows under `Stopped (…)` in the
 change that wakes you: tell the user in one line. Once no live session holds the task, the watcher also removes its
 worktree and local branch, with no ask, when nothing can be lost: no uncommitted or untracked file, no ignored file the
-main checkout lacks, no live session working in it, and every commit's
+main checkout lacks (dependency and build folders such as `node_modules` and `dist` aside), no live session working in it, and every commit's
 change already on the default branch (by patch, since main lands by rebase; no merge commit). That shows under
 `Stopped` too. A leftover session it leaves (interactive, on a prompt, asking the user, or `--stop` refused) and a
 worktree it keeps (its Leftovers line says why) stay the user's call: ask before removing them.
