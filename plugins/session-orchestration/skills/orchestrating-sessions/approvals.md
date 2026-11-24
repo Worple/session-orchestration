@@ -21,7 +21,10 @@ Source: <your sessionId> <your cwd>
 
 For a pane answer, `session-status --relay KEY ACTION` writes the block (KEY's newest answer of the last 24h, Source
 filled in) once it passes the check below, and never for a "No, …" answer (exit 1 says why). Send its output as is
-once its Quote approves ACTION. `session-status --approvals` lists the live pane answers with the hours left and
+once its Quote approves ACTION. The auto-mode classifier may refuse the call (it reads a merge or post Action as the
+act): don't reword it or call it again unasked, `hand_command` it (key KEY) so the user's Run press is the consent; the
+Run's outcome brings the block whole ([pane.md](pane.md), Handed-over commands, which also says what to do when the
+Run is refused). `session-status --approvals` lists the live pane answers with the hours left and
 their relays, and `--start` shows them. A typed or question-box answer's block you write yourself, with your
 `sessionId`, `cwd` and name: your entry in `claude agents --json`, matched on the name `ListAgents` shows for you
 right now (names change when a session is resumed). The session checks the block with `verify-approval.sh`

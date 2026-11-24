@@ -1313,8 +1313,16 @@ export const handedId = (session: string, command: string) => hex16(`${session}\
 export const runConsent = (h: Handed) => `The user pressed "Run" in the coordinator pane on this exact command: ${h.command}`
 // Tells the coordinator a Run's outcome, to pass on to the session that handed it over. Not asUser: it states a
 // result, it approves nothing.
-export const ranText = (h: Handed, ok: boolean, line: string) =>
-  `Coordinator pane: the user ran the command session ${h.session.slice(0, 8)} handed over for ${h.key} (${h.what}); it ${ok ? 'succeeded' : 'failed'}${line ? `: ${line}` : ''}. Command: ${h.command}. Pass it on per pane.md (Handed-over commands).`
+export const ranText = (h: Handed, ok: boolean, line: string, block = '') =>
+  `Coordinator pane: the user ran the command session ${h.session.slice(0, 8)} handed over for ${h.key} (${h.what}); it ${ok ? 'succeeded' : 'failed'}${line ? `: ${line}` : ''}. Command: ${h.command}. Pass it on per pane.md (Handed-over commands).` +
+  (block ? `\nIt was your own session-status --relay; its relay block, whole:\n${block}` : '')
+// The relay block a succeeded run printed, header to Source line (a Quote may run over lines): its last line alone
+// can't be relayed. Only for a plain --relay call the coordinator handed itself (ownRelay), so another session's
+// command can't put a block in the coordinator's mouth.
+export const relayBlock = (text: string) =>
+  /APPROVAL relayed from the user\nQuote: [\s\S]*?\nAction: [^\n]*\nSource: [^\n]+/.exec(text)?.[0] ?? ''
+export const ownRelay = (h: Handed, me: string) =>
+  h.session === me && /^\s*(?:\S*\/)?session-status\s+--relay\s+\S+\s+(?:'[^']*'|"[^"$`\\]*")\s*$/.test(h.command)
 // The user's own No on the permission prompt; any other refusal (no prompt shown, a rule, the classifier) is retried.
 export const USER_NO = /by the user|user doesn't want to proceed/i
 // A refused Run, for the coordinator's own Bash call, whose permission prompt can ask the user. Not asUser; keep in
@@ -1324,10 +1332,10 @@ export const retryText = (h: Handed, line: string) =>
 
 // A pane Bash call's outcome: refused (retry unless it was the user's own No), or its result with runTail's line.
 export function bashOutcome(r: ToolCallResult<'Bash'>) {
-  if (r.deny !== undefined) return { ok: false, line: `refused: ${oneLine(r.deny)}`, retry: !USER_NO.test(r.deny) }
+  if (r.deny !== undefined) return { ok: false, line: `refused: ${oneLine(r.deny)}`, retry: !USER_NO.test(r.deny), block: '' }
   const res = r.result
   const stderr = typeof res === 'object' && res !== null && 'stderr' in res && typeof res.stderr === 'string' ? res.stderr : ''
-  return { ok: !r.isError, line: runTail(r.text ?? '', stderr, !r.isError), retry: false }
+  return { ok: !r.isError, line: runTail(r.text ?? '', stderr, !r.isError), retry: false, block: r.isError ? '' : relayBlock(r.text ?? '') }
 }
 // A refused project action, for the coordinator's own Bash call, whose permission prompt can ask the user. Not asUser.
 export const actionRetryText = (command: string, line: string) =>
@@ -1412,10 +1420,11 @@ async function runHanded($: EngineInterface, h: Handed) {
     await update($, handedResult, () => ({ label: `${h.key}: ${h.what}`, ok: false, line: 'not run: it is gone (withdrawn once done, or another pane ran it)', at }))
     return dropHanded($, h)
   }
-  let ok = false, line = '', retry = false
+  let ok = false, line = '', retry = false, block = ''
   try {
     const r = await $.tool.call({ tool: 'Bash', command: h.command, description: h.what, timeout: 600_000, consent: runConsent(h) })
-    ;({ ok, line, retry } = bashOutcome(r))
+    ;({ ok, line, retry, block } = bashOutcome(r))
+    if (block && !ownRelay(h, await $.session.id())) block = ''
   } catch (err) {
     line = err instanceof Error ? err.message : String(err)
   }
@@ -1423,7 +1432,7 @@ async function runHanded($: EngineInterface, h: Handed) {
   await update($, handedResult, () => ({ label: `${h.key}: ${h.what}`, ok, line, at }))
   if (ok) await dropHanded($, h)
   else await update($, handed, l => l.map(({ running, ...x }): Handed => (x.id === h.id ? { ...x, outcome: line || 'failed' } : { ...x, ...(running ? { running } : {}) })))
-  await $.prompt.submit({ text: retry ? retryText(h, line) : ranText(h, ok, line) })
+  await $.prompt.submit({ text: retry ? retryText(h, line) : ranText(h, ok, line, block) })
 }
 
 // Makes an idle background session run /compact (session-status --compact: stop, then resume it with /compact),
