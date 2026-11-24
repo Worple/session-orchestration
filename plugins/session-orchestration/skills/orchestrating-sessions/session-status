@@ -2289,7 +2289,8 @@ held_open() {
 adapter_done() {
   local out rc
   out=$(adapter done "$@"); rc=$?
-  [ -z "$out" ] || awk -F'\t' 'NR == FNR { h[$1]; next } !($1 in h)' <(held_open $(cut -f1 <<<"$out")) - <<<"$out"
+  # The leading echo keeps the held list non-empty, or NR == FNR would hold for stdin too and drop every line.
+  [ -z "$out" ] || awk -F'\t' 'NR == FNR { h[$1]; next } !($1 in h)' <(echo; held_open $(cut -f1 <<<"$out")) - <<<"$out"
   return $rc
 }
 

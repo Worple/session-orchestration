@@ -632,7 +632,7 @@ run --changes >/dev/null
   [ "$(SESSION_STATUS_RESOLVE_DAYS=0 run | grep -c Leftovers)" = 0 ] &&
   [ "$(SESSION_STATUS_RESOLVE_DAYS=0 run --changes)" = "no changes" ] || { echo "resolved failed"; exit 1; }
 # A worktree on branch ABC-34-2 (the task's next PR) that `done` doesn't call finished keeps ABC-34 open: no leftover.
-git -C "$root" worktree add -q -b ABC-34-2 "$root/wt3"
+git -C "$root" worktree add -q -b ABC-34-2 "$root/wt3" && echo 2 > "$root/wt3/part2" && git -C "$root/wt3" add part2 && gc "$root/wt3" -m 'ABC-34: part 2'
 out=$(run); ! grep -q 'ABC-34 Done' <<<"$out" || { echo "ABC-34 finished while ABC-34-2 runs: $out"; exit 1; }
 git -C "$root" worktree remove "$root/wt3" && git -C "$root" branch -q -D ABC-34-2
 run | grep -qF "$left" || { echo "ABC-34 not finished again once ABC-34-2 is gone"; exit 1; }
