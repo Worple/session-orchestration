@@ -349,7 +349,7 @@ fi
 # the ends), M as configured; a size needs NAME, and is logged with it. config plan.advisor.KIND set (the advisor
 # trial): ` --advisor A` too, logged on the start line, only where it pairs with the model (lib.sh advisor_ok); else
 # left off with one stderr line saying why. In Desktop with config start.sidebar true, a stderr line gives the pair as
-# start_session's model and effort too.
+# start_session's model and effort too. Then lib.sh denied_tools' flag: the tools a task of KIND goes without.
 if [ "${1:-}" = --kind ]; then
   k=${2:-} sz=; [[ $k =~ ^(.+):([SML])$ ]] && { k=${BASH_REMATCH[1]}; sz=${BASH_REMATCH[2]}; }
   { { [ $# = 2 ] && [ -z "$sz" ]; } || { { [ $# = 3 ] || { [ $# = 4 ] && [ "$4" = --anyway ]; }; } && [[ $3 =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]]; }; } &&
@@ -369,7 +369,7 @@ if [ "${1:-}" = --kind ]; then
   elif ! advisor_ok "$m" "$a"; then echo "plan.advisor.$k=fable: this account has no fable (config fable.accounts, or its Fable limit is hit): no --advisor" >&2
   else adv=$a; fi
   ADVISOR=$adv usage "$k" start "$m" "$e" ${3:+"$3"} ${sz:+"$sz"}
-  echo "--model $(printf %q "$m") --effort $e${adv:+ --advisor $adv}"   # %q: a [1m] model would glob where it's pasted
+  echo "--model $(printf %q "$m") --effort $e${adv:+ --advisor $adv}$(denied_tools "$k")"   # %q: a [1m] model would glob where it's pasted
   # Desktop with sidebar tasks: the pair as start_session's arguments too (stderr: stdout stays the flags to paste)
   [[ ${CLAUDE_CODE_ENTRYPOINT:-} != claude-desktop* ]] || [ "$(config start.sidebar 2>/dev/null)" != true ] ||
     echo "start_session: model \"$m\", effort \"$e\" (an effort the model doesn't offer, the app moves to one it does)" >&2
@@ -432,7 +432,7 @@ bg_cmd() {
   printf '%s --bg' "$1"; [ "$(jq -r '.permissions.defaultMode // empty' "$(pre_dir "$1")/settings.json" 2>/dev/null)" != plan ] || printf ' --permission-mode default'
 }
 if [ "${1:-}" = --plan ]; then
-  models=; for k in design build mechanical review release scan; do models+="$k=$(config "plan.models.$k") "; done
+  models= deny=; for k in design build mechanical review release scan; do models+="$k=$(config "plan.models.$k") " d=$(denied_tools "$k") deny+="$k=${d#*=} "; done
   read -r PLAN_W PLAN_WFROM < <(compact_window "$(find_root)")
   live= lfail=   # live names (a KEY-cN one is running), listed only where they're read
   if [ -f "${2:-}" ] && { [ -z "${3:-}" ] || { [ "$3" = --next ] && [ "$(config plan.enabled)" != false ]; }; }; then
@@ -440,7 +440,7 @@ if [ "${1:-}" = --plan ]; then
   fi
   shift; PLAN_LIVE=$live PLAN_LFAIL=$lfail PLAN_MAXP=$(config plan.max_parallel) PLAN_AT=$(config handoff.at.chunk) PLAN_MODELS=$models PLAN_LIB=$(dirname "$0")/../../lib.sh PLAN_ON=$(config plan.enabled) \
     PLAN_TELEMETRY=$(config telemetry) PLAN_LOG=$(usage_log) PLAN_W=$PLAN_W PLAN_WFROM=$PLAN_WFROM PLAN_WANT=$(config compact.window) \
-    PLAN_BG=$(bg_cmd claude) python3 -I "$(dirname "$0")/plan.py" "$@"; exit
+    PLAN_BG=$(bg_cmd claude) PLAN_DENY=$deny python3 -I "$(dirname "$0")/plan.py" "$@"; exit
 fi
 if [ "${1:-}" = --open ]; then
   case ${2:-} in view) fn=open_view ;; split) fn=open_split ;; *) echo "usage: session-status --open view|split …" >&2; exit 1 ;; esac

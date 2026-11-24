@@ -38,6 +38,8 @@ printf '#!/bin/sh\necho %s\n' "'[{\"sessionId\":\"$sid\",\"name\":\"fix it\",\"c
 chmod +x "$tmp/bin/claude"
 
 run() { (cd "$root" && HOME=$tmp XDG_STATE_HOME=$tmp/state CLAUDE_CONFIG_DIR=$tmp/cfg PATH=$tmp/bin:$PATH "$here/session-status" "$@"); }
+# kind ARGS: run --kind ARGS without its --disallowedTools flag (the plan section checks that flag), its exit kept.
+kind() { ( set -o pipefail; run --kind "$@" | sed 's/ --disallowedTools=[^ ]*//' ); }
 # Helpers more than one section uses (each section's own setup calls the ones it needs).
 mkdir -p "$root/.claude"
 # The terminal it runs in: none, unless T_PROG (TERM_PROGRAM) or T_MUX (TMUX) says.
@@ -2873,10 +2875,10 @@ c2 and c3 both touch docs/*.md ~ docs/guide.md
 EOF
 diff <(run --plan "$plan" --next) - <<EOF || { echo "--plan --next"; exit 1; }
 waves: {1,2,3} → {4} → {5}
-claude --bg --model sonnet --effort medium -n PROJ-123-c2 'Session task: PROJ-123
+claude --bg --model sonnet --effort medium --disallowedTools=Agent,AskUserQuestion,ScheduleWakeup -n PROJ-123-c2 'Session task: PROJ-123
 Chunk: PROJ-123/2
 Read $pd/PROJ-123-c2.md and do it.'
-claude --bg --model opus --effort xhigh -n PROJ-123-c5 'Session task: PROJ-123
+claude --bg --model opus --effort xhigh --disallowedTools=AskUserQuestion,ScheduleWakeup -n PROJ-123-c5 'Session task: PROJ-123
 Chunk: PROJ-123/5
 Read $pd/PROJ-123-c5.md and do it.'
 EOF
@@ -2898,7 +2900,7 @@ rc=0; out=$(run --plan "$pd/PROJ-8.md" --check) || rc=$?
 mkdir -p "$tmp/.config/session-orchestration"; echo '{"plan": {"max_parallel": 5, "models": {"build": "claude-fable-5-1/high"}}}' > "$tmp/.config/session-orchestration/config.json"
 out=$(run --plan "$pd/PROJ-8.md" --next 2>/dev/null)
 ! grep -q fable <<<"$(grep '^claude' <<<"$out")" && grep -q '^c1: model/effort fable/high not allowed' <<<"$out" &&
-  grep -q '^claude --bg --model opus --effort medium -n PROJ-8-c4 ' <<<"$out" || { echo "--next started fable: $out"; exit 1; }
+  grep -q '^claude --bg --model opus --effort medium --disallowedTools=[^ ]* -n PROJ-8-c4 ' <<<"$out" || { echo "--next started fable: $out"; exit 1; }
 echo '{"plan": {"enabled": false}}' > "$tmp/.config/session-orchestration/config.json"
 [ "$(run --plan "$plan" --next | tail -1)" = 'plan.enabled is false: run tasks without a plan' ] && ! run --plan "$plan" --next | grep -q '^claude' ||
   { echo "--next ran with plan.enabled false"; exit 1; }
@@ -2928,57 +2930,64 @@ n0=$(wc -l < "$tmp/state/session-orchestration/usage.jsonl")
 # --kind KIND: plan.models.KIND as --model/--effort flags (fable in the config falls back to the default), logged as a
 # start line; a bad kind is refused, and usage refuses a malformed start line.
 echo '{"telemetry": "local", "plan": {"models": {"scan": "claude-fable-5-1/low", "review": "sonnet/high"}}}' > "$tmp/.config/session-orchestration/config.json"
-[ "$(run --kind build)" = '--model opus --effort medium' ] && [ "$(run --kind scan 2>/dev/null)" = '--model haiku --effort low' ] &&
-  [ "$(run --kind review)" = '--model sonnet --effort high' ] && [ "$(run --kind research)" = '--model opus --effort high' ] &&
-  [ "$(run --kind retro)" = '--model opus --effort xhigh' ] &&
+[ "$(kind build)" = '--model opus --effort medium' ] && [ "$(kind scan 2>/dev/null)" = '--model haiku --effort low' ] &&
+  [ "$(kind review)" = '--model sonnet --effort high' ] && [ "$(kind research)" = '--model opus --effort high' ] &&
+  [ "$(kind retro)" = '--model opus --effort xhigh' ] &&
   [ "$(tail -1 "$tmp/state/session-orchestration/usage.jsonl" | sed -E 's/"t":[0-9]+/"t":T/')" = '{"t":T,"k":"start","what":"retro","model":"opus","effort":"xhigh"}' ] &&
-  [ "$(run --kind mechanical claude-plugins-fix-doc)" = '--model sonnet --effort medium' ] &&
+  [ "$(kind mechanical claude-plugins-fix-doc)" = '--model sonnet --effort medium' ] &&
   [ "$(tail -1 "$tmp/state/session-orchestration/usage.jsonl" | sed -E 's/"t":[0-9]+/"t":T/')" = "{\"t\":T,\"k\":\"start\",\"what\":\"mechanical\",\"model\":\"sonnet\",\"effort\":\"medium\",\"sess\":\"96bb4fcd0a71\"}" ] &&
   ! run --kind build 'two words' 2>/dev/null && ! run --kind build a b 2>/dev/null &&
   ! run --kind chunky 2>/dev/null && ! run --kind 2>/dev/null || { echo "--kind"; tail -3 "$tmp/state/session-orchestration/usage.jsonl"; exit 1; }
 echo '{"telemetry": "local", "start": {"sidebar": true}}' > "$tmp/.config/session-orchestration/config.json"
-[ "$(CLAUDE_CODE_ENTRYPOINT=claude-desktop run --kind build 2>&1)" = "$(printf -- '--model opus --effort medium\nstart_session: model "opus", effort "medium" (an effort the model doesn'"'"'t offer, the app moves to one it does)')" ] &&
-  [ "$(CLAUDE_CODE_ENTRYPOINT=cli run --kind build 2>&1)" = '--model opus --effort medium' ] || { echo "--kind in Desktop with start.sidebar"; exit 1; }
+[ "$(CLAUDE_CODE_ENTRYPOINT=claude-desktop run --kind build 2>&1)" = "$(printf -- '--model opus --effort medium --disallowedTools=Agent,AskUserQuestion,ScheduleWakeup\nstart_session: model "opus", effort "medium" (an effort the model doesn'"'"'t offer, the app moves to one it does)')" ] &&
+  [ "$(CLAUDE_CODE_ENTRYPOINT=cli kind build 2>&1)" = '--model opus --effort medium' ] || { echo "--kind in Desktop with start.sidebar"; exit 1; }
+# The tools a task goes without (lib.sh denied_tools): Agent but in research and review, EnterWorktree where the
+# project keeps .worktrees/, none for a coordinator.
+[ "$(run --kind build)" = '--model opus --effort medium --disallowedTools=Agent,AskUserQuestion,ScheduleWakeup' ] &&
+  [ "$(run --kind research)" = '--model opus --effort high --disallowedTools=AskUserQuestion,ScheduleWakeup' ] &&
+  [ "$(run --kind coordinator)" = '--model opus --effort medium' ] && mkdir "$root/.worktrees" &&
+  [ "$(run --kind review)" = '--model opus --effort xhigh --disallowedTools=AskUserQuestion,ScheduleWakeup,EnterWorktree' ] &&
+  rmdir "$root/.worktrees" || { echo "--kind's --disallowedTools"; exit 1; }
 # A fable kind: plan.models.scan fable/low starts on fable under an account fable.accounts lists, else the default.
 echo '{"fable": {"accounts": ["~/elsewhere"]}, "plan": {"models": {"scan": "fable/low"}}}' > "$tmp/.config/session-orchestration/config.json"
-[ "$(run --kind scan 2>/dev/null)" = '--model haiku --effort low' ] || { echo "--kind fable, account without it"; exit 1; }
+[ "$(kind scan 2>/dev/null)" = '--model haiku --effort low' ] || { echo "--kind fable, account without it"; exit 1; }
 echo '{"fable": {"accounts": ["~/elsewhere", "~/cfg"]}, "plan": {"models": {"scan": "fable/low"}}}' > "$tmp/.config/session-orchestration/config.json"
-[ "$(run --kind scan)" = '--model fable --effort low' ] && [ "$(run --kind coordinator)" = '--model fable --effort medium' ] &&
-  [ "$(run --kind design)" = '--model fable --effort xhigh' ] && [ "$(run --kind review)" = '--model fable --effort xhigh' ] &&
-  [ "$(run --kind retro)" = '--model fable --effort xhigh' ] && [ "$(run --kind research)" = '--model opus --effort high' ] &&
-  [ "$(run --kind build)" = '--model opus --effort medium' ] || { echo "--kind fable"; exit 1; }
+[ "$(kind scan)" = '--model fable --effort low' ] && [ "$(kind coordinator)" = '--model fable --effort medium' ] &&
+  [ "$(kind design)" = '--model fable --effort xhigh' ] && [ "$(kind review)" = '--model fable --effort xhigh' ] &&
+  [ "$(kind retro)" = '--model fable --effort xhigh' ] && [ "$(kind research)" = '--model opus --effort high' ] &&
+  [ "$(kind build)" = '--model opus --effort medium' ] || { echo "--kind fable"; exit 1; }
 # The account's Fable limit reached, its overall limit not: no fable until the limit's resetsAt, then fable again.
 u=$tmp/.cache/session-status/usage; mkdir -p "$u"; fsid=ffffffff-1111-2222-3333-444444444444
 printf '30\t%s\n' $(( $(date +%s) + 86400 )) > "$u/cfg"; printf '%s\trow-fable\n' "$fsid" > "$u/cfg.fable"
 hit() { printf '{"type":"assistant","uuid":"row-fable","quotaLimits":{"status":"rejected","rateLimitType":"seven_day_overage_included","resetsAt":%s},"message":{"model":"<synthetic>","content":[{"type":"text","text":"You'"'"'ve hit your Fable limit"}]}}\n' "$1" > "$proj/$fsid.jsonl"; }
 hit $(( $(date +%s) + 3600 ))
-[ "$(run --kind design)" = '--model opus --effort xhigh' ] && [ "$(run --kind coordinator)" = '--model opus --effort medium' ] &&
-  [ "$(run --kind scan)" = '--model haiku --effort low' ] || { echo "--kind with the Fable limit hit: $(run --kind design)"; exit 1; }
+[ "$(kind design)" = '--model opus --effort xhigh' ] && [ "$(kind coordinator)" = '--model opus --effort medium' ] &&
+  [ "$(kind scan)" = '--model haiku --effort low' ] || { echo "--kind with the Fable limit hit: $(kind design)"; exit 1; }
 hit $(( $(date +%s) - 60 ))
-[ "$(run --kind design)" = '--model fable --effort xhigh' ] || { echo "--kind after the Fable limit reset: $(run --kind design)"; exit 1; }
+[ "$(kind design)" = '--model fable --effort xhigh' ] || { echo "--kind after the Fable limit reset: $(kind design)"; exit 1; }
 rm -f "$proj/$fsid.jsonl" "$u/cfg" "$u/cfg.fable"
 echo '{"telemetry": "local", "plan": {"models": {"scan": "claude-fable-5-1/low", "review": "sonnet/high"}}}' > "$tmp/.config/session-orchestration/config.json"
 # KIND:S|M|L moves the effort a step (held at low and max) and logs the size with a NAME.
-[ "$(run --kind build:L claude-plugins-fix-doc)" = '--model opus --effort high' ] &&
+[ "$(kind build:L claude-plugins-fix-doc)" = '--model opus --effort high' ] &&
   [ "$(tail -1 "$tmp/state/session-orchestration/usage.jsonl" | sed -E 's/"t":[0-9]+/"t":T/')" = '{"t":T,"k":"start","what":"build","model":"opus","effort":"high","sess":"96bb4fcd0a71","size":"L"}' ] &&
-  [ "$(run --kind build:M a)" = '--model opus --effort medium' ] && [ "$(run --kind build:S a)" = '--model opus --effort low' ] &&
-  [ "$(run --kind scan:S a 2>/dev/null)" = '--model haiku --effort low' ] &&
+  [ "$(kind build:M a)" = '--model opus --effort medium' ] && [ "$(kind build:S a)" = '--model opus --effort low' ] &&
+  [ "$(kind scan:S a 2>/dev/null)" = '--model haiku --effort low' ] &&
   [ "$(tail -1 "$tmp/state/session-orchestration/usage.jsonl" | sed -E 's/"t":[0-9]+/"t":T/;s/"sess":"[0-9a-f]+"/"sess":H/')" = '{"t":T,"k":"start","what":"scan","model":"haiku","effort":"low","sess":H,"size":"S"}' ] &&
   ! run --kind build:L 2>/dev/null && ! run --kind build:X a 2>/dev/null && ! run --kind build:l 2>/dev/null || { echo "--kind with a size"; tail -2 "$tmp/state/session-orchestration/usage.jsonl"; exit 1; }
 # plan.advisor.KIND (the advisor trial): unset, no --advisor (every check above); set, --advisor A printed and logged
 # only where it pairs with the kind's model (not below it, nor a fable one where the account has no fable), else one
 # stderr line why; a value other than fable, opus or sonnet is ignored.
 echo '{"telemetry": "local", "plan": {"advisor": {"build": "opus", "mechanical": "sonnet", "research": "sonnet", "scan": "fable", "retro": "haiku"}}}' > "$tmp/.config/session-orchestration/config.json"
-[ "$(run --kind build kind-adv)" = '--model opus --effort medium --advisor opus' ] &&
+[ "$(kind build kind-adv)" = '--model opus --effort medium --advisor opus' ] &&
   [ "$(tail -1 "$tmp/state/session-orchestration/usage.jsonl" | sed -E 's/"t":[0-9]+/"t":T/;s/"sess":"[0-9a-f]+"/"sess":H/')" = '{"t":T,"k":"start","what":"build","model":"opus","effort":"medium","sess":H,"advisor":"opus"}' ] &&
-  [ "$(run --kind mechanical)" = '--model sonnet --effort medium --advisor sonnet' ] &&
-  [ "$(run --kind research 2>&1)" = "$(printf 'plan.advisor.research=sonnet doesn'"'"'t pair with opus (an advisor ranks at or above the model, none on fable): no --advisor\n--model opus --effort high')" ] &&
+  [ "$(kind mechanical)" = '--model sonnet --effort medium --advisor sonnet' ] &&
+  [ "$(kind research 2>&1)" = "$(printf 'plan.advisor.research=sonnet doesn'"'"'t pair with opus (an advisor ranks at or above the model, none on fable): no --advisor\n--model opus --effort high')" ] &&
   [ "$(tail -1 "$tmp/state/session-orchestration/usage.jsonl" | sed -E 's/"t":[0-9]+/"t":T/')" = '{"t":T,"k":"start","what":"research","model":"opus","effort":"high"}' ] &&
-  [ "$(run --kind scan 2>&1)" = "$(printf 'plan.advisor.scan=fable: this account has no fable (config fable.accounts, or its Fable limit is hit): no --advisor\n--model haiku --effort low')" ] &&
-  [ "$(run --kind retro 2>/dev/null)" = '--model opus --effort xhigh' ] && [ "$(run --kind review)" = '--model opus --effort xhigh' ] ||
+  [ "$(kind scan 2>&1)" = "$(printf 'plan.advisor.scan=fable: this account has no fable (config fable.accounts, or its Fable limit is hit): no --advisor\n--model haiku --effort low')" ] &&
+  [ "$(kind retro 2>/dev/null)" = '--model opus --effort xhigh' ] && [ "$(kind review)" = '--model opus --effort xhigh' ] ||
   { echo "--kind with plan.advisor"; tail -2 "$tmp/state/session-orchestration/usage.jsonl"; exit 1; }
 echo '{"fable": {"accounts": ["~/cfg"]}, "plan": {"advisor": {"scan": "fable", "design": "fable"}}}' > "$tmp/.config/session-orchestration/config.json"
-[ "$(run --kind scan)" = '--model haiku --effort low --advisor fable' ] && [ "$(run --kind design 2>/dev/null)" = '--model fable --effort xhigh' ] ||
+[ "$(kind scan)" = '--model haiku --effort low --advisor fable' ] && [ "$(kind design 2>/dev/null)" = '--model fable --effort xhigh' ] ||
   { echo "--kind with a fable advisor"; exit 1; }
 echo '{"telemetry": "local", "plan": {"models": {"scan": "claude-fable-5-1/low", "review": "sonnet/high"}}}' > "$tmp/.config/session-orchestration/config.json"
 (cd "$root" && HOME=$tmp XDG_STATE_HOME=$tmp/state bash -c '. "$0"; usage task escalate sonnet xhigh PROJ-9' "$here/../../lib.sh")
@@ -3010,11 +3019,11 @@ out=$(CLAUDE_CODE_AUTO_COMPACT_WINDOW= run --plan "$pd/PROJ-9.md" --check 2>&1) 
 out=$(CLAUDE_CODE_AUTO_COMPACT_WINDOW=180000 run --plan "$pd/PROJ-9.md" --check 2>&1) &&
   [ "$out" = 'window 180000 from env; expected 220000' ] || { echo "--plan --check, window: $out"; exit 1; }
 echo '{"permissions":{"defaultMode":"plan"}}' > "$tmp/cfg/settings.json"
-out=$(run --plan "$pd/PROJ-9.md" --next | grep '^claude' | sed "s/ 'Session.*//")
+out=$(run --plan "$pd/PROJ-9.md" --next | grep '^claude' | sed -e "s/ 'Session.*//" -e 's/ --disallowedTools=[^ ]*//')
 [ "$out" = 'claude --bg --permission-mode default --model opus --effort medium -n PROJ-9-c1
 claude --bg --permission-mode default --model opus --effort medium -n PROJ-9-c4' ] || { echo "--plan --next, cap and plan mode: $out"; exit 1; }
 echo '{}' > "$tmp/cfg/settings.json"
-run --plan "$pd/PROJ-9.md" --next | grep -q '^claude --bg --model opus --effort medium -n PROJ-9-c1 ' || { echo "--plan --next, plain account"; exit 1; }
+run --plan "$pd/PROJ-9.md" --next | grep -q '^claude --bg --model opus --effort medium --disallowedTools=[^ ]* -n PROJ-9-c1 ' || { echo "--plan --next, plain account"; exit 1; }
 # Any `## cN: done` is done: a handoff written after it doesn't make c2 runnable again (c3, overlapping it, now is).
 printf '## c1: done\n## c2: done\nok\n## c2: handoff 1234abcd\nlate\n## c4: done\n' > "$pd/PROJ-123-build.md"
 [ "$(run --plan "$plan" --next | grep '^claude' | sed "s/ 'Session.*//" | awk '{print $NF}' | paste -sd, -)" = PROJ-123-c3,PROJ-123-c5 ] &&
@@ -3026,12 +3035,12 @@ printf '| 1 | a | build | – | `a/` | 9K | default | x |\n| 2 | b | build | –
 cp "$tmp/bin/claude" "$tmp/claude.saved"
 printf '#!/bin/sh\necho %s\n' "'[{\"sessionId\":\"a1\",\"name\":\"PROJ-10-c2\",\"cwd\":\"/\"},{\"sessionId\":\"a2\",\"name\":\"PROJ-10-c1-prev-1\",\"cwd\":\"/\"}]'" > "$tmp/bin/claude"
 mkdir -p "$tmp/.config/session-orchestration"; echo '{"plan": {"max_parallel": 2}}' > "$tmp/.config/session-orchestration/config.json"
-out=$(run --plan "$pd/PROJ-10.md" --next | grep '^claude' | sed "s/ 'Session.*//")
+out=$(run --plan "$pd/PROJ-10.md" --next | grep '^claude' | sed -e "s/ 'Session.*//" -e 's/ --disallowedTools=[^ ]*//')
 [ "$out" = 'claude --bg --model opus --effort medium -n PROJ-10-c1' ] && run --plan "$pd/PROJ-10.md" | grep -qE '^c2 +running ' &&
   run --plan "$pd/PROJ-10.md" | grep -qE '^c1 +ready ' || { echo "--plan --next, running chunk: $out"; exit 1; }
 # A running chunk keeps its place under the top-level-directory cap: hooks/'s c1 runs, so only skills/'s c4 starts.
 printf '#!/bin/sh\necho %s\n' "'[{\"sessionId\":\"a1\",\"name\":\"PROJ-9-c1\",\"cwd\":\"/\"}]'" > "$tmp/bin/claude"
-out=$(run --plan "$pd/PROJ-9.md" --next | grep '^claude' | sed "s/ 'Session.*//")
+out=$(run --plan "$pd/PROJ-9.md" --next | grep '^claude' | sed -e "s/ 'Session.*//" -e 's/ --disallowedTools=[^ ]*//')
 [ "$out" = 'claude --bg --model opus --effort medium -n PROJ-9-c4' ] || { echo "--plan --next, running chunk and the directory cap: $out"; exit 1; }
 # A listing that failed is said on stderr.
 printf '#!/bin/sh\necho junk\n' > "$tmp/bin/claude"
@@ -3350,19 +3359,19 @@ echo other > "$tmp/owner"
 rc=0; out=$(run --claim ABC-7) || rc=$?
 [ "$rc" = 3 ] && [[ $out == *"ABC-7: assigned to someone else"*"start anyway on a separate branch / leave it"*"--anyway" ]] &&
   [ ! -s "$tmp/claims" ] || { echo "other: rc=$rc $out"; exit 1; }
-rc=0; out=$(run --kind build ABC-7-fix 2>"$tmp/err") || rc=$?
+rc=0; out=$(kind build ABC-7-fix 2>"$tmp/err") || rc=$?
 [ "$rc" = 3 ] && [ -z "$out" ] && [ ! -s "$tmp/claims" ] &&
   [[ $(tail -1 "$tmp/err") == *"run: session-status --kind build ABC-7-fix --anyway" ]] || { echo "--kind on other: rc=$rc $out $(cat "$tmp/err")"; exit 1; }
 rc=0; run --kind build --anyway >/dev/null 2>&1 || rc=$?; [ "$rc" = 2 ] || { echo "--anyway as NAME exited $rc"; exit 1; }
-[ "$(run --kind review ABC-7-fix)" = "$(run --kind review)" ] || { echo "a review start checked ownership"; exit 1; }
+[ "$(kind review ABC-7-fix)" = "$(kind review)" ] || { echo "a review start checked ownership"; exit 1; }
 # A sub-coordinator (KEY-coordinator) claims KEY; the project coordinator's name holds no key.
-rc=0; out=$(run --kind coordinator ABC-7-coordinator 2>"$tmp/err") || rc=$?
+rc=0; out=$(kind coordinator ABC-7-coordinator 2>"$tmp/err") || rc=$?
 [ "$rc" = 3 ] && [ -z "$out" ] && grep -q 'ABC-7: assigned to someone else' "$tmp/err" || { echo "--kind coordinator didn't claim: rc=$rc $out $(cat "$tmp/err")"; exit 1; }
-[ "$(run --kind coordinator proj-coordinator 2>&1)" = "$(run --kind coordinator)" ] || { echo "a project coordinator start checked ownership"; exit 1; }
+[ "$(kind coordinator proj-coordinator 2>&1)" = "$(kind coordinator)" ] || { echo "a project coordinator start checked ownership"; exit 1; }
 [ "$(run --claim ABC-7 --anyway | tail -1)" = "ABC-7: starting anyway, not claimed: brief the session to work on a new branch of its own, never pushing to, rebasing or force-pushing another person's branch" ] &&
   [ ! -s "$tmp/claims" ] || { echo "--anyway"; exit 1; }
 echo none > "$tmp/owner"
-[ "$(run --kind build ABC-7-fix 2>"$tmp/err")" = '--model opus --effort medium' ] && [ "$(cat "$tmp/claims")" = ABC-7 ] &&
+[ "$(kind build ABC-7-fix 2>"$tmp/err")" = '--model opus --effort medium' ] && [ "$(cat "$tmp/claims")" = ABC-7 ] &&
   [ "$(cat "$tmp/err")" = "ABC-7: claimed" ] || { echo "none: $(cat "$tmp/claims" "$tmp/err")"; exit 1; }
 echo me > "$tmp/owner"; : > "$tmp/claims"
 [ "$(run --claim ABC-7)" = "ABC-7: yours" ] && [ ! -s "$tmp/claims" ] || { echo "me"; exit 1; }
@@ -3406,7 +3415,7 @@ cp "$tmp/bin/claude" "$tmp/claude.keep"
 ss=$tmp/.cache/session-status lf=$ss/$(sed 's/[^A-Za-z0-9]/-/g' <<<"$root").launches started='(abcdef12) · build opus/medium'
 entry() { jq -cn --argjson due "$1" --arg name "$2" '{due: $due, name: $name, kind: "build", anyway: "", what: "do x", why: "w", done: "d", label: ""}'; }
 out=$(run --launch ABC-77-fix --kind build -- 'do x.' 'it breaks y' 'the test passes') && [ "$out" = "started \"ABC-77-fix\" $started" ] &&
-  [ "$(calls)" = '--bg --model opus --effort medium -n ABC-77-fix Work on ABC-77: do x. Why: it breaks y. Done when: the test passes. Keep working until done or blocked. When finished: reply with done and the check that proves it.' ] ||
+  [ "$(calls)" = '--bg --model opus --effort medium --disallowedTools=Agent,AskUserQuestion,ScheduleWakeup -n ABC-77-fix Work on ABC-77: do x. Why: it breaks y. Done when: the test passes. Keep working until done or blocked. When finished: reply with done and the check that proves it.' ] ||
   { echo "plain start failed: $out"; exit 1; }
 # Desktop with start.sidebar: no `claude --bg`, the start_session call printed
 gc=$tmp/.config/session-orchestration/config.json; cp "$gc" "$tmp/gc.keep" 2>/dev/null || :

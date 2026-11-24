@@ -441,6 +441,17 @@ advisor_ok() {
   case $2 in fable) [ "${FABLE_OK:-}" = 1 ] || fable_ok ;; opus|sonnet) ;; *) false ;; esac &&
     case $1 in *fable*) false ;; *opus*) [ "$2" != sonnet ] ;; *sonnet*|*haiku*) ;; *) false ;; esac
 }
+# denied_tools KIND: the `--disallowedTools=…` flag a task session of KIND starts with, else nothing (coordinator):
+# tools it never uses that every request would carry. AskUserQuestion and ScheduleWakeup always (a task asks through
+# reply; a background command or the coordinator wakes it); Agent too, except research and review (web-fetch,
+# subagents); EnterWorktree where the project's worktrees live in .worktrees/ (git worktree add: EnterWorktree is
+# refused there). The `=` form: a spaced list would take the brief that follows as another tool.
+denied_tools() {
+  local t=AskUserQuestion,ScheduleWakeup
+  case $1 in coordinator) return 0 ;; research|review) ;; *) t=Agent,$t ;; esac
+  [ ! -d "$(find_root)/.worktrees" ] || t+=,EnterWorktree
+  printf ' --disallowedTools=%s' "$t"
+}
 # last_advisor TRANSCRIPT: the advisor (fable, opus or sonnet) its session last ran with (advisorModel on its last
 # main-thread reply), else nothing.
 last_advisor() {

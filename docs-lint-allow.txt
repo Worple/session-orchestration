@@ -11,7 +11,6 @@ dup	plugins/project-memory/skills/project-memory/SKILL.md | plugins/session-orch
 dup	plugins/project-memory/skills/project-memory/SKILL.md | plugins/session-orchestration/skills/orchestrating-sessions/memory-rules.md: memory is an inbox not the home every session start pays for it so
 dup	plugins/project-memory/skills/project-memory/SKILL.md | plugins/session-orchestration/skills/orchestrating-sessions/memory-rules.md: what one task learned that another needs decisions the user made pitfalls conventions found
 dup	plugins/project-memory/skills/project-memory/SKILL.md | plugins/session-orchestration/skills/orchestrating-sessions/worker.md: tag an entry true and useful to a collaborator on another machine team date
-dup	plugins/project-memory/skills/project-memory/SKILL.md | plugins/session-orchestration/skills/orchestrating-sessions/worker.md: the project's claude.md names a project memory file read it when you start a
 
 # README is for people deciding to install; setup's SKILL.md is the model's copy of the same answers.
 dup	plugins/session-orchestration/README.md | plugins/session-orchestration/skills/setting-up-coordination/SKILL.md: 1 tracker none a task is a short name github issues and prs through
@@ -34,7 +33,6 @@ dup	plugins/session-orchestration/skills/orchestrating-sessions/sessions.md | pl
 dup	plugins/session-orchestration/hooks/reply-card.txt | plugins/session-orchestration/skills/orchestrating-sessions/SKILL.md: you worked around this plugin or the project took an extra round trip misreported
 dup	plugins/session-orchestration/skills/orchestrating-sessions/SKILL.md | plugins/session-orchestration/skills/orchestrating-sessions/pane.md: coordinator pane the user wants to talk about the ask or coordinator pane the
 dup	plugins/session-orchestration/skills/orchestrating-sessions/SKILL.md | plugins/session-orchestration/skills/orchestrating-sessions/worker.md: took an extra round trip misreported because of a script's output or a file
-dup	plugins/session-orchestration/skills/choosing-model-effort/SKILL.md | plugins/session-orchestration/skills/research/SKILL.md: a question from sources outside the project the web docs other tools code judging
 
 # The reply card is worker.md's always-loaded summary; worker.md is read only on the card's triggers.
 dup	plugins/session-orchestration/hooks/reply-card.txt | plugins/session-orchestration/skills/orchestrating-sessions/worker.md: a report you send unasked only when you're done blocked a decision waits on

@@ -1,6 +1,6 @@
 ---
 name: setting-up-coordination
-description: Sets a project folder up for coordinated Claude Code sessions (one coordinator, task sessions in parallel) — detects the tracker, code host and task keys, asks the few questions it can't detect, and writes the adapter, the CLAUDE.md section and the config. Use when asked to "coordinate this project", set up or check coordination, when open_pane says the folder isn't set up, or to change a coordination config value (tracker, host, key_pattern, approvals.delegate, approvals.pr_create, start.mode, start.kinds.feedback_apply, start.sidebar, terminal, features.accounts, features.accounts_weekly_switch, features.review_inbox, features.notify, features.remote, features.retro, retro.*, features.docs_watch, docs_watch.*, features.report_artifacts, report_artifacts.account).
+description: Sets a project up for coordinated sessions (one coordinator, parallel task sessions) - detects tracker, host and task keys, writes the adapter, CLAUDE.md section and config. Use for "coordinate this project", setting up or checking coordination, when open_pane says the folder isn't set up, or to change a coordination config value (tracker, host, key_pattern, terminal, approvals.*, start.*, features.*, retro.*, docs_watch.*, report_artifacts.*).
 ---
 
 # Setting up coordination

@@ -11,6 +11,7 @@ if not os.path.isfile(a[0]): die(f"no file {a[0]}")
 path = os.path.abspath(a[0]); mode = a[1] if len(a) > 1 else ""
 d, key = os.path.dirname(path), os.path.basename(path).removesuffix(".md")
 KINDS = dict(m.split("=", 1) for m in os.environ["PLAN_MODELS"].split())
+DENY = dict(m.split("=", 1) for m in os.environ.get("PLAN_DENY", "").split())   # lib.sh denied_tools per kind
 MAXP, AT = max(1, int(os.environ["PLAN_MAXP"])), int(os.environ["PLAN_AT"])
 okme = lambda me: "/" in me and subprocess.run(["bash", "-c", '. "$0" && model_ok "${1%%/*}" "${1#*/}"', os.environ["PLAN_LIB"], me]).returncode == 0   # lib.sh's one rule
 START = 60000   # ponytail: a constant session start; a later chunk calibrates it from retro.py's measured base
@@ -159,8 +160,9 @@ elif mode == "--next":
         r = R[n]; me = KINDS.get(r["kind"], "opus/medium") if r["model"] == "default" else r["model"]
         if not okme(me): print(f"c{n}: model/effort {me} not allowed (--check): not started"); continue
         m, _, e = me.partition("/")
+        deny = f" --disallowedTools={DENY[r['kind']]}" if DENY.get(r["kind"]) else ""
         prompt = f"Session task: {key}\nChunk: {key}/{n}\nRead {d}/{key}-c{n}.md and do it."
-        print(f"{os.environ['PLAN_BG']} --model {shlex.quote(m)} --effort {shlex.quote(e)} -n {shlex.quote(f'{key}-c{n}')} {shlex.quote(prompt)}")
+        print(f"{os.environ['PLAN_BG']} --model {shlex.quote(m)} --effort {shlex.quote(e)}{deny} -n {shlex.quote(f'{key}-c{n}')} {shlex.quote(prompt)}")
 else:
     for n, r in R.items():
         st = "running" if running(n) else state.get(n) or ("ready" if wave[n] and all(isdone(x) for x in r["deps"]) else "waiting" if wave[n] else "blocked")
