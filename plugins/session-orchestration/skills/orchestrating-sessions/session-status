@@ -1447,7 +1447,7 @@ waived_links() {
 # Build output and caches pass; a .env or notes only WT has don't. An ignored folder named like a dependency, build or
 # cache folder (REGEN_DIRS: node_modules, dist, …) passes unread: an install or build makes it again, and diffing every
 # node_modules of every finished worktree took 20+ minutes per sweep in a node monorepo.
-REGEN_DIRS=' node_modules bower_components .pnpm-store dist build .next .nuxt .svelte-kit .turbo .cache .parcel-cache coverage .nyc_output target __pycache__ .pytest_cache .mypy_cache .ruff_cache .tox .venv venv .gradle '
+REGEN_DIRS=' node_modules bower_components .pnpm-store dist build .next .nuxt .svelte-kit .turbo .nx .angular .vite .expo .dart_tool .terraform .cache .parcel-cache coverage .nyc_output target __pycache__ .pytest_cache .mypy_cache .ruff_cache .tox .venv venv .gradle '
 keeps_nothing() {
   local s p b
   s=$(git -C "$1" status --porcelain --ignored --untracked-files=normal 2>/dev/null) || return 1
@@ -1455,7 +1455,8 @@ keeps_nothing() {
   [ -z "$(grep -v '^!! ' <<<"$s" | grep .)" ] || return 1
   ! git -C "$1" ls-files -v 2>/dev/null | grep -q '^[a-zS] ' || return 1
   while IFS= read -r p; do
-    [[ $p == */ ]] && { b=${p%/}; [[ $REGEN_DIRS == *" ${b##*/} "* ]]; } && continue
+    # the folder itself ignored: git also lists an untracked dist/ holding only an ignored .env as `!! dist/`
+    [[ $p == */ ]] && { b=${p%/}; [[ $REGEN_DIRS == *" ${b##*/} "* ]] && git -C "$1" check-ignore -q --no-index "$p"; } && continue
     case $p in
       # a file only the main checkout has is fine; WT often sits inside REPO, so name REPO's folder exactly
       */) [ -d "$2/$p" ] && [ -z "$(diff -rq "$1/$p" "$2/$p" 2>&1 | grep -vF -e "Only in $2/${p%/}: " -e "Only in $2/$p")" ] ;;

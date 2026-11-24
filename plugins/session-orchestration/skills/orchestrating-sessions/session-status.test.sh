@@ -675,14 +675,17 @@ mv "$tmp/agents.keep" "$tmp/agents.json"
 # only the link), but one only the worktree has (wt12) does. Nor is anything removable while a listing of the sessions fails: a live one could be missing from it.
 jq '[.[] | if (.name | startswith("ABC-34")) then .pid = null else . end]' "$tmp/agents.json" > "$tmp/agents.t" && mv "$tmp/agents.t" "$tmp/agents.json"
 gc() { git -C "$1" -c user.name=t -c user.email=t@t commit -qm "$2"; }
-echo x > "$root/wt2/x" && git -C "$root/wt2" add x && gc "$root/wt2" x
+echo x > "$root/wt2/x" && mkdir "$root/wt2/pkg" && touch "$root/wt2/pkg/a" && git -C "$root/wt2" add x pkg && gc "$root/wt2" x
 git -C "$root" update-ref refs/remotes/origin/main "$(git -C "$root" -c user.name=u -c user.email=u@u commit-tree -p origin/main -m 'x (rebased)' 'feature/ABC-34-old^{tree}')"
 git -C "$root" worktree add -q -b feature/ABC-34-dirty "$root/wt4" origin/main && touch "$root/wt4/notes"
 git -C "$root" worktree add -q -b feature/ABC-34-extra "$root/wt5" origin/main && echo y > "$root/wt5/y" && git -C "$root/wt5" add y && gc "$root/wt5" y
 git -C "$root" worktree add -q -b feature/ABC-34-merge "$root/wt6" origin/main~1 && git -C "$root/wt6" -c user.name=t -c user.email=t@t merge -q --no-ff -m m origin/main
 printf 'cache/\n*.env\n' >> "$root/.git/info/exclude" && mkdir -p "$root/cache" "$root/wt2/cache" && touch "$root/cache/a" "$root/cache/b" "$root/wt2/cache/a"
-# a dependency folder only wt2 has (node_modules/: an install makes it again) doesn't keep it either, and isn't read
-printf 'node_modules/\n' >> "$root/.git/info/exclude" && mkdir -p "$root/wt2/node_modules/pkg" && echo x > "$root/wt2/node_modules/pkg/index.js"
+# a dependency folder only wt2 has (node_modules/, nested too: an install makes it again) doesn't keep it either, and
+# isn't read; a dist/ that isn't ignored itself, holding only an ignored .env (git lists it `!! dist/`), keeps wt16
+printf 'node_modules/\n' >> "$root/.git/info/exclude" && mkdir -p "$root/wt2/node_modules/p" "$root/wt2/pkg/node_modules" &&
+  echo x > "$root/wt2/node_modules/p/index.js" && echo x > "$root/wt2/pkg/node_modules/index.js"
+git -C "$root" worktree add -q -b feature/ABC-34-dist "$root/wt16" origin/main && mkdir "$root/wt16/dist" && echo k=v > "$root/wt16/dist/local.env"
 printf 'tasks\n' >> "$root/.git/info/exclude" && ln -s cache "$root/tasks" && ln -s /nonexistent "$root/wt2/tasks"
 git -C "$root" worktree add -q -b feature/ABC-34-env "$root/wt7" origin/main && echo k=v > "$root/wt7/local.env"
 git -C "$root" worktree add -q -b feature/ABC-34-used "$root/wt8" origin/main
@@ -704,12 +707,12 @@ out=$(SESSION_STATUS_PEEK=1 SESSION_STATUS_FORWARD=1 run --changes) && [ -d "$ro
   [ "$(grep -c wt2 <<<"$out")" = 1 ] && b=$(run | sed -n '/^Leftovers/,/^$/p') &&
   grep -qF 'worktree wt4 has 1 uncommitted file(s)' <<<"$b" && grep -qF 'worktree wt5 has 1 commit(s) not pushed' <<<"$b" &&
   grep -qF 'worktree wt6 has 1 commit(s) not pushed' <<<"$b" && grep -qF 'worktree remove wt8 &&' <<<"$b" && grep -qF 'worktree remove wt11 &&' <<<"$b" &&
-  [ "$(grep -cE 'worktree wt(7|9|10|12) has ignored or hidden files the main checkout lacks — check before removing' <<<"$b")" = 4 ] &&
+  [ "$(grep -cE 'worktree wt(7|9|10|12|16) has ignored or hidden files the main checkout lacks — check before removing' <<<"$b")" = 5 ] &&
   [ -d "$root/wt11" ] &&
   [ -d "$root/wt4" ] && [ -d "$root/wt5" ] && [ -d "$root/wt6" ] && [ -f "$root/wt7/local.env" ] && [ -d "$root/wt8" ] &&
-  [ -f "$root/wt9/cache/notes" ] && [ -f "$root/wt10/notes" ] &&
+  [ -f "$root/wt9/cache/notes" ] && [ -f "$root/wt10/notes" ] && [ -f "$root/wt16/dist/local.env" ] &&
   [ "$(SESSION_STATUS_FORWARD=1 run --changes)" = "no changes" ] || { echo "watcher's worktree removal failed: $out / ${b:-}"; exit 1; }
-for w in wt4 wt5 wt6 wt7 wt8 wt9 wt10 wt11 wt12; do git -C "$root" worktree remove --force "$root/$w"; done; rm -rf "$root/cache" "$root/tasks"
+for w in wt4 wt5 wt6 wt7 wt8 wt9 wt10 wt11 wt12 wt16; do git -C "$root" worktree remove --force "$root/$w"; done; rm -rf "$root/cache" "$root/tasks"
 git -C "$root" config --unset extensions.worktreeConfig
 # An untracked symlink to the main checkout's same path loses nothing (a dir-only rule, nm/, never matches a link, so
 # git lists it untracked): the watcher removes that worktree (--force), dropping only the link. A worktree whose branch
