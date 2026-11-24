@@ -117,7 +117,7 @@ and no heading.
      $(cat keys.txt)`), and pass `--merged merged.txt` to both `units` calls. An adapter without `yesterday`, or a
      non-zero exit: leave it out and say merges count only the ones sessions ran (`merge_ran`). Time to merge, with
      a GitHub host: the PR list to `prs.json` (`gh pr list --state all --limit 1000 --json
-     number,createdAt,mergedAt -R OWNER/REPO`), then `merges <dir> prs.json 7 P > merges.txt` (`waste`'s
+     number,createdAt,mergedAt -R OWNER/REPO`), then `merges <dir> prs.json 7 OWNER/REPO P > merges.txt` (`waste`'s
      `sessions.tsv` first: it reads it for $ per PR).
    - `context`: `context 7 <split> P > context.tsv` (split: last run's end, so the slice after it gets its own row).
    - `waste`: `sessions 7 P > sessions.tsv`, `events 7 P > events.tsv 2> events.txt`, `waits 7 5 P > waits.tsv 2> waits.txt`,
@@ -133,7 +133,6 @@ and no heading.
      `events.txt`'s `noverdict` line: report it beside the count. `hook_changed` and `sibling_changed` come from a
      PreToolUse hook that rewrites a call's input (`updatedInput`), which the user can fix in their own hooks;
      `ended` is the classifier's side.
-   - `spend`: `spend 7 <dir> > spend.md` (it writes `spend-*.tsv` into `<dir>` too).
    - `feedback`: project scope, `../orchestrating-sessions/feedback list --project` from the project root; plugin
      scope, `feedback list --plugin` and `feedback list --all --plugin` (the cases last run filed or named, and
      whether they are `fixed` now).
@@ -145,6 +144,8 @@ and no heading.
      `pending.md`; an entry with no history file has rewordings `-`).
    - `protocol`: `start 7 > start.tsv` (each coordinator's Start by part, the medians last) and `loads 7 > loads.tsv`
      (messages, skill, `worker.md`, card and reply loads by session kind).
+   - `spend`: `spend 7 <dir> > spend.md` (it writes `spend-*.tsv` into `<dir>` too, and reads `protocol`'s
+     `start.tsv` when `<dir>` has it, for the Coordinator Starts lines).
    - `features`: `usage 30 > usage.tsv` and `events 30 > events30.tsv`.
    - `sizing`: `chunks 7 > chunks.tsv` and `trial > trial.tsv` when the usage log has chunk lines; `kinds 7 >
      kinds.tsv` when it has start lines. Exit 2 with `unmeasured: WHY` on stderr (no usage log, or one starting after

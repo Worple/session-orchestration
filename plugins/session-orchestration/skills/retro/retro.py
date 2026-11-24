@@ -1950,11 +1950,12 @@ def waste(d="", days=7, opening_chars=24):
                   sorted(((k, *v) for k, v in byc.items()), key=lambda x: -x[2])[:10])
         print("waits by decision:", collections.Counter(r["decision"] for r in w).most_common(6))
     dn, p = [], f"{HOME}/.cache/session-status/denied.jsonl"
+    rset = {os.path.abspath(os.path.expanduser(ROOT)), os.path.realpath(os.path.expanduser(ROOT))} if ROOT else set()
     for _, o in lines(p) if os.path.exists(p) else []:
         if not isinstance(o, dict) or not isinstance(o.get("time"), (int, float)) or not CUT <= o["time"] <= END:
             continue
         cwd = str(o.get("cwd") or "")
-        if ROOT and not (cwd == ROOT.rstrip("/") or cwd.startswith(ROOT.rstrip("/") + "/")):
+        if ROOT and not any(cwd == r or cwd.startswith(r.rstrip("/") + "/") for r in rset):
             continue
         rs = str(o.get("reason") or "")
         o["k"] = ("noverdict" if "Classifier unavailable" in rs or "no verdict" in rs else
@@ -1967,34 +1968,39 @@ def waste(d="", days=7, opening_chars=24):
         print("usage faults:", "; ".join(f"{u['kind']} {u['feature']} {u['uses']}" for u in f))
 
 
-def merges(d="", prs_json="", days=7):
+def merges(d="", prs_json="", days=7, repo=""):
     """The merge rows of DIR's units.tsv against the host's PR list (PRS_JSON: number, createdAt, mergedAt): how long a
-    merge command took to land, and $ per merged PR."""
+    merge command took to land, and $ per merged PR. OWNER/REPO drops merge rows that name another repo."""
     if not d or not prs_json:
-        sys.exit("usage: retro.py merges DIR PRS_JSON [days=7]")
+        sys.exit("usage: retro.py merges DIR PRS_JSON [days=7] [OWNER/REPO]")
     window(days)
     prs = {p["number"]: p for p in json.load(open(prs_json))}
     s = tsv(d, "sessions.tsv")
     usd_all = sum(float(r["usd"] or 0) for r in s)
     sstart = {r["session"]: r["start"] for r in s}
-    ms = [r for r in tsv(d, "units.tsv") if r["kind"] == "merge" and "#" in r["id"]]
-    nums = collections.Counter(int(r["id"].rsplit("#", 1)[1]) for r in ms)
+    num = lambda r: r["id"].rpartition("#")[2]
+    ms = [r for r in tsv(d, "units.tsv") if r["kind"] == "merge" and num(r).isdigit()
+          and not (repo and "#" in r["id"] and r["id"].rpartition("#")[0] != repo)]
+    nums = collections.Counter(int(num(r)) for r in ms)
     mins = lambda a, b: (UTC(a) - UTC(b)).total_seconds() / 60
     p90 = lambda x: sorted(x)[min(len(x) - 1, int(0.9 * len(x)))] if x else 0
-    m2m, o2m, s2m, notm = [], [], [], set()
+    m2m, o2m, s2m, notm, seen = [], [], [], set(), set()
     for r in ms:
-        n = int(r["id"].rsplit("#", 1)[1])
+        n = int(num(r))
         p = prs.get(n) or {}
         if not p.get("mergedAt"):
             notm.add(n)
             continue
+        if n in seen:   # a PR's first merge row only
+            continue
+        seen.add(n)
         m2m.append(mins(p["mergedAt"], r["ts"]))
         o2m.append(mins(p["mergedAt"], p["createdAt"]))
         if r["session"] in sstart:
             s2m.append(mins(r["ts"], sstart[r["session"]]))
     print(f"merge rows {len(ms)} distinct {len(nums)} dup {sorted(n for n, c in nums.items() if c > 1)} not merged {sorted(notm)}")
     print(f"merge cmd -> merged min: median {med(m2m):.0f} p90 {p90(m2m):.0f}; open -> merged median {med(o2m):.0f}; "
-          f"session start -> merge cmd median {med(s2m):.0f} (n={len(s2m)})")
+          f"first activity in window -> merge cmd median {med(s2m):.0f} (n={len(s2m)})")
     inwin = lambda ts: bool(ts) and not out_of(ts[:19])
     gm = [p for p in prs.values() if inwin(p.get("mergedAt"))]
     print(f"host: merged in window {len(gm)} opened {sum(inwin(p.get('createdAt')) for p in prs.values())}")
@@ -2009,9 +2015,9 @@ TEST_RX = [(k, re.compile(rx)) for k, rx in [
     ("mvn", r"\bmvn\b"), ("dotnet", r"\bdotnet (?:test|build)\b"), ("make", r"\bmake (?:test|check|build)\b"),
     ("playwright", r"playwright test")]]
 RATE = re.compile(r"rate limit|HTTP 429|submitted too quickly|abuse detection|rate.?limited", re.I)
-GH = re.compile(r"(?:^|[;&|(`{]|\bthen|\bdo|\bif|\buntil|\bwhile|\$\()\s*(?:\w+=\S+\s+)*(?:rtk\s+(?:proxy\s+)?)?gh\s+(\w+)(?:\s+(\w[\w-]*))?")
+GH = re.compile(r"(?:^|[;&|(`{\n]|\bthen|\bdo|\bif|\buntil|\bwhile|\$\()\s*(?:\w+=\S+\s+)*(?:rtk\s+(?:proxy\s+)?)?gh\s+(\w+)(?:\s+(\w[\w-]*))?")
 HANDOVER = re.compile(r"(?:-status[\"']?|\$\{?\w+\}?[\"']?)\s+--handover\b")
-SUITE = re.compile(r"(?:^|[;&|(){]|\bthen|\bdo|\btime|\bexec)\s*(?:\w+=\S+\s+)*(?:(?:bash|sh|zsh)\s+(?:-\w+\s+)*)?[\"']?([^\s=\"']*\.test\.sh)[\"']?([^;&|)\n]*)")
+SUITE = re.compile(r"(?:^|[;&|(){\n]|\bthen|\bdo|\btime|\bexec)\s*(?:\w+=\S+\s+)*(?:(?:bash|sh|zsh)\s+(?:-\w+\s+)*)?[\"']?([^\s=\"']*\.test\.sh)[\"']?([^;&|)\n]*)")
 
 
 def suite_runs(cmd):
@@ -2181,10 +2187,9 @@ def spend_extract(d):
                     if tags and tags[0][1] == "shell-suite":
                         what = ",".join(suite_runs(cmd))
                         tags = tags if what else []
-                    g = GH.search(cmd)
-                    gh = f"gh {g.group(1)} {g.group(2) or ''}".strip() if g else ""
-                    if gh:
-                        tags.append(("gh", gh))
+                    ghs = [f"gh {g.group(1)} {g.group(2) or ''}".strip() for g in GH.finditer(cmd)]
+                    tags += [("gh", x) for x in ghs]
+                    gh = ghs[0] if ghs else ""
                     if HANDOVER.search(cmd):
                         tags.append(("handover", "escalate" if "--escalate" in cmd else "handover"))
                     calls[b.get("id")] = dict(ts=ts, bg=bool(inp.get("run_in_background")), tags=tags, gh=gh, cmd=clip80(cmd),
@@ -2276,6 +2281,8 @@ def spend(*a):
     if len(a) not in (1, 2):
         sys.exit("usage: retro.py spend [days=7] DIR")
     days, d = a if len(a) == 2 else (7, a[0])
+    if not re.fullmatch(r"[\d.]+", str(days)):   # DIR [days] too
+        days, d = d, days
     window(days)
     os.makedirs(d, exist_ok=True)
     spend_extract(d)
@@ -2379,7 +2386,8 @@ def spend(*a):
     table("By trigger of the turn", ["trigger"] + BY, by(req, lambda r: r["trig"]))
     table("Main thread against subagents", ["thread", "model"] + BY, [[*k, *v] for k, *v in by(req, lambda r: ("sub" if r["sub"] else "main", model(r)))])
     ctxb = lambda r: "<50K" if r["ctx"] < 5e4 else "50-100K" if r["ctx"] < 1e5 else "100-150K" if r["ctx"] < 1.5e5 else "150K+"
-    table("Main-thread requests by context size", ["context"] + BY, sorted(by(main, ctxb), key=lambda x: x[0]))
+    ORD = ["<50K", "50-100K", "100-150K", "150K+", "none", "< 5 min", "5-60 min", "> 60 min"]
+    table("Main-thread requests by context size", ["context"] + BY, sorted(by(main, ctxb), key=lambda x: ORD.index(x[0])))
     coord = [r for r in main if r["kind"] == "coordinator"]
     table("Coordinator sessions by model and effort", ["model", "effort"] + BY, [[*k, *v] for k, *v in by(coord, lambda r: (model(r), r["effort"]))])
     table("Coordinator sessions by day", ["day"] + BY, sorted(by(coord, lambda r: r["ts"][:10]), key=lambda x: x[0]))
@@ -2409,7 +2417,7 @@ def spend(*a):
         f"compaction). {len(big)} rebuilds in {len({r['sid'] for r in big})} sessions, extra ${X:,.0f} ({pct(X, TOTAL)} of the "
         f"window's $); 5-minute writes are {pct(sum(r['cw5'] for r in big), sum(r['cw'] for r in big))} of their cache-write "
         f"tokens; subagents' rebuilds: {sum(r['sub'] for r in big)}.")
-    table("Rebuilds by idle gap before the request", ["gap"] + W1, wrows(big, gapb))
+    table("Rebuilds by idle gap before the request", ["gap"] + W1, sorted(wrows(big, gapb), key=lambda x: ORD.index(x[0])))
     table("Rebuilds by trigger", ["trigger"] + W1, wrows(big, lambda r: r["trig"]))
     table("Rebuilds by account", ["account"] + W1, wrows(big, lambda r: r["acct"]))
     table("Rebuilds by session kind", ["kind"] + W1, wrows(big, lambda r: r["kind"]))
@@ -2421,7 +2429,7 @@ def spend(*a):
             v = allw[gapb(r)]
             v[0] += 1; v[1] += r["cw"]; v[2] += r["ctx"]; v[3] += extra(r)
     table("All main-thread requests by idle gap (any context size)", ["gap", "requests", "cache write Mtok", "share of context rewritten", "extra $ over a cache read"],
-          [[k, n, Mt(cw), pct(cw, cx), x] for k, (n, cw, cx, x) in sorted(allw.items())],
+          [[k, n, Mt(cw), pct(cw, cx), x] for k, (n, cw, cx, x) in sorted(allw.items(), key=lambda x: ORD.index(x[0]))],
           "Extra $ here counts every cache write, the ordinary growth of a turn too: the '> 60 min' row is the price of an expired cache.")
     moved = [s for s in sess.values() if s["sup"] in sess and sess[s["sup"]]["owners"] != s["owners"]]
     say(f"\nAccount moves (a successor under another owner than the session it supersedes): {len(moved)}"
@@ -2598,6 +2606,8 @@ def spend(*a):
         table("Coordinator Starts by day (start.tsv)", ["day", "starts", *[f"median {k}" for k in K]],
               [[k, len(rs), *[int(med([num(r, x) for r in rs])) for x in K]] for k, rs in sorted(grp(lambda r: r["started"][:10], st).items())]
               + [["all", len(st), *[int(med([num(r, x) for r in st])) for x in K]]])
+    else:
+        say("\nCoordinator Starts: no start.tsv in DIR (the protocol section's `start 7 > start.tsv` writes it first).")
     print("\n".join(out))
 
 

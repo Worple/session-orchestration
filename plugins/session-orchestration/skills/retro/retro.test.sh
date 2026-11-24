@@ -645,6 +645,7 @@ assert retro.suite_runs(f"bash {T}") == ["session-status.test.sh:full"]
 assert retro.suite_runs(f"cd /w && bash {T} pane start 2>&1 | tail -5") == ["session-status.test.sh:2"]
 assert retro.suite_runs(f"t={T}; bash \"$t\" > /tmp/o 2>&1; echo $?") == ["session-status.test.sh:full"]
 assert retro.suite_runs(f"./retro.test.sh && bash -x {T} NAME") == ["retro.test.sh:full", "session-status.test.sh:1"]
+assert retro.suite_runs(f"cd /w\nbash {T}") == ["session-status.test.sh:full"]
 assert retro.suite_runs(f"grep -n section {T} | head") == [] and retro.suite_runs(f"sed -n 1,9p {T}") == []
 assert retro.suite_runs(f"git diff --stat -- {T}; wc -l {T}") == [] and retro.suite_runs(f"t={T}; grep -c section \"$t\"") == []
 assert retro.GH.search("cd x && gh pr view 3 --json state").group(1, 2) == ("pr", "view")
@@ -670,9 +671,10 @@ grep -q "^deny 1 {'refusal': 1}" <<<"$out" && grep -q "^retries 1 " <<<"$out" &&
   fail "waste: deny class, retry, waits by class" "$out"
 # merges: units' merge rows against the host's PR list
 printf '%s\n' $'kind\tid\tsession\tts\tcommand' $'merge\to/r#5\ts1\t2026-10-12T10:00:00\tgh pr merge 5' \
-  $'merge\to/r#5\ts1\t2026-10-12T10:05:00\tgh pr merge 5' $'merge\to/r#6\ts1\t2026-10-12T11:00:00\tgh pr merge 6' > "$tmp/w/units.tsv"
+  $'merge\to/r#5\ts1\t2026-10-12T10:05:00\tgh pr merge 5' $'merge\to/r#6\ts1\t2026-10-12T11:00:00\tgh pr merge 6' \
+  $'merge\to/other#5\ts1\t2026-10-12T11:00:00\tgh pr merge 5 -R o/other' > "$tmp/w/units.tsv"
 echo '[{"number":5,"createdAt":"2026-10-12T09:00:00Z","mergedAt":"2026-10-12T10:30:00Z"},{"number":6,"createdAt":"2026-10-12T09:00:00Z","mergedAt":null}]' > "$tmp/w/prs.json"
-out=$(retro merges "$tmp/w" "$tmp/w/prs.json" 2>&1)
+out=$(retro merges "$tmp/w" "$tmp/w/prs.json" 7 o/r 2>&1)
 grep -q '^merge rows 3 distinct 2 dup \[5\] not merged \[6\]' <<<"$out" && grep -q '^host: merged in window 1 opened 2' <<<"$out" ||
   fail "merges: distinct, dup, not merged, host counts" "$out"
 echo ok
