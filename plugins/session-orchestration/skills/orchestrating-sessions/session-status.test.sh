@@ -3336,7 +3336,15 @@ printf 'Notes.\n- Project memory: `/home/u/mem.md`. Read it.\n' > "$root/CLAUDE.
 run --launch cleanup --kind mechanical:S 'tidy' 'w' 'd' >/dev/null && [[ $(calls) == *' -n cleanup Work on cleanup: tidy. Why: w. Done when: d. Read /home/u/mem.md first. Keep working '* ]] ||
   { echo "start without a key, with a memory file, failed"; exit 1; }
 rm "$root/CLAUDE.md"
-for a in 'ABC-77-fix --kind review' 'ABC-77-fix --kind coordinator' 'bad/name --kind build' 'ABC-77-fix --kind nokind' 'ABC-77-fix --kind build --at 25:00' 'ABC-77-fix --kind build --at 2020-01-01'; do
+# a review with no task key in its name owns its own task (a docs audit): started and logged like any task
+n0=$(wc -l < "$tmp/state/session-orchestration/usage.jsonl" 2>/dev/null || echo 0)
+out=$(run --launch docs-audit --kind review -- 'audit the docs' 'w' 'd') && [[ $out == 'started "docs-audit" (abcdef12) · review '* ]] &&
+  [[ $(calls) == *' -n docs-audit Work on docs-audit: audit the docs. Why: w. '* ]] &&
+  [ "$(wc -l < "$tmp/state/session-orchestration/usage.jsonl")" -gt "$n0" ] && tail -1 "$tmp/state/session-orchestration/usage.jsonl" | grep -q '"k":"start","what":"review"' ||
+  { echo "a key-less review start failed: $out"; exit 1; }
+# a name that is a key whole (a project whose keys are session names) owns its task too
+run --launch ABC-90 --kind review -- 'audit' 'w' 'd' >/dev/null && [[ $(calls) == *' -n ABC-90 Work on ABC-90: audit. '* ]] || { echo "a key-named review start failed"; exit 1; }
+for a in 'ABC-77-fix --kind review' 'ABC-77-fix --kind coordinator''bad/name --kind build' 'ABC-77-fix --kind nokind' 'ABC-77-fix --kind build --at 25:00' 'ABC-77-fix --kind build --at 2020-01-01'; do
   rc=0; run --launch $a -- a b c >/dev/null 2>&1 || rc=$?; [ "$rc" = 2 ] || { echo "--launch $a exited $rc"; exit 1; }
 done
 rc=0; run --launch ABC-77-fix --kind build --at '2020-01-01 10:00' -- a b c >/dev/null 2>&1 || rc=$?; [ "$rc" = 2 ] || { echo "a past --at exited $rc"; exit 1; }

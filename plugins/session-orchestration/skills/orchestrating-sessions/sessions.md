@@ -117,7 +117,9 @@ A new task, from the release after one-command starts: `session-status --launch 
 '<what>' '<who needs it, what it unblocks>' '<the end state of the whole job and the check that proves it>'`, as its
 own call. It runs `--kind` (below), builds the brief, adds "Read <memory file> first." when CLAUDE.md names one,
 starts the session and prints `started "NAME" (ID8) · KIND M/E`. Exit 3 or 2: nothing started, read on. Not for a
-review or a coordinator start (their own first prompts: Owners, [handover.md](handover.md)), nor in Desktop with
+review of another task (named `<KEY>-<more>`, it refuses: its own first prompt, Owners) or a coordinator start
+([handover.md](handover.md)); a review that owns its own task (a docs audit) launches with a name that has no task
+key or is one whole, from the release after key-less review launches. Nor in Desktop with
 `start.sidebar` on (it runs `claude --bg`, never `start_session`: start that one by hand, below). A started session
 needs no "started" line in your handoff file: the status lists it and `--owner` gives its first prompt.
 

@@ -198,7 +198,8 @@
 #                       start anyway): passes, claims nothing. KEY `#N`: a GitHub issue (no session name carries one)
 #        session-status --launch NAME --kind KIND[:S|M|L] [--anyway] [--at WHEN | --after-reset [ACCOUNT]] [--] 'WHAT' 'WHY' 'DONE-WHEN'
 #                       a task start in one command: --kind, then the brief built from the three texts, started as
-#                       NAME; --at or --after-reset queues it for a running --watch to start then
+#                       NAME; --at or --after-reset queues it for a running --watch to start then. Not for coordinator,
+#                       nor review named KEY-<more> (a review of KEY's task: its own first prompt)
 #        session-status --launch --list | --cancel NAME | --now NAME [--anyway]   the queued starts; drop one; start
 #                       one at once
 #        session-status --plan FILE [--check | --next | --brief N | --done N]   a design's plan table: waves and chunk
@@ -1528,8 +1529,9 @@ fi
 # started), builds sessions.md's brief (`Work on KEY: WHAT. Why: WHY. Done when: DONE-WHEN. Read MEMORY first. Keep
 # working until done or blocked. When finished: reply with done and the check that proves it.`; KEY: the task key NAME
 # starts with, else NAME; MEMORY: CLAUDE.md's "Project memory: `PATH`", the sentence left out when it names none) and
-# starts it as --handover does, printing `started "NAME" (ID8) · K M/E`. Not for review (its first line is `Session
-# task: KEY review`, with the review brief) nor coordinator (--successor, --coordinator-of).
+# starts it as --handover does, printing `started "NAME" (ID8) · K M/E`. Not for a review named KEY-<more>
+# (a review of KEY's task: its first line is `Session task: KEY review`, with the review brief) nor coordinator
+# (--successor, --coordinator-of); a review whose name has no key, or is a key whole, owns its task and starts.
 # --at 'HH:MM' (today, tomorrow when past) | 'YYYY-MM-DD HH:MM', or --after-reset [ACCOUNT] (that account's weekly
 # reset, lib.sh weekly_use, plus a minute; ACCOUNT: its config dir, default the caller's): queued as a JSON line in $ENC.launches instead. The
 # watcher's nap starts it when due (--launch --due; --kind runs then, so the model and the claim are that moment's)
@@ -1598,8 +1600,13 @@ if [ "${1:-}" = --launch ]; then
     *) break ;;
   esac; done
   [ $# = 3 ] && [ -n "$1" ] && [ -n "$2" ] && [ -n "$3" ] && config "plan.models.${kind%:[SML]}" >/dev/null 2>&1 || { echo "$u" >&2; exit 2; }
-  case ${kind%:[SML]} in review|coordinator)
-    echo "--launch: not for ${kind%:[SML]}: a review's first prompt starts \`Session task: KEY review\` and carries the review brief (sessions.md, Owners), and a coordinator starts by --successor or --coordinator-of" >&2; exit 2 ;; esac
+  # A review named KEY-<more> reviews KEY's task: its brief's "Work on KEY" would make it KEY's owner. One whose
+  # name has no key, or is a key whole (a project whose keys are session names), owns its own task (a docs audit).
+  [ "${kind%:[SML]}" != coordinator ] || { echo "--launch: not for coordinator: a coordinator starts by --successor or --coordinator-of" >&2; exit 2; }
+  rk=$(grep -oE -m1 "^$(key_re "$(adapter_path "$ROOT")")" <<<"$name" | head -1)
+  if [ "${kind%:[SML]}" = review ] && [ -n "$rk" ] && [ "$rk" != "$name" ]; then
+    echo "--launch: not for a review named for task $rk: a review of $rk's task starts by hand, its first prompt starting \`Session task: $rk review\` with the review brief (sessions.md, Owners); a review that owns its own task (a docs audit) takes a name without a task key" >&2; exit 2
+  fi
   if [ -z "$at" ]; then
     CLAIM_RERUN="session-status --launch $name --kind $kind --anyway -- '<the same three texts>'" launch_start "$name" "$kind" "$any" "$1" "$2" "$3"; exit
   fi
