@@ -54,6 +54,9 @@ The person's file only (the repo file can't set `messages` or `msgraph`):
 
 - `cli`: the command that runs the Graph CLI (msgraph-cli's commands: `status`, `chat get`, `raw`, `message
   search`, `mail list`, `calendar respond`). `npx -y <package>` is resolved to its `msgraph` binary once per run.
+  Each call runs with `msgraph-atomic-token.mjs` preloaded (`NODE_OPTIONS=--import`): the parallel calls may each
+  refresh the login, and the CLI's plain write of `~/.config/msgraph-cli/token.json` then left a corrupt file and
+  logged you out. The preload makes that write a temp file + rename. Run your own parallel calls the same way.
 - `me` (default: your Graph first name), `name`, `team`: how the triage prompt names you and your team. `team` is
   also the word rule A looks for.
 - `chats`, each `{id, name, rule, devs}` (find ids with the CLI's chat list):
