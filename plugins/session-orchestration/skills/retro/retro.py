@@ -1425,9 +1425,22 @@ def start(days=7):
         print("\t".join(map(str, [sid, reqs[0][2][:16], s["entry"]] + row)))
     med = lambda xs: sorted(xs)[len(xs) // 2] if xs else 0
     entries = sorted({e for e, _ in rows})
-    for e in ["all"] + (entries if len(entries) > 1 else []):
+    groups = ["all"] + (entries if len(entries) > 1 else [])
+    for e in groups:
         rs = [r for x, r in rows if e in ("all", x)]
         print("\t".join(map(str, ["median", f"n={len(rs)}", e] + [med([r[i] for r in rs]) for i in range(len(START_PARTS) + 5)])))
+    # each median against its target (SKILL.md, protocol): over/target, so the furthest over shows
+    for e in groups:
+        rs = [r for x, r in rows if e in ("all", x)]
+        for name, part, limit in START_TARGETS:
+            v = med([part(r) for r in rs])
+            print("\t".join(map(str, ["target", e, name, v, limit, f"{'over' if v > limit else 'ok'} {round(100 * v / limit)}%"])))
+
+
+# Start's targets: (name, the row's value, at most). Row: reqs base after_start increment, START_PARTS, rest.
+START_TARGETS = [("increment", lambda r: r[3], 23000), ("reqs", lambda r: r[0], 6), ("skill+coord_docs", lambda r: r[4] + r[5], 6500),
+                 ("feature_docs", lambda r: r[6], 500), ("project_docs", lambda r: r[7], 6000), ("schemas", lambda r: r[8], 2600),
+                 ("status+rest", lambda r: r[9] + r[10], 7000)]
 
 
 LOADS = ["msgs", "mid_turn", "skill_load", "skill_reinject", "worker_md", "card", "sendmessage_schema", "reply_schema",
@@ -1451,9 +1464,13 @@ def loads(days=7):
             if x[2] in a["tok"] and x[3] > 0:
                 a["tok"][x[2]].append(x[4])
     med = lambda xs: sorted(xs)[len(xs) // 2] if xs else "-"
-    print("kind\tsessions\twith_msgs\t" + "\t".join(LOADS) + "\tskill_tok\tcard_tok\treply_tok")
+    # reply: card_tok + reply_tok, against its 1K target (SKILL.md, protocol); `-` with neither measured
+    print("kind\tsessions\twith_msgs\t" + "\t".join(LOADS) + "\tskill_tok\tcard_tok\treply_tok\treply\treply_target")
     for k, a in sorted(agg.items(), key=lambda kv: -kv[1]["sessions"]):
-        print("\t".join(map(str, [k, a["sessions"], a["with_msgs"]] + [a[x] for x in LOADS] + [med(a["tok"][t]) for t in ("load", "card", "reply")])))
+        m = [med(a["tok"][t]) for t in ("load", "card", "reply")]
+        r = sum(x for x in m[1:] if x != "-") if m[1:] != ["-", "-"] else "-"
+        t = "-" if r == "-" else f"{'over' if r > 1000 else 'ok'} {round(r / 10)}%"
+        print("\t".join(map(str, [k, a["sessions"], a["with_msgs"]] + [a[x] for x in LOADS] + m + [r, t])))
 
 
 def inline(t):
@@ -1767,6 +1784,14 @@ SECTIONS = {"units": BOTH, "context": BOTH, "waste": BOTH, "feedback": BOTH, "co
 def sections(scope="", *names):
     if scope not in ("project", "plugin"):
         sys.exit("usage: retro.py sections project|plugin [NAME…]")
+    if scope == "plugin":   # plugin scope has one home, as lib.sh config retro.scope says
+        import subprocess
+        lib = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "lib.sh")
+        pr = subprocess.run(["bash", "-c", '. "$1" && pr=$(plugin_root) && [ "$pr" != "$(find_root)" ] && echo "$pr"', "_", lib],
+                            capture_output=True, text=True, timeout=30).stdout.strip()
+        if pr:
+            print(f"warning: plugin scope runs only from feedback.repo_dir's root ({pr}): project", file=sys.stderr)
+            scope = "project"
     for n in names:
         if scope not in SECTIONS.get(n, set()):
             print(f"skipped: {n} (not a {scope} section)", file=sys.stderr)

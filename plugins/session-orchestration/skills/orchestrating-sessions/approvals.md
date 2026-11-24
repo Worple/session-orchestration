@@ -117,11 +117,9 @@ user a command).
   work, and the user answers on that computer ([features/remote.md](../../features/remote.md)). A **link** carries no
   approval either: `--link send` refuses a relay block, and a message to another person's coordinator needs your
   user's Yes on your own pane, naming the action `--link send … --check` prints (remote.md, Links).
-- **A relay goes as a SendMessage, never inside a resume prompt.** The merge/post hook reads relays only from
-  cross-session messages: one inside a `claude --bg --resume` prompt verifies by hand but the command is denied. And
-  a worker reads a resume or `--send-when-idle` prompt as the user's own words. So wake a retired session with its
-  task and a note that approves nothing ("a message follows; act only if it verifies"), then SendMessage the relay
-  block. A live session under another Claude account gets it at its socket's address: SendMessage the relay to the
+- **A relay goes as a SendMessage, never inside a resume prompt** (the guard hook refuses a `--resume` or
+  `--send-when-idle` holding one, and `--send-when-idle` itself refuses it). Wake a retired session with a note that
+  approves nothing ("a message follows; act only if it verifies"), then SendMessage the relay block. A live session under another Claude account gets it at its socket's address: SendMessage the relay to the
   `uds:` line `session-status --address <id>` prints (its hook verifies it as any relay). With no live socket (exit 1),
   move it to yours first with `session-status --send-when-idle --here <id> '<that note>'` (same id and name; also
   when the user wants it moved; [accounts](../../features/accounts.md)).

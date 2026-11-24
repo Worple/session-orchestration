@@ -68,7 +68,10 @@ RETRO_NOW=$(at '2026-11-30 12:05') run "$root" --scheduled; [ "$(calls)" = 6 ] |
 # A report of the scope's own series counts as well (retro-project-<N>).
 rm "$replies"/*.stamp; touch -t 202611240900 "$replies/replies/retro-project-4.md"
 out=$(RETRO_NOW=$(at '2026-12-01 10:00') run "$root" --status)
-grep -q 'project: last start none (counts from 2026-11-24 09:00) · next due now (missed 2026-11-30 12:00)' <<<"$out" || fail "--status: a missed run" "$out"
+grep -q 'project: last start none (counts from 2026-11-24 09:00) · next due now (missed 2026-11-30 12:00)' <<<"$out" && ! grep -q overdue <<<"$out" || fail "--status: a missed run" "$out"
+# The newest report over 8 days old: an overdue line (RETRO_NOW is UTC, the report's time local: 8 or 9 days)
+out=$(RETRO_NOW=$(at '2026-12-03 10:00') run "$root" --status)
+grep -qE '^  project: retro overdue: newest report [89] days old$' <<<"$out" || fail "--status: an overdue run" "$out"
 
 # The LaunchAgent: off or without a schedule it starts nothing.
 echo '{"features":{"retro":false},"retro":{"schedule":"mon 12:00"}}' > "$root/.claude/coordination.local.json"

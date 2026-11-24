@@ -221,7 +221,7 @@ Both are excluded from git, the repo file until shared mode commits it. `session
 | `features.retro` | `true` \| `false`: scheduled retro runs, and `--check` names `features/retro.md` (what to do with a report, an overdue run). `/retro` by hand works either way | `false`; person-only; setup doesn't write it |
 | `features.docs_watch` | `true` \| `false`: once a day, a Notices line per watched docs page neither of a `docs_watch.files` doc's lists has (`features/docs-watch.md`) | `true` when `docs_watch.files` names a doc, else `false`; person-only; setup doesn't write it |
 | `docs_watch.files` | JSON list of docs (relative to the root, or `~/…`), each with a `Last reviewed YYYY-MM-DD against:` list (and optionally a `Skipped …:` one) | the plugin's `writing-instructions.md` in the plugin repo's project, else unset; person-only; setup doesn't write it |
-| `docs_watch.pattern` | an extended regex over page slugs: which docs pages are watched | prompting, Agent Skills, guardrails and Claude Code memory, skills, subagents and hooks pages; person-only; setup doesn't write it |
+| `docs_watch.pattern` | an extended regex over page slugs: which docs pages are watched | `DOCS_WATCH_PATTERN` in `lib.sh` (`session-status --config docs_watch.pattern` prints it); person-only; setup doesn't write it |
 | `retro.scope` | `project` \| `plugin` \| `both`: whose sessions a retro run reads, this project's or every project's (`features/retro.md`) | `project`; person-only |
 | `retro.schedule` | `<day> HH:MM`, local time, day `mon`…`sun` (e.g. `mon 12:00`): when a scheduled run starts | unset: by hand only; person-only |
 | `retro.account` | the Claude config dir a scheduled run starts under (absolute or `~`; must exist) | the current account; person-only |

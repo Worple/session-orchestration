@@ -28,10 +28,8 @@ A run measures **one scope**, and the scope sets whose sessions are read and whi
 the project root; default `project`). `both` (an argument or the setting) runs the project scope and then the plugin
 scope, one after the other in this session, each a whole run with its own report: never one report for two scopes.
 
-Plugin scope has one home: with `feedback.repo_dir` set (`session-status --config feedback.repo_dir`), it runs only
-from that root, the plugin coordinator's project. From any other root, `plugin` and `both` run the project scope
-alone, with one warning line in the report (`--config retro.scope` already falls back so; an argument falls back the
-same way). This keeps the all-project numbers from being measured once per project. Unset, any project may run it.
+Plugin scope has one home, `feedback.repo_dir`'s root when that is set: from any other root `--config retro.scope`
+and `retro.py sections plugin` fall back to the project scope with a warning; put it in the report.
 
 ## Sections
 
@@ -177,12 +175,9 @@ and no heading.
      project memory index has a graduation rule and the brief has no graduation check of its own, run
      project-memory's `graduate` skill's Gather and Propose steps (no Apply) and put its numbered list in as one
      proposal outside the 5 below.
-   - `protocol`, against its targets: from `start.tsv`'s median rows (all, and per entrypoint when there are
-     several: the app's harness base runs ~30K above the CLI's), the base (first request; the harness's, not the
-     protocol's: report it, no target), Start's own increment (after_start − base, ≤ 23K: the part targets below
-     summed), its requests (≤ 6), skill + coord_docs (≤ 6.5K), feature_docs (≤ 0.5K), project_docs (≤ 6K), schemas (≤ 2.6K) and status +
-     rest (≤ 7K); from `loads.tsv`, workers' (task, chunk, review) skill loads (0 to reply: the card replaces them)
-     and the reply cost, card_tok + reply_tok (≤ 1K). Name the part furthest over its target.
+   - `protocol`, against its targets: `start.tsv`'s median and `target` rows (per entrypoint when there are several:
+     the app's harness base runs ~30K above the CLI's; the base itself is the harness's, no target) and `loads.tsv`'s
+     workers' skill loads (0 to reply: the card replaces them) and `reply_target`. Name the part furthest over.
    - `features`: each `unused` row of `usage.tsv` (0 uses in 30 days, there all window) is a candidate to drop or
      merge: at most one proposal listing them, never a removal on the run's own say. Pane buttons show `-` under
      `telemetry: off` (setting-up-coordination, Config; the default `full` and `local` log them): say so, and judge
@@ -246,7 +241,7 @@ else in `${XDG_STATE_HOME:-~/.local/state}` (`RETRO_LOG` overrides). It reads th
 | `retro-run ROOT [--scope S] [--now] [--dry-run]` | starts the scope's session(s) whose run is due: its last start is older than `retro.schedule`'s most recent time. `--now` skips the check; `--dry-run` prints the verdict and the start line. Each start prints `started "NAME" (ID8) · retro M/E` on stdout, or `"NAME" didn't start: WHY`, one line per scope; exit 1 when any scope didn't start |
 | `retro-run --install ROOT` | writes `~/Library/LaunchAgents/session-orchestration.retro.<slug>-<6 hex>.plist` (needs `features.retro` true and `retro.schedule`) and loads it; again after changing `retro.schedule` or `retro.account`. Prints the command that removes an old cron line; it never edits the crontab |
 | `retro-run --uninstall ROOT` | unloads and deletes it |
-| `retro-run --status [ROOT]` | label, loaded or not, schedule, account, last start and next due per scope (no ROOT: every agent) |
+| `retro-run --status [ROOT]` | label, loaded or not, schedule, account, last start and next due per scope, and `SCOPE: retro overdue: …` when its newest report is over 8 days old (no ROOT: every agent) |
 
 - **Missed runs**: launchd starts a calendar time missed in sleep at wake; `RunAtLoad` calls the launcher at each
   login, for a time missed while off or logged out. The due check (a stamp per root and scope in the project's state

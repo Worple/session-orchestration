@@ -27,7 +27,7 @@
         ]
       },
       {
-        "matcher": "Bash|Edit|MultiEdit|Write|NotebookEdit|mcp__ccd_session__start_session|mcp__ccd_session__hand_off_to_session",
+        "matcher": "Bash|Edit|MultiEdit|Write|NotebookEdit|mcp__ccd_session__start_session|mcp__ccd_session__hand_off_to_session|SendMessage|mcp__session-orchestration__reply",
         "hooks": [
           {
             "type": "command",

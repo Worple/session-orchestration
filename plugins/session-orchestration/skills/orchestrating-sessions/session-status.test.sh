@@ -489,8 +489,8 @@ echo 'app#1 OPEN CI-FAILED | ' > "$tmp/prs"; out=$(run --changes)
 grep -qxF "$(pev ci-failed -)" <<<"$out" && git init -q --bare "$tmp/origin.git" && git -C "$root/wt" remote add origin "$tmp/origin.git" &&
   git -C "$root/wt" push -q -u origin feature/ABC-12-fix && out=$(run --changes) && grep -qxF "$(pev ci-failed)" <<<"$out" &&
   [ "$(run --changes)" = "no changes" ] && commit && [ "$(run --changes | grep -c '^  \* ')" = 0 ] && git -C "$root/wt" push -q &&
-  [ "$(SESSION_STATUS_PEEK=1 run --changes | sed -n '/^PR events/,$p')" = "$(printf 'PR events (send each owner the nudge, sessions.md):\n%s' "$(pev ci-failed)")" ] &&
-  [ "$(run --changes | tail -1)" = "$(pev ci-failed)" ] && [ "$(run --changes)" = "no changes" ] &&
+  [ "$(SESSION_STATUS_PEEK=1 run --changes | sed -n '/^PR events/,$p')" = "$(printf 'PR events (send each owner the nudge under it, sessions.md):\n%s\n    nudge: PR app#1 (ABC-12): ci-failed on %s. Fix it and push; force-push, post or merge only with the usual approval. Reply when pushed, or blocked.' "$(pev ci-failed)" "$(git -C "$root/wt" rev-parse --short=12 '@{u}')")" ] &&
+  [ "$(run --changes | tail -2 | head -1)" = "$(pev ci-failed)" ] && [ "$(run --changes)" = "no changes" ] &&
   echo 'app#1 OPEN CI-FAILED !bob | ' > "$tmp/prs" && [ "$(run --changes | grep -c '^  \* app#1')" = 1 ] && push &&
   [ "$(run --changes | grep '^  \* app#1')" = "$(pev ci-failed)" ] &&
   echo 'app#1 MERGED CONFLICT | ' > "$tmp/prs" && ! run --changes | grep -q '^  \* app#1 conflict' &&
@@ -556,8 +556,13 @@ printf '%s\tid\tfix it\tapp#9 ci-failed @- (ABC-12) → "fix it" 11111111\tText\
 [ "$(run --outbox | cut -f3,5)" = "$(printf 'fix it\tText')" ] && [ -s "$e.outbox" ] &&
   printf 'ok\tapp#9 ci-failed @- (ABC-12) → "fix it" 11111111\tsent\n' | run --outbox-done && [ ! -s "$e.outbox" ] && : > "$e.forwarded" &&
   printf '1\tid\tfix it\tapp#9 ci-failed @- (ABC-12) → "fix it" 11111111\tText\n' > "$e.outbox" && out=$(run --changes) &&
-  grep -qxF '  * app#9 ci-failed @- (ABC-12) → "fix it" 11111111 (not forwarded: no coordinator pane sent it)' <<<"$out" && [ ! -s "$e.outbox" ] &&
-  rm "$tmp/prs" && run --changes >/dev/null || { echo "outbox failed: $out"; exit 1; }
+  grep -qxF '  * app#9 ci-failed @- (ABC-12) → "fix it" 11111111 (not forwarded: no coordinator pane sent it)' <<<"$out" && grep -qxF '    nudge: Text' <<<"$out" && [ ! -s "$e.outbox" ] ||
+  { echo "outbox failed: $out"; exit 1; }
+# one the pane failed to send keeps its entry's nudge
+printf '%s\tid\tfix it\tapp#10 conflict @- (ABC-12) → "fix it" 11111111\tNudge 10\n' "$(date +%s)" > "$e.outbox"
+printf 'failed\tapp#10 conflict @- (ABC-12) → "fix it" 11111111\tno such session\n' | run --outbox-done && [ ! -s "$e.outbox" ] && out=$(run --changes) &&
+  [ "$(grep -A1 -F 'app#10 conflict' <<<"$out")" = "$(printf '  * app#10 conflict @- (ABC-12) → "fix it" 11111111 (not forwarded: no such session)\n    nudge: Nudge 10')" ] &&
+  rm "$tmp/prs" && run --changes >/dev/null || { echo "a failed send's nudge: $out"; exit 1; }
 # A working <-> idle flip doesn't wake: working -> blocked (its turn is over) and back.
 echo working > "$tmp/sstate"; run --changes >/dev/null; echo blocked > "$tmp/sstate"
 [ "$(run --changes)" = "no changes" ] && echo working > "$tmp/sstate" && [ "$(run --changes)" = "no changes" ] || { echo "idle flip woke --changes"; exit 1; }
@@ -2004,6 +2009,12 @@ init "$b" --write >/dev/null && [ "$(jq -c .features "$b/.claude/coordination/co
   grep -x '  review_inbox: .* Read .*/features/review-inbox.md when .*' <<<"$c" >/dev/null &&
   grep -x '  review_inbox url: https://claude.ai/artifact/abc' <<<"$c" >/dev/null ||
   { echo "init features: $(init "$b" --check)"; exit 1; }
+# No allow rule for the inbox's post in the account's settings: --check names the rule to add.
+s0=$(cat "$tmp/cfg/settings.json" 2>/dev/null) || s0=
+grep -qx 'review_inbox: no allow rule for post-approved.sh, .*"Bash(bash /.*/\*/skills/orchestrating-sessions/review-inbox/post-approved.sh:\*)" to permissions.allow in ~/cfg/settings.json' <<<"$c" &&
+  mkdir -p "$tmp/cfg" && echo '{"permissions":{"allow":["Bash(bash /p/*/skills/orchestrating-sessions/review-inbox/post-approved.sh:*)"]}}' > "$tmp/cfg/settings.json" &&
+  ! grep -q 'no allow rule' <<<"$(init "$b" --check)" || { echo "init review_inbox allow rule: $c"; exit 1; }
+if [ -n "$s0" ]; then printf '%s\n' "$s0" > "$tmp/cfg/settings.json"; else rm -f "$tmp/cfg/settings.json"; fi
 # Two inboxes: this account's is on the line naming its config dir (~/cfg here), as ~/… or in full; ~/cfg-old isn't it.
 inbox_of() { printf 'Review inbox (`~/cfg-old`): https://claude.ai/artifact/old\nReview inbox (%s): https://claude.ai/artifact/%s\n' "$1" "$2" > "$b/CLAUDE.local.md"; init "$b" --check | sed -n 's/^  review_inbox url: //p'; }
 [ "$(inbox_of '`~/cfg`' mine):$(inbox_of "$tmp/cfg/" full):$(inbox_of '~/.claude-work' other)" = "https://claude.ai/artifact/mine:https://claude.ai/artifact/full:" ] ||
@@ -2058,8 +2069,12 @@ echo "{\"features\":{\"retro\":true},\"feedback\":{\"repo_dir\":\"$a\"},\"retro\
 c=$(init "$a" --check)
 [ "$(cfg "$a" features.retro):$(cfg "$a" retro.scope):$(cfg "$a" retro.schedule):$(cfg "$a" retro.account)" = "true:both:sun 09:30:$tmp/cfg" ] &&
   [ "$(cfg "$a" retro.sections)" = "$(printf 'units\nwaste')" ] && grep -x 'active: .* features=retro,plugin_coordinator' <<<"$c" >/dev/null &&
-  grep -x "  retro: nothing to do: a retro run reports to you when it ends\. Read $(cd "$here/../.." && pwd)/features/retro.md when .*" <<<"$c" >/dev/null ||
-  { echo "retro on: $c"; exit 1; }
+  grep -x "  retro: nothing to do: a retro run reports to you when it ends\. Read $(cd "$here/../.." && pwd)/features/retro.md when .*" <<<"$c" >/dev/null &&
+  ! grep -q 'retro overdue' <<<"$c" || { echo "retro on: $c"; exit 1; }
+# a scheduled retro whose newest report is over 8 days old: --check says so (retro-run --status's line)
+rp=$(cd "$a" && . "$here/../../lib.sh" && p=$(pwd -P) && r=$(replies_path "$p") && echo "${r:-$(proj_dir "$p")/replies}") && mkdir -p "$rp" &&
+  touch -t 202001010000 "$rp/retro-project-1.md" && c=$(init "$a" --check) &&
+  grep -qE '^  retro overdue \(project\): newest report [0-9]+ days old$' <<<"$c" && rm "$rp/retro-project-1.md" || { echo "retro overdue: $c"; exit 1; }
 echo "{\"feedback\":{\"repo_dir\":\"$b\"},\"retro\":{\"scope\":\"plugin\"}}" > "$a/.claude/coordination.local.json"
 [ "$(cfg "$a" retro.scope 2>&1)" = "$(printf 'warning: retro.scope=plugin runs only from feedback.repo_dir'"'"'s root (%s): project\nproject' "$b")" ] ||
   { echo "retro.scope away from the plugin root: $(cfg "$a" retro.scope 2>&1)"; exit 1; }
@@ -2844,7 +2859,7 @@ c4   done     build      hook
 c5   ready    review     review
 c6   blocked  planning   loop
 EOF
-( . "$here/../../lib.sh"
+( export HOME=$tmp CLAUDE_CONFIG_DIR=$tmp/cfg; . "$here/../../lib.sh"   # not this machine's fable.accounts
   model_ok opus && model_ok opus high && ! model_ok opus/high && ! model_ok opus ultra && ! model_ok fable high && ! model_ok claude-fable-5-2 &&
     FABLE_OK=1 model_ok claude-fable-5-2 high && ! model_ok 'Opus' && ! model_ok opus/ && model_ok 'opus[1m]' medium && ! model_ok 'opus[2m]' ) ||
   { echo "model_ok"; exit 1; }
@@ -3314,6 +3329,10 @@ rc=0; out=$(run --kind build ABC-7-fix 2>"$tmp/err") || rc=$?
   [[ $(tail -1 "$tmp/err") == *"run: session-status --kind build ABC-7-fix --anyway" ]] || { echo "--kind on other: rc=$rc $out $(cat "$tmp/err")"; exit 1; }
 rc=0; run --kind build --anyway >/dev/null 2>&1 || rc=$?; [ "$rc" = 2 ] || { echo "--anyway as NAME exited $rc"; exit 1; }
 [ "$(run --kind review ABC-7-fix)" = "$(run --kind review)" ] || { echo "a review start checked ownership"; exit 1; }
+# A sub-coordinator (KEY-coordinator) claims KEY; the project coordinator's name holds no key.
+rc=0; out=$(run --kind coordinator ABC-7-coordinator 2>"$tmp/err") || rc=$?
+[ "$rc" = 3 ] && [ -z "$out" ] && grep -q 'ABC-7: assigned to someone else' "$tmp/err" || { echo "--kind coordinator didn't claim: rc=$rc $out $(cat "$tmp/err")"; exit 1; }
+[ "$(run --kind coordinator proj-coordinator 2>&1)" = "$(run --kind coordinator)" ] || { echo "a project coordinator start checked ownership"; exit 1; }
 [ "$(run --claim ABC-7 --anyway | tail -1)" = "ABC-7: starting anyway, not claimed: brief the session to work on a new branch of its own, never pushing to, rebasing or force-pushing another person's branch" ] &&
   [ ! -s "$tmp/claims" ] || { echo "--anyway"; exit 1; }
 echo none > "$tmp/owner"
@@ -3363,6 +3382,13 @@ entry() { jq -cn --argjson due "$1" --arg name "$2" '{due: $due, name: $name, ki
 out=$(run --launch ABC-77-fix --kind build -- 'do x.' 'it breaks y' 'the test passes') && [ "$out" = "started \"ABC-77-fix\" $started" ] &&
   [ "$(calls)" = '--bg --model opus --effort medium -n ABC-77-fix Work on ABC-77: do x. Why: it breaks y. Done when: the test passes. Keep working until done or blocked. When finished: reply with done and the check that proves it.' ] ||
   { echo "plain start failed: $out"; exit 1; }
+# Desktop with start.sidebar: no `claude --bg`, the start_session call printed
+gc=$tmp/.config/session-orchestration/config.json; cp "$gc" "$tmp/gc.keep" 2>/dev/null || :
+mkdir -p "${gc%/*}"; echo '{"start": {"sidebar": true}}' > "$gc"
+out=$(CLAUDE_CODE_ENTRYPOINT=claude-desktop run --launch ABC-77-fix --kind build -- 'do x.' 'it breaks y' 'the test passes' 2>/dev/null) &&
+  [ "$out" = 'Desktop with start.sidebar: call mcp__ccd_session__start_session (ToolSearch it) with title "ABC-77-fix", model "opus", effort "medium", prompt: Work on ABC-77: do x. Why: it breaks y. Done when: the test passes. Keep working until done or blocked. When finished: reply with done and the check that proves it.' ] &&
+  [ -z "$(calls)" ] || { echo "--launch in Desktop with start.sidebar: $out"; exit 1; }
+if [ -f "$tmp/gc.keep" ]; then mv "$tmp/gc.keep" "$gc"; else rm "$gc"; fi
 # no task key in the name: the name; CLAUDE.md names the project memory: read first
 printf 'Notes.\n- Project memory: `/home/u/mem.md`. Read it.\n' > "$root/CLAUDE.md"
 run --launch cleanup --kind mechanical:S 'tidy' 'w' 'd' >/dev/null && [[ $(calls) == *' -n cleanup Work on cleanup: tidy. Why: w. Done when: d. Read /home/u/mem.md first. Keep working '* ]] ||

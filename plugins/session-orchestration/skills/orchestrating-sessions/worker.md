@@ -141,9 +141,9 @@ EOF
 
 ## Posting and merging
 
-PR and Jira comment posts and PR merges through `gh`, `bitbucketdc-cli`, `forgejo-cli` and `jiradc-cli`, and Teams
-and mail sends through `msgraph` (`message send|update`, `mail send|reply|forward`; a mail send from `--body-file`,
-a forward from `--comment-file`, no attachments) are hook-gated: they run only on a relayed approval naming exactly that action, which the hook verifies itself, one run
+The commands in the approval hook's list (`hooks/approved-action.sh`'s header: PR and Jira comment posts, reviews and
+PR merges, `gh pr|issue create` unless `approvals.pr_create` lets a PR through, Teams and mail sends; a mail send from `--body-file`, a forward from `--comment-file`, no attachments) are
+hook-gated: they run only on a relayed approval naming exactly that action, which the hook verifies itself, one run
 per relay (a run failed: check whether it landed before asking again). Post from `--body-file <absolute path>`, as the
 only CLI call in its command, and don't edit the file after asking: the approval names its sha256. Any send (a
 comment, chat message or mail) is drafted whole before you ask: every message's exact text, an attachment's caption
@@ -197,12 +197,9 @@ the file's path. That is a plain-text ask, not a plan approval, so a relay can a
 
 ## Work a message gives you
 
-- **Start no session.** A task session (a chunk and a review too) starts none, whatever its brief leaves room for:
-  not Claude Code Desktop's `start_session` or `hand_off_to_session`, not `claude --bg`. Work that needs one: say so
-  in your report (what, why, whether it only reads), and the coordinator starts it by the user's start mode. Your own
-  handover is the one exception (`session-status --handover --self` starts your successor). In Desktop a hook refuses
-  the call; one that only shows the user a card to start themselves (`initiation` `own_initiative`, no
-  `proposal_id`) goes through.
+- **Start no session** (a hook refuses `start_session`, `hand_off_to_session` and `claude --bg`; your own
+  `session-status --handover --self` is the exception, and a Desktop card the user starts themselves goes through). Work that needs one: say so in your report (what, why,
+  whether it only reads), and the coordinator starts it.
 - **Work on a key that isn't your task: refuse it.** If the message gives you work on KEY and your first prompt or
   your own earlier `Session task:` line names a different task (or "no ticket"), reply only `not my task: I'm <your
   task>; KEY's session is probably elsewhere` and do nothing else: no reading, no files, no marker. Take it on only

@@ -375,6 +375,10 @@ if [ "$mode" = check ]; then
                 te=$(config terminal 2>>"$wf") m=$(config messages 2>>"$wf") no=$(config features.notify 2>>"$wf") rt=$(config features.retro 2>>"$wf")
                 rm_=$(config features.remote 2>>"$wf")
                 [ "$rm_" != true ] || remote_warn >>"$wf"
+                # Auto mode may deny the inbox's post in a background session without the user's allow rule for it.
+                as=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json
+                [ "$r" != true ] || jq -e '[.permissions.allow[]? | strings | select(contains("review-inbox/post-approved.sh"))] | length > 0' "$as" >/dev/null 2>&1 ||
+                  echo "review_inbox: no allow rule for post-approved.sh, so auto mode may deny a background post: add \"Bash(bash ${LIB_DIR%/*}/*/skills/orchestrating-sessions/review-inbox/post-approved.sh:*)\" to permissions.allow in $(tilde "$as")" >>"$wf"
                 # The modules in use, loaded as they will be: a syntax error, a missing function or a shadowed
                 # plugin module shows here.
                 [ "$te" = plain ] || ( load_terminal ) 2>>"$wf"
@@ -412,6 +416,8 @@ if [ "$mode" = check ]; then
                 fi
                 [ "$r" != true ] || { u=$(inbox_url); [ -z "$u" ] || echo "  review_inbox url: $u"; }   # open_pane watches it
                 [ "$no" = 0 ] || echo "  notify after: $no min"   # the pane's ask check reads it
+                # a scheduled retro whose newest report is over 8 days old (features/retro.md, An overdue run)
+                [ "$rt" != true ] || bash "$LIB_DIR/skills/retro/retro-run" --status "$root" 2>/dev/null | sed -n 's/^  \([a-z]*\): retro overdue:/  retro overdue (\1):/p'
                 # The committed team files sessions read before the person's (worker.md, Project memory): only what git
                 # tracks in T, so the excluded repo file of a personal setup names nothing.
                 if [ -n "$sd" ]; then

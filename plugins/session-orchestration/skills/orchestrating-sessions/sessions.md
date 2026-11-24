@@ -119,8 +119,8 @@ own call. It runs `--kind` (below), builds the brief, adds "Read <memory file> f
 starts the session and prints `started "NAME" (ID8) · KIND M/E`. Exit 3 or 2: nothing started, read on. Not for a
 review of another task (named `<KEY>-<more>`, it refuses: its own first prompt, Owners) or a coordinator start
 ([handover.md](handover.md)); a review that owns its own task (a docs audit) launches with a name that has no task
-key or is one whole, from the release after key-less review launches. Nor in Desktop with
-`start.sidebar` on (it runs `claude --bg`, never `start_session`: start that one by hand, below). A started session
+key or is one whole, from the release after key-less review launches. In Desktop with
+`start.sidebar` on it starts nothing and prints the `start_session` call to make instead. A started session
 needs no "started" line in your handoff file: the status lists it and `--owner` gives its first prompt.
 
 **Later, not now**: add `--at 'HH:MM'` (today, tomorrow when that is past), `--at 'YYYY-MM-DD HH:MM'` or
@@ -195,8 +195,7 @@ watcher sends the owner its nudge itself (fix and push; or deploy per the projec
 wakes no one for it: a retired session or one in another account through `--send-when-idle`, a live one of this
 account (or of another, by its socket's `uds:` address) through your pane's timer (keep the pane open). What it sent shows under `Forwarded` beside the next change
 that wakes you: nothing to do. A `PR events` section in the output is one it couldn't send (`not forwarded: WHY`, or
-`→ no owner`): send that session `PR REPO#ID (KEY): EVENT on SHA. Fix it and push; force-push, post or merge only with
-the usual approval. Reply when pushed, or blocked.` through `session-status --send-when-idle ID TEXT` (it prints
+`→ no owner`): send that session the `nudge:` line under it through `session-status --send-when-idle ID TEXT` (it prints
 `send:` when SendMessage is yours to do, and refuses an ID a later handover superseded, naming its successor: send it
 there; [resuming.md](resuming.md)); an all-merged one with no owner: revive or start
 its session for the deploy and the status move. Don't relay it to the user or ask first: it is the worker's own task.

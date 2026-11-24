@@ -114,10 +114,9 @@ footer's `— apply?` is then answered already.
 | `issue` | neither | One issue per case: `gh issue create -R REPO --label LABEL --title '<case title>' --body-file <case file>`; without `gh`, print the scrubbed case for the user to file |
 | `local` | set `feedback.mode` to `local` | Nothing is sent; the cases stay files |
 
-   Each outgoing `gh pr create` or `gh issue create` goes to the user as one approval: name every body file with its
-   sha256 (`shasum -a 256 FILE`), and pass the command to `hand_command` (or ask in plain text when mods are off).
-   The exception: when `session-status --config approvals.pr_create` prints `true`, the `pr` mode's `gh pr create`
-   runs without an ask (an issue and a fork PR still ask).
+   Each outgoing `gh pr create` or `gh issue create` (with `--title` and `--body-file <absolute path>`) goes to the
+   user as one approval: the approval hook refuses it without a relay and prints the action to report. With
+   `approvals.pr_create` `true`, the `pr` mode's `gh pr create` runs without one (an issue and a fork PR still ask).
    An apply session that the plugin coordinator started works in that coordinator's folder, so it asks the way
    worker.md's Approvals says, and a relayed approval verifies for it. Run nothing outward-facing before that yes.
 5. `feedback mark FILE sent <url>` for each case sent.

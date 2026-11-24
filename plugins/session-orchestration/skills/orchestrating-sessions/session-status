@@ -192,8 +192,9 @@
 #        session-status --kind KIND[:S|M|L] [NAME [--anyway]]   `--model M --effort E` from plan.models.KIND for a task
 #                       start (a size moves the effort a step), logged as a usage start line (NAME, the -n session name,
 #                       hashed); ` --advisor A` too where config plan.advisor.KIND is set and pairs with the model. A
-#                       NAME starting with a task key runs --claim on it first (not for review, retro, research or
-#                       coordinator), its lines on stderr; its exit 3 is --kind's: nothing printed, don't start
+#                       NAME starting with a task key runs --claim on it first (not for review, retro or research;
+#                       coordinator: KEY-coordinator claims KEY), its lines on stderr; its exit 3 is --kind's: nothing
+#                       printed, don't start. NAME: a letter or digit, then letters, digits, `.`, `_`, `-`, at most 80
 #        session-status --claim KEY|NAME [--anyway]   ownership on start: exit 3 (not started) when the adapter's
 #                       `owner KEY` says other or an origin branch naming KEY has another author's commits; the ask
 #                       to put on the pane is its last line. Unassigned (none): `claim KEY`. --anyway (the user's
@@ -352,10 +353,12 @@ if [ "${1:-}" = --kind ]; then
   k=${2:-} sz=; [[ $k =~ ^(.+):([SML])$ ]] && { k=${BASH_REMATCH[1]}; sz=${BASH_REMATCH[2]}; }
   { { [ $# = 2 ] && [ -z "$sz" ]; } || { { [ $# = 3 ] || { [ $# = 4 ] && [ "$4" = --anyway ]; }; } && [[ $3 =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]]; }; } &&
     me=$(config "plan.models.$k" 2>/dev/null) ||
-    { echo "usage: session-status --kind design|build|mechanical|review|release|scan|coordinator|retro|research[:S|M|L] [SESSION-NAME [--anyway]]" >&2; exit 2; }
+    { echo "usage: session-status --kind design|build|mechanical|review|release|scan|coordinator|retro|research[:S|M|L] [SESSION-NAME [--anyway]] (SESSION-NAME: a letter or digit, then letters, digits, \`.\`, \`_\`, \`-\`, at most 80)" >&2; exit 2; }
   # Ownership on start (--claim): only its exit 3 stops the start; a failed lookup or claim says so and lets it go.
-  if [ $# -ge 3 ] && ! [[ $k =~ ^(review|retro|research|coordinator)$ ]]; then
-    CLAIM_RERUN="${CLAIM_RERUN:-session-status --kind $2 $3 --anyway}" bash "$0" --claim "$3" ${4:+"$4"} >&2; [ $? != 3 ] || exit 3
+  # A sub-coordinator (KEY-coordinator) claims KEY; the project's own coordinator names no key.
+  cn=${3:-}; [ "$k" != coordinator ] || cn=${cn%-coordinator}
+  if [ $# -ge 3 ] && ! [[ $k =~ ^(review|retro|research)$ ]] && { [ "$k" != coordinator ] || [ "$cn" != "$3" ]; }; then
+    CLAIM_RERUN="${CLAIM_RERUN:-session-status --kind $2 $3 --anyway}" bash "$0" --claim "$cn" ${4:+"$4"} >&2; [ $? != 3 ] || exit 3
   fi
   m=${me%%/*} e=${me#*/}
   case $sz in S) e=$(effort_step "$e" -1) ;; L) e=$(effort_step "$e" 1) ;; esac
@@ -1572,7 +1575,7 @@ if [ "${1:-}" = --stale ]; then
 fi
 
 # The watcher's forwarded PR events (--changes, SESSION_STATUS_FORWARD): the outbox (EPOCH ID NAME LINE TEXT, tab-
-# separated) holds those for the coordinator pane to SendMessage; .forwarded (ok|failed LINE NOTE) what came of each.
+# separated) holds those for the coordinator pane to SendMessage; .forwarded (ok|failed LINE NOTE, a failed one [NUDGE]) what came of each.
 fwd_file() { echo ~/.cache/session-status/"$ENC.$1"; }
 locked_append() { mkdir -p ~/.cache/session-status; ( inbox_lock "$1"; grep . >> "$1" ); }   # FILE < LINES
 locked_drop() { ( inbox_lock "$1"; [ -f "$1" ] && grep -vxF -f <(printf '%s\n' "$2") "$1" > "$1.$$"; mv "$1.$$" "$1" ) 2>/dev/null; }  # FILE LINES
@@ -1597,8 +1600,13 @@ if [ "${1:-}" = --outbox ]; then
   exit 0
 fi
 if [ "${1:-}" = --outbox-done ]; then
-  d=$(cat); grep . <<<"$d" | locked_append "$(fwd_file forwarded)"
-  ob=$(fwd_file outbox); [ -f "$ob" ] || exit 0
+  # a failed one keeps its entry's nudge as a 4th field, for the PR event it becomes
+  ob=$(fwd_file outbox); d=$(cat)
+  # done rows via ENVIRON: NR == FNR would read them as the outbox when that is missing or empty
+  D="$d" awk -F'\t' '{ t[$4] = $5 } END { n = split(ENVIRON["D"], L, "\n")
+    for (i = 1; i <= n; i++) { split(L[i], F, "\t"); print L[i] ((F[1] == "failed" && F[2] in t) ? "\t" t[F[2]] : "") } }' <(cat "$ob" 2>/dev/null) |
+    grep . | locked_append "$(fwd_file forwarded)"
+  [ -f "$ob" ] || exit 0
   printf '%s\n' "$d" > "$ob.done.$$"; inbox_lock "$ob"
   awk -F'\t' 'NR == FNR { done[$2]; next } !($4 in done)' "$ob.done.$$" "$ob" > "$ob.$$" && mv "$ob.$$" "$ob"; rm -f "$ob.done.$$"; exit 0
 fi
@@ -1608,7 +1616,8 @@ fi
 # started), builds sessions.md's brief (`Work on KEY: WHAT. Why: WHY. Done when: DONE-WHEN. Read MEMORY first. Keep
 # working until done or blocked. When finished: reply with done and the check that proves it.`; KEY: the task key NAME
 # starts with, else NAME; MEMORY: CLAUDE.md's "Project memory: `PATH`", the sentence left out when it names none) and
-# starts it as --handover does, printing `started "NAME" (ID8) · K M/E`. Not for a review named KEY-<more>
+# starts it as --handover does, printing `started "NAME" (ID8) · K M/E` (Desktop with start.sidebar: the
+# start_session call to make instead, nothing started). Not for a review named KEY-<more>
 # (a review of KEY's task: its first line is `Session task: KEY review`, with the review brief) nor coordinator
 # (--successor, --coordinator-of); a review whose name has no key, or is a key whole, owns its task and starts.
 # --at 'HH:MM' (today, tomorrow when past) | 'YYYY-MM-DD HH:MM', or --after-reset [ACCOUNT] (that account's weekly
@@ -1635,6 +1644,12 @@ launch_start() {
   key=$(grep -oE -m1 "^$(key_re "$(adapter_path "$ROOT")")" <<<"$1" | head -1)
   mem=$(sed -nE 's/^[^`]*[Pp]roject memory[^`]*`([^`]+)`.*/\1/p' CLAUDE.md CLAUDE.local.md 2>/dev/null | head -1)
   brief="Work on ${key:-$1}: ${4%.}. Why: ${5%.}. Done when: ${6%.}.${mem:+ Read $mem first.} Keep working until done or blocked. When finished: reply with done and the check that proves it."
+  # Desktop with sidebar tasks: the app starts it (start_session), so it shows in the sidebar; nothing starts here
+  if [[ ${CLAUDE_CODE_ENTRYPOINT:-} == claude-desktop* ]] && [ "$(config start.sidebar 2>/dev/null)" = true ]; then
+    read -r _ m _ e _ <<<"$(tr -d '\\' <<<"$flags")"
+    echo "Desktop with start.sidebar: call mcp__ccd_session__start_session (ToolSearch it) with title \"$1\", model \"$m\", effort \"$e\", prompt: $brief"
+    return 0
+  fi
   # CLAIM_RERUN is --kind's only: the started session's own --kind runs would print this start's rerun line
   out=$(unset CLAIM_RERUN; bash -c "$(bg_cmd claude) $flags -n \"\$0\" \"\$1\"" "$1" "$brief" 2>&1)
   id=$(grep -oE 'backgrounded · [0-9a-f]{8}' <<<"$out" | tail -1); id=${id##* }
@@ -1645,6 +1660,8 @@ launch_start() {
 launch_fire() {
   local e=$1 n r
   n=$(jq -r .name <<<"$e")
+  # shortcut: under Desktop+start.sidebar a due entry leaves the queue on the start_session line alone (it reaches
+  # the watcher's wake, which may not act on it); keep it queued until started if such starts go missing
   r=$(CLAIM_RERUN="session-status --launch --now $n --anyway" launch_start "$n" "$(jq -r .kind <<<"$e")" "$(jq -r .anyway <<<"$e")" "$(jq -r .what <<<"$e")" "$(jq -r .why <<<"$e")" "$(jq -r .done <<<"$e")" 2>&1) &&
     { tail -1 <<<"$r"; return 0; }
   r=$(tail -1 <<<"$r"); r=${r#"\"$n\" didn't start: "}; r=${r#not started: }; r=${r:-no reason printed}
@@ -1856,14 +1873,15 @@ if [ "${1:-}" = --changes ]; then
           printf '%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$id" "$name" "${line#  \* }" "$text" | locked_append "$ob"; continue; fi
         line+=" (not forwarded: $r)"
       fi
-      evl+="$line"$'\n'
+      # the nudge to send, on the line under its event
+      evl+="$line"$'\n'"    nudge: $text"$'\n'
     done <<<"$ev"
   fi
   if [ -z "${SESSION_STATUS_PEEK:-}" ]; then old=$(locked_take_old "$ob" "${SESSION_STATUS_OUTBOX_S:-600}"); else old=$(awk -F'\t' -v t=$(( $(date +%s) - ${SESSION_STATUS_OUTBOX_S:-600} )) '$1 < t' "$ob" 2>/dev/null); fi
-  [ -z "$old" ] || evl+=$(awk -F'\t' '{ print "  * " $4 " (not forwarded: no coordinator pane sent it)" }' <<<"$old")$'\n'
+  [ -z "$old" ] || evl+=$(awk -F'\t' '{ print "  * " $4 " (not forwarded: no coordinator pane sent it)"; print "    nudge: " $5 }' <<<"$old")$'\n'
   fwc=$(cat "$fw" 2>/dev/null)
-  evl+=$(awk -F'\t' '$1 == "failed" { print "  * " $2 " (not forwarded: " $3 ")" }' <<<"$fwc")
-  evl=$(grep . <<<"$evl"); ev=; [ -z "$evl" ] || ev=$'PR events (send each owner the nudge, sessions.md):\n'$evl
+  evl+=$(awk -F'\t' '$1 == "failed" { print "  * " $2 " (not forwarded: " $3 ")"; if ($4 != "") print "    nudge: " $4 }' <<<"$fwc")
+  evl=$(grep . <<<"$evl"); ev=; [ -z "$evl" ] || ev=$'PR events (send each owner the nudge under it, sessions.md):\n'$evl
   [ -z "$stopped" ] || ev+=${ev:+$'\n'}$'Stopped (finished tasks\' sessions and worktrees, by the watcher; tell the user in one line):\n'${stopped%$'\n'}
   # Logins restored: a project action (.claude/coordinator-actions.json) whose `when` held at the last committing run
   # and no longer does (the sign-in it offers is back), with the keys of the blocked reports (<replies>/KEY.md, first

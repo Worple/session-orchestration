@@ -39,7 +39,7 @@ A value outside its set falls back to the default with one warning line.
   its LaunchAgent (macOS; setup proposes it, and the retro skill's Scheduling has Linux). It starts one session per
   scope when a run is due, a time missed in sleep or while off included; `retro-run --status ROOT` shows the agent and
   each scope's next due time.
-- **An overdue run**: with `retro.schedule` set, the newest retro report in the replies folder is over
-  8 days old. Tell the user once, with `retro-run --status ROOT`'s lines (an agent not loaded is the usual cause), and
+- **An overdue run**: `--init --check` (and `retro-run --status ROOT`) prints `retro overdue (SCOPE): newest report N
+  days old`. Tell the user once, with `retro-run --status ROOT`'s lines (an agent not loaded is the usual cause), and
   on their yes start it with `retro-run ROOT --now` from the plugin's `skills/retro/`. Its `started "NAME" (ID8)` line is the
   start: don't start it again while `claude agents` doesn't list it yet. Rerun only a scope whose line says `didn't start` (`--scope S`).

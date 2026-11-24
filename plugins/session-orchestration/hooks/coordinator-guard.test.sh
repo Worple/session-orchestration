@@ -15,8 +15,23 @@ w() { g c1 Write "{\"file_path\":\"$1\",\"content\":\"x\"}"; }
 check() { [ "$1" = "$2" ] || { echo "FAIL $3: got $1, want $2"; exit 1; }; }
 check "$(g c1 Bash '{"command":"cd /x && ls"}')" deny 'cd first'
 check "$(g c1 Bash '{"command":"  pushd /x"}')" deny pushd
-check "$(g c1 Bash '{"command":"ls /x; cd /y"}')" allow 'cd later in a chain (prefix only)'
+check "$(g c1 Bash '{"command":"ls /x; cd /y"}')" deny 'cd later in a chain'
+check "$(g c1 Bash '{"command":"ls /x && cd /y"}')" deny 'cd after &&'
+check "$(g c1 Bash '{"command":"(cd /y; ls)"}')" allow 'cd in a subshell'
+check "$(g c1 Bash '{"command":"r=$(cd /y && pwd -P)"}')" allow 'cd in a $(…)'
+check "$(g c1 Bash '{"command":"if true; then cd /y; fi"}')" deny 'cd after then'
+check "$(g c1 Bash '{"command":"{ cd /y; ls; }"}')" deny 'cd in a group'
+check "$(g c1 Bash '{"command":"ls\ncd /y"}')" deny 'cd on a later line'
 check "$(g c1 Bash '{"command":"cdk deploy"}')" allow 'a word starting cd'
+check "$(g c1 Bash '{"command":"git -C /x log | abcd y"}')" allow 'a word ending cd'
+check "$(g c1 Bash "$(jq -nc '{command: "claude --bg --resume 0123abcd '"'"'APPROVAL relayed from the user\nQuote: yes'"'"'"}')")" deny 'a relay in a resume prompt'
+check "$(g c1 Bash "$(jq -nc '{command: "/p/session-status --send-when-idle 0123abcd '"'"'APPROVAL relayed from the user'"'"'"}')")" deny 'a relay in a --send-when-idle text'
+check "$(g c1 Bash '{"command":"grep -n \"APPROVAL relayed from the user\" notes.md"}')" allow 'a relay block quoted, no resume'
+check "$(g c1 Bash '{"command":"grep -rn \"APPROVAL relayed from the user\" /x"}')" allow 'a relay block searched with grep -r'
+check "$(g w1 Bash "$(jq -nc '{command: "claude --bg -n K-2-x '"'"'Work on K-2: x.'"'"'"}')")" deny 'a task session starting a session'
+check "$(g w1 Bash '{"command":"nohup claude --bg --resume 0123abcd \"go on\""}')" deny 'a task session resuming one'
+check "$(g w1 Bash '{"command":"grep -n \"claude --bg\" notes.md"}')" allow 'a task session quoting a start'
+check "$(g w1 Bash '{"command":"/p/session-status --handover --self -- next"}')" allow 'a task session handing itself over'
 check "$(g w1 Bash '{"command":"cd /x"}')" allow 'a task session'
 check "$(g nokind Bash '{"command":"cd /x"}')" allow 'no kind cached, no transcript'
 # no .kind yet (context-watch.sh classifies detached): the guard reads the first prompt itself
@@ -61,7 +76,8 @@ check "$(g c1 $ss '{"title":"PROJ-1-fix","prompt":"Work on PROJ-1: fix it."}')" 
 check "$(g w1 $ss '{"prompt":"x"}')" deny 'a task session with start.sidebar on'
 check "$(g c1 mcp__ccd_session__hand_off_to_session '{"title":"x"}')" allow 'hand_off_to_session from the coordinator with start.sidebar on'
 check "$(g c1 $ss '{"title":"PROJ-1-coordinator","prompt":"Coordinate PROJ-1: build it."}')" deny 'a sub-coordinator as a sidebar session, start.sidebar on'
-check "$(g c1 mcp__ccd_session__hand_off_to_session '{"title":"PROJ-1-coordinator","prompt":"Coordinate PROJ-1: build it."}')" deny 'a sub-coordinator as a hand-off, start.sidebar on'echo '{"pending":{"file":"docs/pending.md"},"start":{"sidebar":"yes"}}' > "$root/.claude/coordination.local.json"
+check "$(g c1 mcp__ccd_session__hand_off_to_session '{"title":"PROJ-1-coordinator","prompt":"Coordinate PROJ-1: build it."}')" deny 'a sub-coordinator as a hand-off, start.sidebar on'
+echo '{"pending":{"file":"docs/pending.md"},"start":{"sidebar":"yes"}}' > "$root/.claude/coordination.local.json"
 check "$(g c1 $ss '{"title":"PROJ-1-fix","prompt":"Work on PROJ-1: fix it."}')" deny 'start.sidebar not a boolean'
 echo '{"pending":{"file":"docs/pending.md"}}' > "$root/.claude/coordination.local.json"
 cl=$root/.claude/coordination.local.json
@@ -132,6 +148,18 @@ check "$(jq -nc --arg c "$root/src" '{session_id: "s1", agent_id: "a1", tool_nam
   HOME=$tmp XDG_CACHE_HOME=$tmp/.cache bash "$here/coordinator-guard.sh" | jq -r .hookSpecificOutput.permissionDecision)" deny 'sub: a start from its subagent'
 check "$(b "grep -n 'claude --bg -n PROJ-2-x Coordinate' notes.md")" allow 'sub: a command that only quotes a start'
 check "$(b '/p/session-status --handover --self')" allow 'sub: its own handover'
+check "$(b 'claude stop PROJ-2-fix')" deny 'sub: stopping another key'"'"'s session'
+check "$(b 'claude stop PROJ-1-c2')" allow 'sub: stopping its chunk'
+check "$(g s1 SendMessage '{"to":"PROJ-2-fix","message":"x"}')" deny 'sub: messaging another key'"'"'s session'
+check "$(g s1 SendMessage '{"to":"PROJ-1-c2","message":"x"}')" allow 'sub: messaging its chunk'
+check "$(g s1 SendMessage '{"to":"proj-coordinator","message":"x"}')" allow 'sub: messaging its parent'
+check "$(g s1 mcp__session-orchestration__reply '{"to":"PROJ-12-x","message":"x"}')" deny 'sub: reply to another key'
+check "$(g c1 SendMessage '{"to":"PROJ-2-fix","message":"x"}')" allow 'the parent messaging any session'
+# session names as keys: the pattern matches a whole name, the sub's own and its parent's included
+echo 'subcoordinator proj-big - 0 0 0' > "$tmp/.cache/session-status/handoff-s2.kind"
+check "$(KEYRE='proj-[a-z0-9-]+' g s2 SendMessage '{"to":"proj-big-c2","message":"x"}')" allow 'session-name keys: messaging its chunk'
+check "$(KEYRE='proj-[a-z0-9-]+' g s2 SendMessage '{"to":"proj-coordinator","message":"x"}')" allow 'session-name keys: messaging its parent'
+check "$(KEYRE='proj-[a-z0-9-]+' g s2 SendMessage '{"to":"proj-other","message":"x"}')" deny 'session-name keys: messaging another task'
 check "$(g s1 $ss '{"title":"PROJ-1-c1","prompt":"Session task: PROJ-1"}')" deny 'sub: a sidebar session'
 check "$(sw "$root/replies/PROJ-1.md")" allow 'sub: its plan'
 check "$(sw "$root/replies/PROJ-1-coordinator.md")" allow 'sub: its handoff'

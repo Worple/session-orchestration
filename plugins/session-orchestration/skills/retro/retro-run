@@ -9,7 +9,8 @@
 #   retro-run --install ROOT     write and load the LaunchAgent (features.retro true, retro.schedule set); run it again
 #                                after changing retro.schedule or retro.account
 #   retro-run --uninstall ROOT   unload and delete it
-#   retro-run --status [ROOT]    label, loaded, schedule, account, last start and next due (no ROOT: every agent)
+#   retro-run --status [ROOT]    label, loaded, schedule, account, last start and next due, an overdue line when the
+#                                newest report is over 8 days old (no ROOT: every agent)
 # The agent calls `retro-run --scheduled ROOT` at its calendar time (launchd starts a time missed in sleep at wake) and
 # at each login (RunAtLoad: catches a time missed while off or logged out); the due check makes the extra calls no-ops.
 # Its first stamp is the newest report's time (retro-<scope>-<N>.md, rnd-run-<N>.md), else now: a missed run starts at
@@ -228,6 +229,9 @@ status)
         if due "$sc" "$s"; then nd="now (missed $(fmt "$last"))"; else nd=$(fmt "$next"); fi
         [ -s "$(stamp "$sc")" ] && ls="$(fmt "$st")" || ls="none (counts from $(fmt "$st"))"
         echo "  $sc: last start $ls · next due $nd"
+        # a schedule whose runs stopped (an agent not loaded, the usual cause): features/retro.md, An overdue run
+        [ "$newest" = 0 ] || [ $(( $(clock) - newest )) -le $(( 8 * 86400 )) ] ||
+          echo "  $sc: retro overdue: newest report $(( ($(clock) - newest) / 86400 )) days old"
       done
     )
   done ;;

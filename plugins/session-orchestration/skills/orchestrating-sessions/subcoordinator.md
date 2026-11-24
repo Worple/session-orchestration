@@ -48,9 +48,8 @@ You hold no approvals of your own: everything the user decides reaches you as a 
 
 ## What you never do
 
-- Call `open_pane` (it refuses in a sub), start a sub-coordinator, or start, message or stop a session for another
-  key. coordinator-guard refuses a `claude --bg` start that isn't `-n KEY-…` with a first prompt for KEY, any
-  `Coordinate` first prompt and `start_session`.
+- Call `open_pane`, start a sub-coordinator, or start, message or stop a session for another key
+  (`open_pane` refuses in a sub; coordinator-guard refuses the starts, the stops and a SendMessage).
 - Edit any file in the project root but through your sessions; in the replies folder you edit only `KEY.md` and
   `KEY-*.md`, plus the project memory.
 - Do a chunk's work yourself, or act on a reserved action (merge, post, release, deploy) without the relay that

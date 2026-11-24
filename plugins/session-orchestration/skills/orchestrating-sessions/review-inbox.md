@@ -92,10 +92,8 @@ Never post a row the script skipped, and never post by hand what the script woul
 wants a relayed approval: the script is the inbox's only way to post.
 
 **Known gap.** Auto mode may deny the post in a background session (it publishes under the user's
-name). The user's allow rule for it, in `~/.claude*/settings.json` → `permissions.allow`:
-`Bash(bash <plugin install dir>/*/skills/orchestrating-sessions/review-inbox/post-approved.sh:*)`,
-the plugin's install path with its version as `*`. Without it, a denied post shows `blocked`; the
-user attaches and allows it.
+name) unless the account allows it: `session-status --init --check` prints the rule to add when it's missing.
+Without it, a denied post shows `blocked`; the user attaches and allows it.
 
 ## Notes
 

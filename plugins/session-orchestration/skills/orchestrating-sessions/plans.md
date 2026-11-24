@@ -22,8 +22,7 @@ Sub-coordinators). Under a sub, the sub does everything below and you only start
    Write one brief per chunk, `<replies>/PROJ-123-cN.md`, from `--plan FILE --brief N`, plus a shared
    `PROJ-123-chunk-rules.md` (paths, setup, interface, checks, landing by fast-forward). Keep plans in the replies folder.
 3. **Start** what `--plan FILE --next` prints; a chunk it lists again died or handed off: start it, or take its
-   handoff. With `plan.enabled: false` run the task without a plan. **While the planner is evaluated**, odd task
-   starts get a plan and even ones run as before, with `plan: off` in the brief (`retro.py trial` compares the two).
+   handoff. With `plan.enabled: false` run the task without a plan.
 4. **Models** by kind, from `plan.models` (`default` in the table); `fable` only under an account config `fable.accounts` lists.
 5. **Handoffs.** A chunk or task session at its context mark hands itself over (`session-status --handover --self`:
    its successor keeps its name, it is stopped once idle) and sends nothing; its row shows `superseded by`. Don't tell

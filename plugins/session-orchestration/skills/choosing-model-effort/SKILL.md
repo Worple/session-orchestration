@@ -6,12 +6,12 @@ description: Size a piece of work into a plan.models kind (scan, mechanical, bui
 # Choosing a model and effort
 
 Each kind maps to a model and effort through config `plan.models.<kind>` (defaults: `scan` haiku/low, `mechanical`
-and `release` sonnet/medium, `build` opus/medium, `design` and `review` opus/xhigh, `research` opus/high, `coordinator` opus/medium). Size the work into a kind, then take that kind's values.
+and `release` sonnet/medium, `build` opus/medium, `design`, `review` and `retro` opus/xhigh, `research` opus/high, `coordinator` opus/medium). Size the work into a kind, then take that kind's values.
 `coordinator` is what a coordinator's start and its successor run on (a successor or handed-over session keeps what
 its predecessor ran on, fable too, when the transcript says).
 
 **Fable** only runs under an account config `fable.accounts` lists (the person sets it: nothing tells reliably which
-accounts have fable). There `design`, `review` and `coordinator` default to `fable` at the same effort, any kind may be
+accounts have fable). There `design`, `review`, `coordinator` and `retro` default to `fable` at the same effort, any kind may be
 set to `fable/<effort>`, and an escalation goes on from opus/max to fable/max. Under any other account a `fable` value
 falls back to the kind's default, so fable never starts there. Nor does it while the account's weekly Fable limit
 is reached (lib.sh `fable_out`: the "You've hit your Fable limit" row a session got, until its reset): every start
@@ -60,7 +60,7 @@ change is the kind's or an escalation's (`session-status --handover --escalate`,
 - **A task start (`claude --bg`)**: `session-status --launch <session-name> --kind <kind>[:S|M|L] …` (sessions.md) runs
   `--kind` itself and logs the start once; don't run `--kind` first, which logs it twice and double-counts retro's `kinds`.
   Run `session-status --kind <kind>[:S|M|L] <session-name>` alone, as its own call, only for a start `--launch` doesn't
-  cover (`<session-name>` is the `-n` value: letters, digits, `.`, `_`, `-`, at most 80), and paste the
+  cover (`<session-name>` is the `-n` value; its usage text says what a name may hold), and paste the
   `--model M --effort E` it prints onto the start line. Exit 2 means a wrong kind or name: fix it, and don't start without the flags. Exit 3: the task isn't the user's to
   start (someone else's ticket or branch): don't start, queue the ask its stderr names. It logs the start for retro,
   so run it once per task: a handover or fresh restart of the same task reuses the flags. `session-status` is in this

@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # PreToolUse on Bash: a PR or Jira comment post (bitbucketdc-cli pr comment create|reply|update, forgejo-cli pr
 # comment create|update, jiradc-cli issue comment create|update), a PR review (forgejo-cli pr review), a PR merge
-# (bitbucketdc-cli or forgejo-cli pr merge) and their GitHub twins (gh pr merge|comment|review, gh issue comment) run only on a relayed approval that names it: a coordinator's "APPROVAL relayed from the user" block, received by this session, whose quote
+# (bitbucketdc-cli or forgejo-cli pr merge) and their GitHub twins (gh pr merge|comment|review, gh issue comment), and
+# gh pr|issue create (its Action: "create pr|issue on OWNER/REPO from BODYFILE (sha256 SHA) <its other flags, word for
+# word>", --title required, --fill/--template/--editor/--web denied; gh pr create passes when approvals.pr_create is
+# true), run only on a relayed approval that names it: a coordinator's "APPROVAL relayed from the user" block, received by this session, whose quote
 # verify-approval.sh verifies and whose Action line names the target (REPO#ID for a PR, the issue key for Jira),
 # plus the body file's sha256 for a post (and, for a gh review, its kind), or "merge"/"approve" (and no sha256) for a
 # merge or a bodiless approval. A forgejo-cli REPO is its --repo OWNER/REPO. A gh REPO is OWNER/REPO (HOST/OWNER/REPO off github.com), from -R/--repo or the PR's
@@ -267,7 +270,7 @@ msind='(=["'"'"']?|\$\(|`)[[:space:]]*((which|command[[:space:]]+-v|type[[:space
 ghw='(^|[^A-Za-z0-9_.-])gh([^A-Za-z0-9_.-]|$)'
 # gh, then pr/issue and a merge, comment or review, or api, in the same command (flags may sit between): what a gated
 # gh call looks like. gh pr view or gh issue list don't.
-ghops='(^|[^A-Za-z0-9_.-])gh([^A-Za-z0-9_.-][^|;&]*[[:space:]]|[[:space:]]+)((pr|issue)([[:space:]][^|;&]*)?[[:space:]](merge|comment|review)|api)([[:space:]]|$)'
+ghops='(^|[^A-Za-z0-9_.-])gh([^A-Za-z0-9_.-][^|;&]*[[:space:]]|[[:space:]]+)((pr|issue)([[:space:]][^|;&]*)?[[:space:]](merge|comment|review|create)|api)([[:space:]]|$)'
 # gh named through a variable or $(…): x=gh, $(which gh), `command -v gh`, and read as a file: bash <(gh …).
 ghind='(=["'"'"']?|\$\(|`|[<>=]\()[[:space:]]*((which|command[[:space:]]+-v|type[[:space:]]+-p)[[:space:]]+)?([^[:space:]]*/)?gh([^A-Za-z0-9_.-]|$)'
 # A read-only gh call (pr view|checks, run watch, …), as landing a PR polls it: chained with the merge (then it
@@ -407,7 +410,7 @@ while IFS= read -r t; do toks+=("$t"); done <<<"$tokstr"
 # Walk the tokens: each CLI call (up to |, ;, &&, ||) is read as SUB TARGET [flags]; a gh call (gh where a command
 # starts) as GROUP VERB TARGET with its flags anywhere.
 groups=' agent-task alias api attestation auth browse cache codespace completion config copilot extension gist gpg-key help issue label org pr preview project release repo ruleset run search secret ssh-key status variable version workflow '
-calls=0 ghcalls=0 apiw= kind= target= repo= bodyfile= body= help= host= mode= modes=0 fj= cm=
+calls=0 ghcalls=0 apiw= kind= target= repo= bodyfile= body= help= host= mode= modes=0 fj= cm= crk= crf= crt= crx=()
 i=0 st=1
 while [ "$i" -lt "${#toks[@]}" ]; do
   t=${toks[$i]}; i=$((i + 1)); prev=; [ "$i" -lt 2 ] || prev=${toks[$((i - 2))]}
@@ -544,6 +547,28 @@ while [ "$i" -lt "${#toks[@]}" ]; do
     'pr merge') k=merge ;;
     'pr comment'|'issue comment') k=prpost ;;
     'pr review') k=review ;;
+    # create's flags aren't the others' (-a assignee, -r reviewer, -f fill, -B base): its words are read again.
+    'pr create'|'issue create') k=create crk=${pos[0]} crx=() r= bf= bd= hp= crt=
+      set -- ${args[@]+"${args[@]}"}
+      while [ $# -gt 0 ]; do
+        case "$1" in --*=*) set -- "${1%%=*}" "${1#*=}" "${@:2}" ;; esac
+        case "$1" in
+          -h|--help|--dry-run) hp=1 ;;
+          -R|--repo) r=${2:-}; shift ;;
+          -F|--body-file) bf=${2:-}; shift ;;
+          -b|--body) bd=1; shift ;;
+          # They fill in text (commits, a template, an editor, the browser) the approval can't name.
+          -f|--fill|--fill-first|--fill-verbose|-e|--editor|-w|--web|-T|--template|--recover) crf=$1; [ "$1" = -T ] || [ "$1" = --template ] || [ "$1" = --recover ] && shift ;;
+          -t|--title) crt=1; crx+=("$1 ${2:-}"); shift ;;
+          -B|--base|-H|--head|-l|--label|-a|--assignee|-r|--reviewer|-m|--milestone|-p|--project) crx+=("$1 ${2:-}"); shift ;;
+          -*) crx+=("$1") ;;
+        esac
+        shift
+      done ;;
+    # A create misread above (a value flag before the verb: gh pr -B main create) still counts.
+    'pr '*|'issue '*) [[ " ${pos[*]:2} " != *" create "* ]] || [[ ${pos[1]} =~ ^(list|view|status|diff|checks|edit|close|reopen|comment|merge|review|ready|checkout|lock|unlock|develop|delete|pin|unpin|transfer|revert|update-branch)$ ]] ||
+        attended "Blocked: gh ${pos[0]} with a flag before create can't be checked by the approval hook. Put the flags after: gh ${pos[0]} create -R OWNER/REPO …"
+      continue ;;
     # gh api sends fields as a POST unless -X says otherwise. A graphql query given inline (no =@file, --input, $
     # outside '…' (a GraphQL $variable inside one is text), or unquoted brace or glob that could rebuild one) with no
     # mutation, quotes ignored, only reads.
@@ -573,6 +598,15 @@ fi
 [ "$calls" = 1 ] && [ $((bbn + ghn - ghron)) = 1 ] ||
   decide deny "Blocked: a PR/issue comment post, review, merge or Teams/mail send must be the only bitbucketdc-cli/forgejo-cli/jiradc-cli/msgraph/gh call in its command (a gh one may share it with plain read-only gh calls: gh pr view|checks, gh run view|watch). $alone"
 [ -z "$help" ] || pass
+if [ "$kind" = create ]; then
+  # approvals.pr_create: the session opens its own task's PR without an ask (an issue still asks).
+  [ "$crk" != pr ] || [ "$(cd "$cwd" 2>/dev/null && . "$here/../lib.sh" >/dev/null 2>&1 && config approvals.pr_create 2>/dev/null)" != true ] || pass
+  [ -z "$crf" ] || attended "Blocked: gh $crk create $crf fills in text the approval can't name. Give --title and --body-file <absolute path>, or hand the user the command with hand_command."
+  [ -n "$crt" ] || decide deny "Blocked: give gh $crk create its --title, so the approval can name it."
+  # the action names the text as written: a variable or $(…) there could hold anything when it runs
+  [[ "${crx[*]:-}$bodyfile" != *[\$\`]* ]] || attended "Blocked: gh $crk create with a \$ or backtick in its flags or body file: the approval names them as written, not what they expand to. Write the values out."
+  target=$crk
+fi
 [ -n "$target" ] || decide deny "Blocked: no PR id, issue key, chat, message id or recipient in this command."
 short=
 if [ -n "$host" ]; then
@@ -589,8 +623,11 @@ if [ -n "$host" ]; then
   [ -z "$repo" ] || repo=$(norm "$repo")
   [[ $repo == */* ]] ||
     decide deny "Blocked: name the repository as -R OWNER/REPO (or give the PR's URL), so the approval can name OWNER/REPO#ID; gh's default repo isn't read here."
-  [[ $target =~ ^[0-9]+$ ]] || decide deny "Blocked: the PR or issue id must be a number (or its URL), not a branch or nothing."
-  what="$repo#$target" short="${repo##*/}#$target"
+  if [ "$kind" = create ]; then what=$repo
+  else
+    [[ $target =~ ^[0-9]+$ ]] || decide deny "Blocked: the PR or issue id must be a number (or its URL), not a branch or nothing."
+    what="$repo#$target" short="${repo##*/}#$target"
+  fi
 else
   case $kind in
     merge|prpost|review) [[ $target =~ ^[0-9]+$ ]] || decide deny "Blocked: the PR id must be a number."
@@ -621,6 +658,7 @@ else
   sha=$(shasum -a 256 "$bodyfile" | cut -d' ' -f1); [ "${#sha}" = 64 ] || exit 1
   if [ "$kind" = review ]; then action="post $mode review $bodyfile on $what (sha256 $sha)"
   elif [ "$kind" = send ]; then action="$mv $bodyfile to $what (sha256 $sha)"
+  elif [ "$kind" = create ]; then x=${crx[*]:-}; action="create $crk on $what from $bodyfile (sha256 $sha)${x:+ $x}"
   else action="post comment $bodyfile on $what (sha256 $sha)"; fi
 fi
 
@@ -665,7 +703,9 @@ while IFS= read -r r; do
   [ -n "$r" ] || continue
   act=$(jq -r .action <<<"$r") alt= hint=
   # A send names all it sends: the whole action, word for word (none dropped or added, not another verb or target).
-  if [ "$kind" = send ]; then grep -qF -- "$action" <<<"$act" || continue
+  if [ "$kind" = send ] || [ "$kind" = create ]; then grep -qF -- "$action" <<<"$act" || continue
+    # a create's flags end its action: after them only the key or the session's name, so none was cut short
+    [ "$kind" != create ] || [[ ${act#*"$action"} =~ ^([[:space:]]+for[[:space:]]+[A-Z][A-Z0-9]+-[0-9]+)?([[:space:]]*\([^()]*\))?[.[:space:]]*$ ]] || continue
   else w=${what//./\\.}; grep -qE "(^|[^A-Za-z0-9#/.-])$w([^A-Za-z0-9]|$)" <<<"$act" || continue; fi
   if [ "$kind" = merge ] || [ "$kind" = approve ]; then
     grep -qiE "(^|[^a-z])$kind([^a-z]|$)" <<<"$act" && ! grep -qE '[0-9a-f]{64}' <<<"$act" || continue
@@ -676,14 +716,14 @@ while IFS= read -r r; do
     [ "$kind" != review ] || { grep -qiE "(^|[^a-z-])$mode([^a-z-]|$)" <<<"$act" && grep -qiw review <<<"$act"; } || continue
   fi
   # (A send's key from outside its action: a subject or id there may hold words like UTF-8.)
-  a=$act; [ "$kind" != send ] || a=${act/"$action"/}
+  a=$act; [ "$kind" != send ] && [ "$kind" != create ] || a=${act/"$action"/}
   key=$target; [ "$kind" = jirapost ] || key=$(grep -oE '[A-Z][A-Z0-9]+-[0-9]+' <<<"$a" | head -1)
   # A merge is the task's landing, which approving the task covers: with session-name keys, an Action ending
   # "(<this session's name>)" is verified with that name, so the user's yes to the task itself verifies. A yes given
   # under another key whose answer started this session with its landing (a design task's pane ask): "(<this
   # session's name>, approved under <that key>)", verified with that key.
   # (A sentence's closing . after the bracket is allowed: it claims nothing.)
-  if [ -z "$key" ] && [ "$kind" = merge ] && [[ $act =~ \(([A-Za-z0-9][A-Za-z0-9._-]*)(,[[:space:]]*approved[[:space:]]+under[[:space:]]+([A-Za-z0-9][A-Za-z0-9._-]*))?\)[[:space:]]*\.?[[:space:]]*$ ]]; then
+  if [ -z "$key" ] && { [ "$kind" = merge ] || [ "$kind" = create ]; } && [[ $act =~ \(([A-Za-z0-9][A-Za-z0-9._-]*)(,[[:space:]]*approved[[:space:]]+under[[:space:]]+([A-Za-z0-9][A-Za-z0-9._-]*))?\)[[:space:]]*\.?[[:space:]]*$ ]]; then
     nm=${BASH_REMATCH[1]} under=${BASH_REMATCH[3]}
     [ -n "$me" ] || me=$(jq -r 'select(.type == "agent-name") | .agentName // empty' "$tp" 2>/dev/null | tail -1)
     [ "$nm" = "$me" ] || hint=" (its Action names the session $nm, but this session is ${me:-unnamed})"

@@ -2,8 +2,10 @@
 # PreToolUse in a coordinator session (context-watch.sh's cached kind; none cached yet: its first prompt starts a line
 # with `Act as a coordinator`): three of SKILL.md's Rules as checks. In a task, chunk or review session: worker.md's
 # rule that it starts no session (the last bullet).
-# - Bash starting with `cd`: refused (the Bash tool keeps it, and `claude --bg` then starts outside the project).
-#   Only the prefix: a `cd` later in a chain isn't parsed out of the shell text.
+# - Bash with a `cd` or `pushd` command word (at the start, or after `;`, `&`, `|`, `(` or a newline): refused (the
+#   Bash tool keeps it, and `claude --bg` then starts outside the project). A quoted `; cd` is refused too.
+# - Bash holding a relay block (`APPROVAL relayed from the user`) with `--resume`, `-r` or `--send-when-idle`: refused
+#   (approvals.md: a relay is a SendMessage once the session is reachable; the worker's hook can't verify it otherwise).
 # - Claude Code Desktop's start_session or hand_off_to_session (a sidebar session): refused, in a subagent too, unless it is the call
 #   `--successor` prints (title NAME-next, its prompt running `--successor --started NAME`). A task goes to
 #   `claude --bg`: a sidebar session is in no listing the status reads. Config start.sidebar true (a person key,
@@ -16,11 +18,13 @@
 #   Outside the root (scratch, ~/.claude) is not the rule's business.
 # - In a task, chunk or review session that answers to a coordinator (keyed, or messaged): start_session and
 #   hand_off_to_session refused (worker.md: a task session starts no session), but a start_session that only shows the
-#   user a card (initiation own_initiative or offer, no proposal_id). start.sidebar doesn't change this.
+#   user a card (initiation own_initiative or offer, no proposal_id). start.sidebar doesn't change this. So is a Bash
+#   `claude … --bg` (a start or a resume); `session-status --handover --self` runs its own, unseen here.
 #   shortcut: only a cached kind is tested, so a session's first call isn't; upgrade if one starts sessions that early
 # A sub-coordinator (cached kind `subcoordinator KEY`; uncached, a first line `Coordinate KEY`) gets the cd rule and
 # limits of its own (subcoordinator.md): it starts only KEY's sessions with claude --bg (never a sidebar session, never
-# a `Coordinate` prompt), and edits only <replies>/KEY.md, KEY-*.md and the project memory. Its open_pane is refused
+# a `Coordinate` prompt), messages (SendMessage, reply's `to`) and `claude stop`s no session whose name holds another
+# key, and edits only <replies>/KEY.md, KEY-*.md and the project memory. Its open_pane is refused
 # in register.tsx. A parent's start_session of a `Coordinate` prompt is refused even under start.sidebar.
 # Any other session pays one bash start and a file test (and, until context-watch caches its kind, lib.sh and a
 # first-prompt read).
@@ -49,7 +53,7 @@ fi
 task=
 case $kind in coordinator) [ -z "$sa" ] || exit 0; skey= ;;
   subcoordinator) [ -n "$skey" ] && [ "$skey" != - ] || exit 0 ;;
-  task|chunk|review) task=1 skey=; [[ $input =~ \"tool_name\":\ *\"mcp__ccd_session__(start_session|hand_off_to_session)\" ]] || exit 0 ;;
+  task|chunk|review) task=1 skey=; [[ $input =~ \"tool_name\":\ *\"(mcp__ccd_session__(start_session|hand_off_to_session)|Bash)\" ]] || exit 0 ;;
   *) exit 0 ;;
 esac
 
@@ -60,27 +64,12 @@ deny() {
   exit 0
 }
 { read -r tool; read -r cwd; read -r path; } < <(jq -r '.tool_name // "", .cwd // "", (.tool_input.file_path // .tool_input.notebook_path // "")' <<<"$input")
-if [ -n "$task" ]; then
-  # one that answers to a coordinator: a chunk, a review, keyed, or messaged (context-watch.sh's test for the reply
-  # card; .card is gone after a compaction until the next PostToolUse, so a review doesn't rely on it)
-  read -r _ key _ < "$k"; [ "$kind $key" != 'task -' ] || [ -e "${k%.kind}.card" ] || [ -e "${k%.kind}.msg" ] || exit 0
-  # a card the user starts themselves: Desktop starts nothing for these two without a proposal_id (hand_off_to_session
-  # always starts one; spawn_task only shows a chip, so it isn't matched)
-  [ "$tool" = mcp__ccd_session__start_session ] &&
-    jq -e '.tool_input | (.initiation == "own_initiative" or .initiation == "offer") and (.proposal_id // "" | tostring | test("^\\s*$"))' <<<"$input" >/dev/null && exit 0
-  deny "Worker rule: a task session starts no session (worker.md, Work a message gives you), by start_session or hand_off_to_session. Say in your report what needs one (what, why, whether it only reads): your coordinator starts it by the user's start mode. If the user asked you for it here, show them a card to start themselves: start_session with initiation \"own_initiative\" and no proposal_id." task-start
-fi
-if [ "$tool" = Bash ]; then
-  cmd=$(jq -r '.tool_input.command // ""' <<<"$input")
-  [ -n "$sa" ] || [[ ! $cmd =~ ^[[:space:]]*(cd|pushd)([[:space:]]|$) ]] ||
-    deny "Coordinator rule: never cd in your shell; use absolute paths. The Bash tool keeps a cd across calls, and claude --bg then starts the new session in that folder, outside the project's settings. Run it again without the cd." cd
-  [ -n "$skey" ] && [[ $cmd =~ claude ]] && [[ $cmd =~ --bg ]] || exit 0
-  # A sub starts only KEY's sessions: each `claude … --bg` command word's -n NAME starts `KEY-`, its prompt (the last
-  # plain argument, past redirections and option values) names KEY at its start (first_key; a chunk's `Chunk: KEY/N`
-  # too, its first key, if any, being KEY) and isn't a `Coordinate` (one level). Wrapper words (env, nohup, …) are
-  # looked through; a `claude --bg` inside `sh -c` or `eval` is refused (`!`).
-  # shortcut: a `--resume ID` with no -n gets only the `Coordinate` check (the ID's key is in its transcript); check it if a sub misuses it
-  starts=$(python3 -I -c '
+cmd=; [ "$tool" != Bash ] || cmd=$(jq -r '.tool_input.command // ""' <<<"$input")
+# starts CMD: each `claude … --bg` command word in CMD as NAME\x1fRESUME\x1fPROMPT\x1e; `!` for one the guard can't
+# read (an unclosed quote, or one inside sh -c / eval). Its -n NAME, its --resume ID, its prompt (the last plain
+# argument, past redirections and option values). Wrapper words (env, nohup, …) are looked through.
+starts() {
+  python3 -I -c '
 import shlex, sys
 P = ";&|()\n<>"
 W = {"env", "nohup", "command", "exec", "time", "nice", "caffeinate", "sudo"}
@@ -115,10 +104,52 @@ for t in toks + [";"]:
             i += 1
         sys.stdout.write(name + "\x1f" + res + "\x1f" + (pos[-1] if pos else "") + "\x1e")
     else: seg.append(t)
-' "$cmd") || starts='!'
+' "$1" || echo '!'
+}
+# other_key NAME: a task key NAME names that isn't the sub's own ($skey); fails when there's none. Its own sessions
+# ($skey, $skey-…) and the parent (the root's coordinator) first: a session-name key pattern matches them whole.
+other_key() {
+  cd "${cwd:-.}" 2>/dev/null; type key_re >/dev/null 2>&1 || . "${0%/*}/../lib.sh"
+  [ -n "${KEYRE:-}" ] || KEYRE=$(key_re "$(adapter_path . 2>/dev/null)")
+  local n=${1%% *}
+  case $n in "$skey"|"$skey"-*|"$(coord_name "$(find_root)")") return 1 ;; esac
+  grep -oE "$KEYRE" <<<"$n" | grep -vxF -e "$skey" | head -1 | grep .
+}
+if [ -n "$task" ]; then
+  # one that answers to a coordinator: a chunk, a review, keyed, or messaged (context-watch.sh's test for the reply
+  # card; .card is gone after a compaction until the next PostToolUse, so a review doesn't rely on it)
+  read -r _ key _ < "$k"; [ "$kind $key" != 'task -' ] || [ -e "${k%.kind}.card" ] || [ -e "${k%.kind}.msg" ] || exit 0
+  if [ "$tool" = Bash ]; then
+    [[ $cmd =~ claude ]] && [[ $cmd =~ --bg ]] && [ -n "$(starts "$cmd")" ] || exit 0
+    deny "Worker rule: a task session starts no session (worker.md, Work a message gives you), by claude --bg (a start or a resume) either. Say in your report what needs one (what, why, whether it only reads): your coordinator starts it by the user's start mode. Your own handover at your context mark runs the command the hook prints." task-start
+  fi
+  # a card the user starts themselves: Desktop starts nothing for these two without a proposal_id (hand_off_to_session
+  # always starts one; spawn_task only shows a chip, so it isn't matched)
+  [ "$tool" = mcp__ccd_session__start_session ] &&
+    jq -e '.tool_input | (.initiation == "own_initiative" or .initiation == "offer") and (.proposal_id // "" | tostring | test("^\\s*$"))' <<<"$input" >/dev/null && exit 0
+  deny "Worker rule: a task session starts no session (worker.md, Work a message gives you), by start_session or hand_off_to_session. Say in your report what needs one (what, why, whether it only reads): your coordinator starts it by the user's start mode. If the user asked you for it here, show them a card to start themselves: start_session with initiation \"own_initiative\" and no proposal_id." task-start
+fi
+if [ "$tool" = Bash ]; then
+  # a command start that persists: not ( or $(…), a subshell's cd stays in it
+  re=$'(^|[;&|{\n]|(^|[;&|{\n[:space:]])(then|do|else))[[:space:]]*(cd|pushd)([[:space:]]|$)'
+  [ -n "$sa" ] || [[ ! $cmd =~ $re ]] ||
+    deny "Coordinator rule: never cd in your shell, not later in a chain either; use absolute paths or git -C. The Bash tool keeps a cd across calls, and claude --bg then starts the new session in that folder, outside the project's settings. Run it again without the cd." cd
+  grep -q 'APPROVAL relayed from the user' <<<"$cmd" && grep -qE -e '--send-when-idle|claude[^;&|]*[[:space:]](--resume|-r)[[:space:]]' <<<"$cmd" &&
+    deny "Coordinator rule: a relay goes as a SendMessage once the session is reachable, never inside a resume prompt or a --send-when-idle text (approvals.md, Relaying): the worker's hook can't verify it there. Resume or wake the session without the relay block, then send the block with SendMessage." relay-resume
+  [ -n "$skey" ] || exit 0
+  # A sub stops no other key's session: a `claude stop` whose target names another key.
+  # shortcut: a target given by id isn't resolved to its name; resolve it if a sub stops another key's session by id
+  [[ $cmd =~ claude[[:space:]]+stop[[:space:]]+([^[:space:]\;\&\|]+) ]] && o=$(other_key "${BASH_REMATCH[1]}") &&
+    deny "Sub-coordinator rule: you stop only $skey's sessions; $o's belong to your parent: report it to your parent." sub-stop
+  [[ $cmd =~ claude ]] && [[ $cmd =~ --bg ]] || exit 0
+  # A sub starts only KEY's sessions: each `claude … --bg` command word's -n NAME starts `KEY-`, its prompt names KEY
+  # at its start (first_key; a chunk's `Chunk: KEY/N` too, its first key, if any, being KEY) and isn't a `Coordinate`
+  # (one level). A `claude --bg` inside `sh -c` or `eval` is refused (`!`).
+  # shortcut: a `--resume ID` with no -n gets only the `Coordinate` check (the ID's key is in its transcript); check it if a sub misuses it
+  starts=$(starts "$cmd")
   [ "$starts" != '!' ] || deny "Sub-coordinator rule: this command starts a session the guard can't read (an unclosed quote?). Start each of $skey's sessions with one plain claude --bg -n $skey-… '<first prompt>' command." sub-start
   [ -n "$starts" ] || exit 0
-  cd "${cwd:-.}" 2>/dev/null; . "${0%/*}/../lib.sh"; KEYRE=$(key_re "$(adapter_path . 2>/dev/null)")
+  [ -n "${KEYRE:-}" ] || { cd "${cwd:-.}" 2>/dev/null; . "${0%/*}/../lib.sh"; KEYRE=$(key_re "$(adapter_path . 2>/dev/null)"); }
   while IFS=$'\x1f' read -r -d $'\x1e' name res prompt; do
     fk=$(first_key "$prompt"); ck=$(chunk_of "$prompt") && ck=${ck% *} || ck=$fk
     { [ -z "$name" ] && [ -n "$res" ] && ! sub_key "$prompt" >/dev/null; } ||
@@ -126,6 +157,12 @@ for t in toks + [";"]:
       ! sub_key "$prompt" >/dev/null; } ||
       deny "Sub-coordinator rule: you start only $skey's sessions, one level deep: name it $skey-<what> (-n), and begin its first prompt with \`Work on $skey:\`, \`Session task: $skey\` or the chunk prompt --plan --next prints; never a \`Coordinate\` prompt (a task that big is two tasks: report it to your parent). Another key's work goes to your parent coordinator." sub-start
   done <<<"$starts"
+  exit 0
+fi
+if [ "$tool" = SendMessage ] || [ "$tool" = mcp__session-orchestration__reply ]; then
+  # shortcut: a `to` given as a session id or uds: address isn't resolved to its name; resolve it if a sub misuses one
+  [ -n "$skey" ] && o=$(other_key "$(jq -r '.tool_input.to // "" | strings' <<<"$input")") &&
+    deny "Sub-coordinator rule: you message only $skey's sessions and your parent; $o's sessions are your parent's: report what they need to your parent (reply with no to)." sub-message
   exit 0
 fi
 if [ "$tool" = mcp__ccd_session__start_session ] || [ "$tool" = mcp__ccd_session__hand_off_to_session ]; then

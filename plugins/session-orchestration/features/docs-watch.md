@@ -49,4 +49,4 @@ re-reads the rules that work around an older model's habits: some may no longer 
 |-----|-------|---------|
 | `features.docs_watch` | `true` \| `false` | `true` when `docs_watch.files` names a doc, else `false` |
 | `docs_watch.files` | JSON list of doc paths (relative to the root, or `~/…`); a person key, so in the project's `.claude/coordination.local.json`, never the committed file | the plugin's `writing-instructions.md` in the plugin repo's project (`feedback.repo_dir`), else unset |
-| `docs_watch.pattern` | an extended regex over slugs: which pages are watched | prompting, Agent Skills and guardrails pages, and the Claude Code pages on memory, skills, subagents, hooks, context and plugins (`DOCS_WATCH_PATTERN` in `lib.sh`) |
+| `docs_watch.pattern` | an extended regex over slugs: which pages are watched | `DOCS_WATCH_PATTERN` in `lib.sh` (`session-status --config docs_watch.pattern` prints it) |

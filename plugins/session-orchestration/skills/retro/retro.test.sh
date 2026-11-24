@@ -487,7 +487,9 @@ cat > "$a/rrrrrrrr-1111.jsonl" <<EOF
 EOF
 sed -i.bak '1s/"type":"user",/"type":"user","entrypoint":"claude-desktop",/' "$a/ssssssss-1111.jsonl"; rm "$a/ssssssss-1111.jsonl.bak"
 out=$(retro start 7)
-[ "$(grep -v '^session' <<<"$out")" = $'ssssssss\t2026-10-12T17:00\tclaude-desktop\t6\t40000\t53900\t13900\t6000\t2925\t0\t2000\t1000\t1475\t500\nmedian\tn=1\tall\t6\t40000\t53900\t13900\t6000\t2925\t0\t2000\t1000\t1475\t500' ] ||
+[ "$(grep '^target' <<<"$out" | cut -f3- | tr '\t\n' ' ;')" = 'increment 13900 23000 ok 60%;reqs 6 6 ok 100%;skill+coord_docs 8925 6500 over 137%;feature_docs 0 500 ok 0%;project_docs 2000 6000 ok 33%;schemas 1000 2600 ok 38%;status+rest 1975 7000 ok 28%;' ] ||
+  fail "start: each median against its target" "$out"
+[ "$(grep -v -e '^session' -e '^target' <<<"$out")" = $'ssssssss\t2026-10-12T17:00\tclaude-desktop\t6\t40000\t53900\t13900\t6000\t2925\t0\t2000\t1000\t1475\t500\nmedian\tn=1\tall\t6\t40000\t53900\t13900\t6000\t2925\t0\t2000\t1000\t1475\t500' ] ||
   fail "start: the coordinator's Start by part, ended by the watcher" "$out"
 # A cli coordinator (base 10K lower): medians per entrypoint too.
 sed 's/"claude-desktop"/"cli"/; s/"input_tokens":\([0-9]*\)/"input_tokens":\1-10000/' "$a/ssssssss-1111.jsonl" |
@@ -496,8 +498,8 @@ out=$(retro start 7); rm "$a/tttttttt-1111.jsonl"
 grep -q $'^median\tn=2\tall\t' <<<"$out" && grep -q $'^median\tn=1\tclaude-desktop\t6\t40000\t53900\t13900\t' <<<"$out" &&
   grep -q $'^median\tn=1\tcli\t6\t30000\t43900\t13900\t' <<<"$out" || fail "start: medians per entrypoint" "$out"
 out=$(retro loads 7)
-grep -q $'^review\t1\t1\t2\t1\t0\t0\t1\t1\t0\t1\t0\t1\t-\t25\t300$' <<<"$out" &&
-  grep -q $'^coordinator\t1\t0\t0\t0\t1\t0\t0\t0\t1\t0\t0\t0\t6000\t-\t-$' <<<"$out" || fail "loads: per kind" "$out"
+grep -q $'^review\t1\t1\t2\t1\t0\t0\t1\t1\t0\t1\t0\t1\t-\t25\t300\t325\tok 32%$' <<<"$out" &&
+  grep -q $'^coordinator\t1\t0\t0\t0\t1\t0\t0\t0\t1\t0\t0\t0\t6000\t-\t-\t-\t-$' <<<"$out" || fail "loads: per kind" "$out"
 
 # search: prompts, cross-session messages and own text, masked and capped; not tool calls, subagents, old lines or the
 # caller; 3 hits a session, then a count of the rest.
@@ -593,6 +595,13 @@ grep -q "'task': 0," <<<"$out" && grep -q '^note: 1 sessions .*Pass --project RO
 out=$(retro sections plugin memory units sizing 2>&1)
 [ "$out" = $'skipped: memory (not a plugin section)\nunits\nsizing' ] || fail "sections: the listed ones the scope has" "$out"
 retro sections both 2>/dev/null && fail "sections: one scope per run" ""
+# plugin scope away from feedback.repo_dir's root: project's sections, with the warning
+fr=$tmp/froot; mkdir -p "$fr/.claude" "$tmp/fhome/.claude"; echo '{}' > "$fr/.claude/coordination.local.json"
+jq -n --arg d "$fr" '{feedback: {repo_dir: $d}}' > "$tmp/fhome/.claude/coordination.local.json"
+out=$(cd "$tmp/fhome" && retro sections plugin 2>&1)
+[ "$out" = "warning: plugin scope runs only from feedback.repo_dir's root ($(cd "$fr" && pwd -P)): project"$'\nunits\ncontext\nwaste\nfeedback\ncoordinator\nmemory' ] ||
+  fail "sections: plugin scope off its root falls back to project" "$out"
+[ "$(cd "$fr" && retro sections plugin 2>&1 | head -1)" = units ] || fail "sections: plugin scope at its root" "$(cd "$fr" && retro sections plugin 2>&1)"
 # retro-run's run is task retro-SCOPE, the key its successor's `Session task:` marker carries.
 echo '{"type":"user","timestamp":"2026-10-12T13:00:00.000Z","message":{"content":"Session task: retro run, scope plugin. Use the retro skill."}}
 {"type":"assistant","message":{"id":"m1","usage":{"input_tokens":5}}}' > "$tmp/rr.jsonl"

@@ -26,5 +26,9 @@ done <<<"$hits"
 while IFS= read -r a; do
   [ -n "$a" ] && ! grep -qxF -- "$a" <<<"$hits" && { echo "stale $allow line: ${a/$'\t'/: }"; bad=1; }
 done <<<"$listed"
+# The plugin's instructions never ask the model to think more (writing-instructions.md, which states the rule, aside).
+think=$(git ls-files -co --exclude-standard -z 'plugins/session-orchestration/*.md' 'plugins/session-orchestration/*.txt' |
+  grep -zv 'writing-instructions\.md$' | xargs -0 grep -inE 'think (hard|harder|more|step by step)|ultrathink' -- 2>/dev/null)
+[ -z "$think" ] || { printf 'asks the model to think more (writing-instructions.md):\n%s\n' "$think"; bad=1; }
 [ "$bad" = 0 ] && echo ok
 exit "$bad"

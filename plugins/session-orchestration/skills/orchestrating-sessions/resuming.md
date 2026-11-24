@@ -10,7 +10,7 @@ the project root, after confirming the session owns the task (`session-status --
 | Session is live | `SendMessage` to its name |
 | Session was stopped with `claude stop` | `claude attach <id>` (its conversation is kept) |
 | Session is closed and not listed in `claude agents --json` | `claude --bg --resume <session-id> '<task>'` (single quotes). **Check the list first.** Resuming a session that still runs starts a duplicate under a new id |
-| Session is retired (still listed, but a send fails "not reachable") | `session-status --send-when-idle <id> '<text>'` ([below](#follow-ups-for-later); never a relayed approval in the text), or by hand ([Reviving](#reviving-a-retired-session)) |
+| Session is retired (still listed, but a send fails "not reachable") | `session-status --send-when-idle <id> '<text>'` ([below](#follow-ups-for-later)), or by hand ([Reviving](#reviving-a-retired-session)) |
 | Sessions ended while the background service was off (a reboot) or crashed | `session-status --resume-ended ID…`, after the one ask ([below](#after-a-restart)) |
 | The user must answer a prompt or approve a plan | Open its attach tab and queue one ask ([below](#permission-prompts-and-trust)) |
 | Finished session (under Leftovers) | The watcher stops it, no ask: a `--watch` poll stops each background one at rest and lists it under `Stopped`. One it leaves (interactive, on a prompt, waiting on the user, or the stop failed) stays a leftover: `claude stop <id>` on the user's go. Once none holds the task, the watcher removes its worktree and branch too when nothing can be lost (else a Leftovers line: the user's go). A session replaced through `--handover` is stopped without asking, below |
@@ -38,7 +38,7 @@ Every resume path refuses a session holding over 200K tokens (exit 4) and prints
 A session a later handover superseded (`Supersedes: <id>` in a successor's first prompt, or renamed `NAME-prev-K`
 while a session of the same project, live or retired but not failed, is named `NAME`: a coordinator's handover) gets nothing (exit 5): the helper names the newest
 successor, which owns the task now; send it there.
-Never put a relayed approval in the text: a relay is a SendMessage ([approvals.md](approvals.md)).
+A relayed approval in the text is refused (exit 6): a relay is a SendMessage ([approvals.md](approvals.md)).
 
 ## Resuming: only small sessions
 

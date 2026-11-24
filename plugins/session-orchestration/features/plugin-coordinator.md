@@ -50,13 +50,13 @@ feature `design`), never one kind for all.
 
 **Apply sessions.** Start one per batch the user names (with `at_once`, per batch), from this root. Run
 `session-status --kind <its kind> <name>`
-first (this start has its own brief, so it's one `--launch` doesn't cover; `<name>`: `<name>`: a task name the project's key pattern matches, of letters, digits, `.`, `_` and `-`, at most 80), then `claude --bg -n <name>` as the coordinator skill's sessions.md says, with this
+first (this start has its own brief, so it's one `--launch` doesn't cover; `<name>`: a task name the project's key pattern matches; exit 2 names a wrong one), then `claude --bg -n <name>` as the coordinator skill's sessions.md says, with this
 brief, which starts with the name so the status shows its owner: `Work on <name>: Apply plugin feedback: <case file paths>. Follow feedback.md,
 Applying, for these cases only, and this repo's CLAUDE.md release checks. <PR line> Why: <what the cases say goes
 wrong>. Done when: the change is implemented with the repo's checks passing, a PR is open, and each case is marked
 sent <url>. When finished: reply with done and the check that proves it.` The `<PR line>`, by `session-status --config approvals.pr_create`: `true` (the default in this project)
 gives `Open your PR yourself (approvals.pr_create is on).`, and they open it without asking; `false` gives `Ask before
-gh pr create.`, and it reaches you as an ask like any other.
+gh pr create.`, and it reaches you as an ask like any other (the approval hook refuses it without your relay).
 Because they work in your project, relayed approvals verify for them ([approvals.md](../skills/orchestrating-sessions/approvals.md)).
 
 **Releases.** A batch's PR lands the way the repo's `CLAUDE.md` says. Once the release is on the repo's main (check it
