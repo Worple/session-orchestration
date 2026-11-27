@@ -1,24 +1,26 @@
 # session-status --set ID [--model M] [--effort E] [--mode P] [--up|--down] [--how auto|live|resume|fresh]
 #   [--why TEXT] [--by lead|pane] [-- 'NEXT']: changes a session's model, effort or permission mode, its conversation
 #   kept (features/agent-settings.md). Sourced by session-status (its find_session read_row stop_session resume_with
-#   mid_turn transcript_of activity_fields, TMP and SELF), and exits with --set's code: 0 done; 1 a listing, stop or
-#   resume failed; 2 usage, no such session or a bad value; 3 busy, waiting, locked or interactive; 4 too big to
-#   resume; 5 outside policy.
+#   mid_turn transcript_of activity_fields pre_dir, TMP and SELF), and exits with --set's code: 0 done; 1 a listing,
+#   stop or resume failed, or no job state to change; 2 usage, no such session or a bad value; 3 busy, waiting, locked
+#   or interactive; 4 too big to resume; 5 outside policy.
 # It changes from the override file's values, else what its transcript's last reply ran on (lib.sh last_model);
 # --up/--down move both one rung (lib.sh escalate_rung, deescalate_rung). Tiers, by --how (auto: resume for a mode,
 # else live, or resume while LIVE is off):
 #  - live: the override file, merged with the change. The agent's turn.step hook applies a model from its next
 #    request, an effort from its next turn (the next step that carries input). Running or not, busy, waiting or
 #    interactive alike; never a mode.
-#  - resume: under --compact's lock, stopped while idle and resumed under its own id with the current model and effort
-#    as flags beside the change (a resume can't bring old values back); then the override file goes (RESUME_KEEPS).
-#    Refused, nothing stopped: mid-turn, on a prompt, interactive or locked (3); over SESSION_STATUS_MAX_RESUME (4).
+#  - resume: under --compact's lock, stopped while idle; its job's saved options (respawnFlags in Claude Code's
+#    jobs/ID8/state.json) get the current model and effort with the change; resumed without flags (with flags, a
+#    background session starts a copy under a new id), it keeps its id; then the override file goes. Refused, nothing
+#    stopped: mid-turn, on a prompt, interactive or locked (3); over SESSION_STATUS_MAX_RESUME (4); no such job state
+#    (1: the file is undocumented, so a changed shape fails closed).
 #  - fresh: --handover to a new session on the new values, NEXT its brief.
 # First, for every tier, lib.sh policy_allows on what changes (a lead: the person's policy.* keys): outside it, exit 5
 # with nothing changed, the last line `needs your approval: set "NAME" (ID8) to CHANGES`.
 # Override file: ${XDG_CACHE_HOME:-~/.cache}/session-status/settings/ID.json, {"model"?, "effort"?, "by", "why", "at"},
 # written to a temp file and moved. Log: $(proj_dir)/settings.jsonl, a line per change made.
-LIVE=on RESUME_KEEPS=yes   # the phase 1 spikes (docs/superpowers/notes/2026-11-24-phase1-spikes.md)
+LIVE=on   # the phase 1 spikes (docs/superpowers/notes/2026-11-24-phase1-spikes.md)
 
 set_usage() {
   echo "usage: session-status --set ID [--model M] [--effort E] [--mode P] [--up|--down] [--how auto|live|resume|fresh] [--why TEXT] [--by lead|pane] [-- 'NEXT'] (ID: 8+ characters)"
@@ -102,9 +104,9 @@ set_log() {   # TIER
 if [ "$how" = live ]; then
   set_override || { echo "couldn't write $(tilde "$ovr"): nothing changed"; exit 1; }
   set_log live
-  if [ -z "$pid" ]; then echo "$who: $changes when it next runs (live)"
-  elif [ -n "$ce" ]; then echo "$who: $changes from its next request, effort from its next turn (live)"
-  else echo "$who: $changes from its next request (live)"; fi
+  timed=${cm:+model $cm from its next request}
+  [ -z "$ce" ] || timed="${timed:+$timed, }effort $ce from its next turn"
+  if [ -z "$pid" ]; then echo "$who: $changes when it next runs (live)"; else echo "$who: $timed (live)"; fi
   exit 0
 fi
 
@@ -124,19 +126,47 @@ if [ "$how" = resume ]; then
   [ -z "$f" ] || c=$(activity_fields "$f" | cut -f4)
   [ "${c:-0}" -le "$max" ] ||
     { echo "$who holds $c tokens of context, over $max: not resumed to change its settings. Hand its task to a fresh session: this --set with --how fresh -- '<what next>'$([ -n "$mode" ] || echo ', or --how live')"; exit 4; }
-  flags="${nm:+--model $(printf %q "$nm") }${ne:+--effort $ne }${mode:+--permission-mode $mode}"; flags=${flags% }
+  # A background session resumed with flags starts a copy under a new id: the change goes into its job's saved
+  # options instead, Claude Code's jobs/ID8/state.json (undocumented: its shape is checked before anything stops).
+  job=$(pre_dir "$pre")/jobs/${id:0:8}/state.json
+  jq -e --arg id "$id" '.sessionId == $id and (.respawnFlags | type == "array")' "$job" >/dev/null 2>&1 ||
+    { echo "$(tilde "$job"): missing, or not $who's, so --set can't change its saved options (no job state): try --how fresh"; exit 1; }
   text="Settings changed by $by: $changes${why:+ ($why)}. Carry on with your task; if it was finished, end your turn without a message."
   if [ -n "$pid" ]; then
     stop_session "$pre" "$id" || { echo "couldn't stop $who, or confirm it stopped within 30s: not resumed, settings unchanged"; exit 1; }
   fi
-  # The override file steps aside while it resumes, so its hook can't put old values over the flags on the first
-  # request: gone once it resumed (RESUME_KEEPS=no: kept), back when the resume failed.
-  held=; [ "$RESUME_KEEPS" = no ] || [ ! -e "$ovr" ] || { held=$sdir/.$id.held.$$; mv -f "$ovr" "$held" || held=; }
-  if ! resume_with "$pre" "$cwd" "$id" "$text" "" "$flags"; then
-    [ -z "$held" ] || { [ -e "$ovr" ] || mv -f "$held" "$ovr"; rm -f "$held"; }
-    if [ -n "$pid" ]; then echo "stopped $who, but its resume failed (above): settings unchanged; wake it (--send-when-idle ${id:0:8} TEXT) or run this --set again"
-    else echo "the resume of $who failed (above): settings unchanged"; fi
+  after_stop() {   # WHAT: a failure once it may be stopped, said so
+    if [ -n "$pid" ]; then echo "stopped $who, but $1: settings unchanged; wake it (--send-when-idle ${id:0:8} TEXT) or run this --set again"
+    else echo "$who: $1: settings unchanged"; fi
     exit 1
+  }
+  job_put() {   # FILE: its content becomes the job state, through a temp file beside it (the state's mode kept), then mv
+    local t; t=$(mktemp "${job%/*}/.state.json.XXXXXX") || return 1
+    cp -p "$job" "$t" && cat "$1" > "$t" && mv -f "$t" "$job" || { rm -f "$t"; return 1; }
+  }
+  # The rewrite, once it's stopped (a running job writes its own state), the original kept to put back: each --model
+  # and --effort entry with its value (or a --model=… one) out where a new one replaces it, a --permission-mode only
+  # when the mode changes; the new ones appended, every other entry kept in order.
+  cp "$job" "$TMP/job.orig" && jq --arg id "$id" --arg m "$nm" --arg e "$ne" --arg p "$mode" '
+    def gone($f): ($m != "" and ($f == "--model" or ($f | startswith("--model="))))
+      or ($e != "" and ($f == "--effort" or ($f | startswith("--effort="))))
+      or ($p != "" and ($f == "--permission-mode" or ($f | startswith("--permission-mode="))));
+    if .sessionId == $id and (.respawnFlags | type) == "array" then
+      .respawnFlags |= ((reduce .[] as $f ({o: [], skip: false};
+          if .skip then .skip = false
+          elif ($f | type) == "string" and gone($f) then .skip = ($f | contains("=") | not)
+          else .o += [$f] end) | .o)
+        + (if $m != "" then ["--model", $m] else [] end) + (if $e != "" then ["--effort", $e] else [] end)
+        + (if $p != "" then ["--permission-mode", $p] else [] end))
+    else error("not its job state") end' "$TMP/job.orig" > "$TMP/job.new" && job_put "$TMP/job.new" ||
+    after_stop "couldn't rewrite its saved options ($(tilde "$job"))"
+  # The override file steps aside while it resumes, so its hook can't put old values over the saved options on the
+  # first request: gone once it resumed, back when the resume failed.
+  held=; [ ! -e "$ovr" ] || { held=$sdir/.$id.held.$$; mv -f "$ovr" "$held" || held=; }
+  if ! resume_with "$pre" "$cwd" "$id" "$text"; then
+    job_put "$TMP/job.orig" || echo "couldn't put $(tilde "$job") back as it was: its saved options carry the change"
+    [ -z "$held" ] || { [ -e "$ovr" ] || mv -f "$held" "$ovr"; rm -f "$held"; }
+    after_stop "its resume failed (above)"
   fi
   [ -z "$held" ] || rm -f "$held"
   set_log resume

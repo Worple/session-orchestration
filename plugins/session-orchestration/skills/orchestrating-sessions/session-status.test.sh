@@ -1027,24 +1027,28 @@ fi
 
 if section set; then
 # --set (features/agent-settings.md), against accounts_claude; rid last ran on opus/max (its transcript's last reply).
-# Live: the override file, merged, and a log line, nothing stopped. A mode: stopped while idle and resumed under its
-# id with the current model and effort and the mode, the override file gone. Refused, nothing stopped: busy, waiting,
-# interactive or locked (exit 3), over the resume limit (4), outside policy (5), a bad value or no change (2).
+# Live: the override file, merged, and a log line, nothing stopped. A mode: stopped while idle, its job's saved options
+# (J: Claude Code's jobs/ID8/state.json respawnFlags) rewritten with the current model and effort and the mode, and
+# resumed without flags under its id, the override file gone. Refused, nothing stopped: busy, waiting, interactive or
+# locked (exit 3), over the resume limit (4), outside policy (5), a bad value or no change (2), no job state (1).
 accounts_claude
 rid=22222222-2222-3333-4444-555555555555
 printf '%s\n' '{"type":"user","message":{"content":"Review the PR"}}' \
   '{"type":"assistant","requestedModel":"opus","effort":"max","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"hi"}]}}' > "$proj/$rid.jsonl"
+J=$tmp/cfg/jobs/22222222/state.json; mkdir -p "${J%/*}"
+jq -n --arg id "$rid" '{sessionId: $id, name: "rev", state: "running", respawnFlags: ["-n", "rev", "--model", "opus", "--effort", "max"]}' > "$J"
 O() { cat "$tmp/.cache/session-status/settings/$rid.json"; }
 LOG() { tail -1 "$(pof "$root")/settings.jsonl"; }
-# 1. live: for its next request (an effort for its next turn), logged, nothing stopped or resumed
+# 1. live: a model for its next request, an effort for its next turn; logged, nothing stopped or resumed
 setacct cfg "$(sess "$rid" rev idle 1)"
 out=$(run --set "$rid" --model sonnet --effort low --why cheap) &&
-  [ "$out" = '"rev" (22222222): model sonnet, effort low from its next request, effort from its next turn (live)' ] &&
+  [ "$out" = '"rev" (22222222): model sonnet from its next request, effort low from its next turn (live)' ] &&
   [ "$(O | jq -r '"\(.model) \(.effort) \(.by) \(.why)"')" = 'sonnet low lead cheap' ] &&
   [ "$(LOG | jq -r '"\(.tier) \(.old.model) \(.new.model)"')" = 'live opus sonnet' ] && ! calls | grep -q 'stop\|--bg' ||
   { echo "set live failed: $out / $(O) / $(LOG)"; exit 1; }
 # 2. merged into the override file
-run --set "$rid" --effort high >/dev/null && [ "$(O | jq -r '.model+" "+.effort')" = 'sonnet high' ] || { echo "set live merge failed: $(O)"; exit 1; }
+out=$(run --set "$rid" --effort high) && [ "$out" = '"rev" (22222222): effort high from its next turn (live)' ] &&
+  [ "$(O | jq -r '.model+" "+.effort')" = 'sonnet high' ] || { echo "set live merge failed: $out / $(O)"; exit 1; }
 # 3. a rung up from the override file's values; a rung down from the transcript's (opus/max) once it's gone
 run --set "$rid" --up >/dev/null && [ "$(O | jq -r '.model+" "+.effort')" = 'sonnet xhigh' ] || { echo "set --up failed: $(O)"; exit 1; }
 rm "$tmp/.cache/session-status/settings/$rid.json"
@@ -1053,20 +1057,26 @@ run --set "$rid" --down >/dev/null && [ "$(O | jq -r '.model+" "+.effort')" = 'o
 setacct cfg "$(sess "$rid" rev '' null)"
 out=$(run --set "$rid" --effort xhigh) && [ "$out" = '"rev" (22222222): effort xhigh when it next runs (live)' ] &&
   ! calls | grep -q 'stop\|--bg' || { echo "set live, not running: $out"; exit 1; }
-# 4. a mode: stopped while idle, resumed under its id with the current model and effort and the mode; the override
-# file and the lock gone, the change logged
+# 4. a mode: stopped while idle, its saved options rewritten (the current model and effort, the mode; the rest kept in
+# order), resumed with no flags under its id (flags would start a copy); the override file and the lock gone, logged
 setacct cfg "$(sess "$rid" rev idle 1)"
 out=$(run --set "$rid" --mode acceptEdits --why trust) && c=$(calls | grep -v ' agents ') &&
   [ "$out" = '"rev" (22222222): mode acceptEdits, resumed under its own id (resume)' ] &&
-  [[ $c == "$(printf 'cfg stop 22222222\ncfg --bg --resume %s --model opus --effort xhigh --permission-mode acceptEdits Settings changed by lead: mode acceptEdits (trust).' "$rid")"* ]] &&
+  [[ $c == "$(printf 'cfg stop 22222222\ncfg --bg --resume %s Settings changed by lead: mode acceptEdits (trust). ' "$rid")"* ]] &&
+  ! grep -q -- '--model\|--effort\|--permission-mode' <<<"$c" &&
+  [ "$(jq -c .respawnFlags "$J")" = '["-n","rev","--model","opus","--effort","xhigh","--permission-mode","acceptEdits"]' ] &&
+  [ "$(jq -r .sessionId "$J")" = "$rid" ] && [ "$(ls -A "${J%/*}")" = state.json ] &&
   [ ! -e "$tmp/.cache/session-status/settings/$rid.json" ] && [ ! -e "$tmp/.cache/session-status/compact-$rid" ] &&
-  [ "$(LOG | jq -r .tier)" = resume ] || { echo "set resume failed: $out / ${c:-}"; exit 1; }
-# a resume that fails after the stop says so (exit 1); the override file is back as it was, the lock gone
+  [ "$(LOG | jq -r .tier)" = resume ] || { echo "set resume failed: $out / ${c:-} / $(jq -c .respawnFlags "$J")"; exit 1; }
+# a resume that fails after the stop says so (exit 1); the job state is byte for byte as it was, the override file
+# back, the lock gone
 setacct cfg "$(sess "$rid" rev idle 1)"; echo '{"effort":"low","by":"lead","why":"","at":1}' > "$tmp/.cache/session-status/settings/$rid.json"
+cp "$J" "$tmp/state.before"
 rc=0; out=$(FAIL_BG_IN=cfg run --set "$rid" --mode auto) || rc=$?
-[ $rc = 1 ] && grep -q '^stopped "rev" (22222222), but its resume failed' <<<"$out" && [ "$(O | jq -r .effort)" = low ] &&
+[ $rc = 1 ] && grep -q '^stopped "rev" (22222222), but its resume failed' <<<"$out" && cmp -s "$J" "$tmp/state.before" &&
+  [ "$(ls -A "${J%/*}")" = state.json ] && [ "$(O | jq -r .effort)" = low ] &&
   [ "$(ls -A "$tmp/.cache/session-status/settings")" = "$rid.json" ] && [ ! -e "$tmp/.cache/session-status/compact-$rid" ] ||
-  { echo "set failed resume: $rc $out"; exit 1; }
+  { echo "set failed resume: $rc $out / $(jq -c .respawnFlags "$J")"; exit 1; }
 rm "$tmp/.cache/session-status/settings/$rid.json"; calls >/dev/null
 # 5. a mode mid-turn or on a prompt: refused, nothing stopped
 for st in busy waiting; do setacct cfg "$(sess "$rid" rev $st 1)"
@@ -1086,13 +1096,34 @@ rc=0; out=$(run --set "$rid" --mode auto) || rc=$?
   { echo "set outside policy not refused: $rc $out"; exit 1; }
 rc=0; out=$(run --set "$rid" --mode bypassPermissions) || rc=$?
 [ $rc = 5 ] && ! calls | grep -q 'stop\|--bg' || { echo "set bypassPermissions by lead not refused: $rc $out"; exit 1; }
-out=$(run --set "$rid" --by pane --mode bypassPermissions) && calls | grep -q -- "^cfg --bg --resume $rid .*--permission-mode bypassPermissions " ||
-  { echo "set bypassPermissions by pane failed: $out"; exit 1; }
+# exit 5 is an answer, not a fault: telemetry logs the failed resume's exit 1 above, never these
+U=$tmp/state/session-orchestration/usage.jsonl
+grep -q '"n":1,"at":"--set"' "$U" && ! grep -q '"n":5,"at":"--set"' "$U" || { echo "set telemetry: $(cat "$U" 2>&1)"; exit 1; }
+out=$(run --set "$rid" --by pane --mode bypassPermissions) && c=$(calls | grep -v ' agents ') &&
+  [[ $c == *"cfg --bg --resume $rid Settings changed by pane: mode bypassPermissions. "* ]] &&
+  jq -e '(.respawnFlags | index(["--permission-mode", "bypassPermissions"])) and ([.respawnFlags[] | select(. == "--permission-mode")] | length == 1)' "$J" >/dev/null ||
+  { echo "set bypassPermissions by pane failed: $out / ${c:-} / $(jq -c .respawnFlags "$J")"; exit 1; }
+# a resume that leaves the mode keeps the saved one; a replaced --model=… or --effort=… entry goes; the rest stays in order
+jq '.respawnFlags = ["-n", "rev", "--model=opus", "--plugin-dir", "/p", "--effort=max", "--permission-mode", "bypassPermissions"]' "$J" > "$J.t" && mv "$J.t" "$J"
+out=$(run --set "$rid" --model sonnet --how resume) &&
+  [ "$(jq -c .respawnFlags "$J")" = '["-n","rev","--plugin-dir","/p","--permission-mode","bypassPermissions","--model","sonnet","--effort","max"]' ] ||
+  { echo "set resume without a mode: $out / $(jq -c .respawnFlags "$J")"; exit 1; }
+calls >/dev/null
 # a policy.* value that isn't valid says so (policy_allows reads it quietly, falling back to the default)
 echo '{"policy":{"max_effort":"extreme"}}' > "$root/.claude/coordination.local.json"
 out=$(run --set "$rid" --model sonnet 2>&1) && grep -qxF 'warning: config policy.max_effort=extreme is not valid: using the default' <<<"$out" ||
   { echo "set policy warning missing: $out"; exit 1; }
 rm "$root/.claude/coordination.local.json"; calls >/dev/null
+# no job state, one of another session (a short-id clash) or without respawnFlags (Claude Code's file is undocumented):
+# exit 1, nothing stopped, pointing to --how fresh
+setacct cfg "$(sess "$rid" rev idle 1)"; mv "$J" "$tmp/state.keep"
+for bad in none '.sessionId = "22222222-0000-0000-0000-000000000000"' '.respawnFlags = "-n rev"'; do
+  [ "$bad" = none ] || jq "$bad" "$tmp/state.keep" > "$J"
+  rc=0; out=$(run --set "$rid" --mode auto) || rc=$?
+  [ $rc = 1 ] && grep -q "can't change its saved options (no job state): try --how fresh$" <<<"$out" && ! calls | grep -q 'stop\|--bg' ||
+    { echo "set with job state $bad: $rc $out"; exit 1; }
+done
+mv "$tmp/state.keep" "$J"
 # 8. over the resume limit: exit 4, nothing stopped, naming --how fresh
 xid=77777777-2222-3333-4444-555555555555
 printf '%s\n' '{"type":"user","message":{"content":"Big task"}}' \
