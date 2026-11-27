@@ -598,7 +598,9 @@ policy_allows() {
       [ "$x" = "$e" ] && [ -n "$seen" ] && [ "$x" != "$l" ] && { echo "effort $e is over policy.max_effort $l"; return 1; }
     done
   fi
-  [ -z "$d" ] || config policy.modes 2>/dev/null | grep -qxF -- "$d" || { echo "mode $d is not in policy.modes"; return 1; }
+  # read whole first: piped to grep -q, config can die of SIGPIPE, and under pipefail (session-status) that refuses
+  l=$(config policy.modes 2>/dev/null)
+  [ -z "$d" ] || grep -qxF -- "$d" <<<"$l" || { echo "mode $d is not in policy.modes"; return 1; }
 }
 
 # The coordinator pane's section slugs (hooks/register.tsx sectionSlug: a title, lowercase, its "(…)" dropped), and
