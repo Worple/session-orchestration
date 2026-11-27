@@ -1395,6 +1395,27 @@ printf '## c3b: handoff\nstate\n' > "$root/replies/PROJ-9-build.md"
 for bad in '--model fable' '--model claude-fable-5-1' '--effort ultra' '--model'; do
   out=$(run --handover "$kid" $bad -- 'x') && rc=0 || rc=$?
   [ "$rc" = 2 ] && ! calls | grep -q 'stop\|--bg' || { echo "handover $bad not refused: $out"; exit 1; }; done
+# The override file of the old id (skills/orchestrating-sessions/set.sh) stands in for flags left out; it goes after success.
+ovd=$tmp/.cache/session-status/settings; mkdir -p "$ovd"; echo '{"model":"sonnet","effort":"low","by":"lead","why":"x","at":1}' > "$ovd/$kid.json"
+calls >/dev/null; run --handover "$kid" -- 'x' >/dev/null; c=$(calls)
+grep -q '^cfg --bg --model sonnet --effort low -n PROJ-9-c3b ' <<<"$c" && [ ! -e "$ovd/$kid.json" ] || { echo "handover ignored the override file: $c"; exit 1; }
+# --mode: one --permission-mode on the line, though the account's settings default to plan.
+echo '{"permissions":{"defaultMode":"plan"}}' > "$tmp/cfg/settings.json"
+calls >/dev/null; run --handover "$kid" --mode acceptEdits -- 'x' >/dev/null; c=$(calls)
+[ "$(grep -o -- '--permission-mode' <<<"$c" | wc -l)" = 1 ] && grep -qF -- '--permission-mode acceptEdits' <<<"$c" || { echo "handover --mode: $c"; exit 1; }
+calls >/dev/null; run --handover "$kid" -- 'x' >/dev/null; c=$(calls)
+grep -qF -- '--permission-mode default' <<<"$c" || { echo "handover kept no plan-default override: $c"; exit 1; }
+rm "$tmp/cfg/settings.json"
+out=$(run --handover "$kid" --mode yolo -- 'x') && rc=0 || rc=$?
+[ "$rc" = 2 ] && ! calls | grep -q 'stop\|--bg' || { echo "handover --mode yolo not refused: $rc $out"; exit 1; }
+# bypassPermissions only with --by pane: a lead is refused (exit 5) before anything is stopped or started.
+calls >/dev/null; out=$(run --handover "$kid" --mode bypassPermissions -- 'x') && rc=0 || rc=$?
+[ "$rc" = 5 ] && [ "$(tail -1 <<<"$out")" = 'needs your approval: handover "PROJ-9-c3b" (dddddddd) with mode bypassPermissions' ] && ! calls | grep -q 'stop\|--bg' ||
+  { echo "handover --mode bypassPermissions by lead: $rc $out"; exit 1; }
+calls >/dev/null; run --handover "$kid" --mode bypassPermissions --by pane -- 'x' >/dev/null; c=$(calls)
+[ "$(grep -o -- '--permission-mode' <<<"$c" | wc -l)" = 1 ] && grep -qF -- '--permission-mode bypassPermissions' <<<"$c" || { echo "handover --by pane: $c"; exit 1; }
+out=$(run --handover "$kid" --by nobody -- 'x') && rc=0 || rc=$?
+[ "$rc" = 2 ] && ! calls | grep -q 'stop\|--bg' || { echo "handover --by nobody not refused: $rc $out"; exit 1; }
 # No flags: the old session's last model and effort (a user's hand-picked fable too); a flag given wins.
 cp "$proj/$kid.jsonl" "$tmp/kid.jsonl"
 echo '{"type":"assistant","effort":"xhigh","message":{"model":"claude-fable-5-2"}}' >> "$proj/$kid.jsonl"
