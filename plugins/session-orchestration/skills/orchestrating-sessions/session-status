@@ -156,6 +156,14 @@
 #                       session too big to resume is stopped and a fresh one takes its task over, under its name, from the replies
 #                       folder's KEY.md (a chunk: KEY-build.md's handoff); --self, a session hands itself over at its
 #                       context mark, coordinator or not (see the block)
+#                       ; exit 1 the listing, stop or start failed, 2 usage or nothing to hand over from, 3 mid-turn, on
+#                       a prompt or interactive, 5 outside the person's policy (last line `needs your approval: handover …`)
+#        session-status --set ID [--model M] [--effort E] [--mode P] [--up|--down] [--how auto|live|resume|fresh]
+#                       [--why TEXT] [--by lead|pane] [-- 'NEXT'] | --set ID --clear   a session's model, effort or
+#                       permission mode, its conversation kept (set.sh, features/agent-settings.md); exit 1 a listing,
+#                       stop or resume failed or no job state, 2 usage or no such session, 3 busy, waiting, not idle,
+#                       locked or interactive, 4 too big to resume, 5 outside the person's policy (`needs your approval:
+#                       set …`)
 #        session-status --prev-name [NAME]   NAME-prev-K, the name a session renames itself to when it hands off: K the
 #                       lowest free number over every listed session name (NAME: the caller's own); --title also
 #                       titles the caller's terminal tab with it
@@ -2594,8 +2602,8 @@ fi
 # in the project root, under the caller's account (plus --permission-mode default where it defaults to plan), with a
 # brief naming KEY.md, WHAT NEXT and a `Supersedes: ID` line (the owner mapping reads it). NAME: the old name if
 # it starts with KEY (any case), else KEY-<old name>; the old one is stopped, so the names don't clash live.
-# --model M / --effort E go onto the `claude --bg` line (never fable); each one left out is the old id's override file's
-# (set.sh; removed once the successor has started), else (a chunk) its plan row's, else what the old session last ran on (lib.sh last_model: its transcript, fable included when the user put it
+# --model M / --effort E go onto the `claude --bg` line (never fable); each one left out is (a chunk) its plan
+# row's, else what the old session last ran on (lib.sh last_model: its transcript, fable included when the user put it
 # there; its effort only with its model), else the daemon's default. A chunk session (a `Chunk:
 # KEY/N` line in its first prompt) needs no KEY.md: its successor, KEY-cN, continues from `## cN: handoff` in
 # KEY-build.md and follows KEY-cN.md, both in the replies folder. --self (ID = $CLAUDE_CODE_SESSION_ID): a session
@@ -2605,8 +2613,13 @@ fi
 # --escalate: the successor runs one rung above that model/effort (lib.sh escalate_rung: effort up to xhigh, then
 # haiku → sonnet → opus, then max), for a session that failed the same way twice (sessions.md, Repeats and reloads); refused (exit 2,
 # nothing stopped) at the top rung or when the old model or effort is unknown. Logs a usage escalate line.
+# Before the plan row and the transcript, each of --model and --effort left out is the old id's override file's (set.sh),
+# when it has one; the file is removed once the successor has started.
 # --mode P (mode_ok) starts the successor with --permission-mode P, in place of the plan-default one. bypassPermissions
 # and plan need --by pane (lib.sh policy_allows; --by lead, the default, is refused with exit 5 and the approval line).
+# A lead's --model, --effort and --mode, and the half of a rung --escalate changes, are checked against the person's
+# policy too (lib.sh policy_allows), before anything is stopped: outside it, exit 5, the last line `needs your
+# approval: handover "NAME" (ID8) with model M, effort E, mode P` (the parts given).
 # The old session's advisor (lib.sh last_advisor) goes onto the line as --advisor A, where it still pairs with the
 # successor's model (lib.sh advisor_ok: none once that is fable, an --escalate to fable too) and, for fable, the
 # account it starts under has it.
@@ -2625,9 +2638,15 @@ if [ -n "$HANDOVER" ]; then
   row=$(find_session "$want") || { echo "couldn't list the sessions; try again"; exit 1; }
   [ -n "$row" ] || { echo "no session $want in any account"; exit 2; }
   read_row id name st pre started cwd kind status pid
-  if [ -n "$mode" ]; then   # before anything is stopped or started
-    reason=$(policy_allows "$by" '' '' "$mode") && prc=0 || prc=$?
-    case $prc in 0) ;; 1) [ -z "$reason" ] || echo "$reason"; echo "needs your approval: handover \"$name\" (${id:0:8}) with mode $mode"; exit 5 ;; *) echo "--by $by: lead or pane"; exit 2 ;; esac
+  ho_policy() {   # MODEL EFFORT MODE (an empty one unchecked): outside BY's policy, exit 5 naming the parts given
+    local reason w
+    reason=$(policy_allows "$by" "$1" "$2" "$3") && return 0
+    w=${1:+model $1}; [ -z "$2" ] || w="${w:+$w, }effort $2"; [ -z "$3" ] || w="${w:+$w, }mode $3"
+    [ -z "$reason" ] || echo "$reason"; echo "needs your approval: handover \"$name\" (${id:0:8}) with $w"; exit 5
+  }
+  if [ -n "$model$effort$mode$esc" ]; then   # before anything is stopped or started; a mistyped policy.* value named
+    for k in models max_effort modes; do config "policy.$k" >/dev/null; done
+    [ -z "$model$effort$mode" ] || ho_policy "$model" "$effort" "$mode"
   fi
   f=$(transcript_of "$id"); [ -n "$f" ] || { echo "no transcript for \"$name\" (${id:0:8}): not handed over"; exit 2; }
   first=$(first_prompt "$f")
@@ -2693,7 +2712,9 @@ if [ -n "$HANDOVER" ]; then
     [ -n "$model" ] && r=$(escalate_rung "$model" "$effort") ||
       { if [ -n "$model" ] && [ -n "$effort" ]; then echo "--escalate: $model/$effort has no rung above it: not handed over; tell the user"
         else echo "--escalate: the old session's model or effort is unknown (pass --model and --effort of what it ran on): not handed over"; fi; exit 2; }
-    read -r model effort <<<"$r"
+    read -r em ee <<<"$r"   # the policy checks the half the rung changes
+    ho_policy "$([ "$em" = "$model" ] || echo "$em")" "$([ "$ee" = "$effort" ] || echo "$ee")" ''
+    model=$em effort=$ee
   fi
   if [ -n "$pid" ]; then stop_session "$pre" "$id" || { echo "couldn't stop \"$name\" (${id:0:8}): nothing started"; exit 1; }; fi
   base=$name; [[ $name =~ ^(.+)-prev-[0-9]+$ ]] && base=${BASH_REMATCH[1]}   # renamed already by its own handoff

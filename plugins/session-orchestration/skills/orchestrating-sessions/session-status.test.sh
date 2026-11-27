@@ -1487,6 +1487,24 @@ calls >/dev/null; out=$(run --handover "$kid" --mode bypassPermissions -- 'x') &
   { echo "handover --mode bypassPermissions by lead: $rc $out"; exit 1; }
 calls >/dev/null; run --handover "$kid" --mode bypassPermissions --by pane -- 'x' >/dev/null; c=$(calls)
 [ "$(grep -o -- '--permission-mode' <<<"$c" | wc -l)" = 1 ] && grep -qF -- '--permission-mode bypassPermissions' <<<"$c" || { echo "handover --by pane: $c"; exit 1; }
+# A lead capped by policy.models or policy.max_effort: a --model or --effort given, or the half --escalate changes,
+# outside it is refused (exit 5) before anything is stopped or started, the approval line naming only those parts.
+echo '{"policy":{"models":["sonnet","haiku"],"max_effort":"high","modes":["manual"]}}' > "$root/.claude/coordination.local.json"
+calls >/dev/null; out=$(run --handover "$kid" --model opus --mode manual -- 'x') && rc=0 || rc=$?
+[ "$rc" = 5 ] && [ "$(tail -1 <<<"$out")" = 'needs your approval: handover "PROJ-9-c3b" (dddddddd) with model opus, mode manual' ] &&
+  grep -qxF 'model opus is not in policy.models' <<<"$out" && ! calls | grep -q 'stop\|--bg' || { echo "handover --model outside policy: $rc $out"; exit 1; }
+out=$(run --handover "$kid" --model sonnet --effort high --escalate -- 'x') && rc=0 || rc=$?
+[ "$rc" = 5 ] && [ "$(tail -1 <<<"$out")" = 'needs your approval: handover "PROJ-9-c3b" (dddddddd) with effort xhigh' ] && ! calls | grep -q 'stop\|--bg' ||
+  { echo "handover --escalate outside policy: $rc $out"; exit 1; }
+out=$(run --handover "$kid" --model sonnet --effort high --by pane --escalate -- 'x') && grep -q '^cfg --bg --model sonnet --effort xhigh ' <<<"$(calls)" ||
+  { echo "handover --escalate by pane: $out"; exit 1; }
+# a policy.* value that isn't valid: config's warning, and a lead refused
+echo '{"policy":{"max_effort":"extreme"}}' > "$root/.claude/coordination.local.json"
+out=$(run --handover "$kid" --model sonnet -- 'x' 2>&1) && rc=0 || rc=$?
+[ "$rc" = 5 ] && grep -qxF 'warning: config policy.max_effort=extreme is not valid: using the default' <<<"$out" &&
+  grep -qxF 'policy.max_effort is not valid: fix it in your personal config' <<<"$out" && ! calls | grep -q 'stop\|--bg' ||
+  { echo "handover with an invalid policy value: $rc $out"; exit 1; }
+rm "$root/.claude/coordination.local.json"
 out=$(run --handover "$kid" --by nobody -- 'x') && rc=0 || rc=$?
 [ "$rc" = 2 ] && ! calls | grep -q 'stop\|--bg' || { echo "handover --by nobody not refused: $rc $out"; exit 1; }
 # No flags: the old session's last model and effort (a user's hand-picked fable too); a flag given wins.
