@@ -287,8 +287,9 @@ export const fixesOf = (all: Fact[]) => FIXES.filter(f => all.some(x => x.fix ==
 // ponytail: the card actions' letters below are the act(...) calls' in the render hook; keep the two in step.
 export const BUILTIN_KEYS: Record<string, string> = {
   r: 'Refresh', ...Object.fromEntries(FIXES.map(f => [f.hotkey, f.label])), a: 'Attach', u: 'Refresh (row)',
-  k: 'Ask', x: 'Dismiss', c: 'Copy command', z: 'Compact', h: 'Up a rung', v: 'Down a rung', p: 'Peek', d: 'Diff', w: 'All projects', e: 'Archive',
+  k: 'Ask', x: 'Dismiss', c: 'Copy command', z: 'Compact', p: 'Peek', d: 'Diff', w: 'All projects', e: 'Archive',
   t: 'Attach in tab', l: 'Logs in split', y: 'Daily brief', b: 'Earlier day', n: 'Later day', s: 'Brief or list',
+  h: 'Up a rung', v: 'Down a rung',
 }
 const taken = (key: string) => /^\d$/.test(key) ? 'a 1-9 item key' : BUILTIN_KEYS[key]
 
@@ -1933,8 +1934,6 @@ export const register: Register = on => {
     return done
   })
 
-  // The commands a tool call queued for the turn's end: /rename (open_pane, name_session), then /reload-plugins (reload_plugins).
-  // First, a tool of this plugin the engine retracted since the last turn (TOOLS): registered again, for the next prompt.
   // The main loop applies the live override file to each model request; a failed read is no override.
   on('turn.step', async function* ($, e, next) {
     if (e.agentId !== undefined) return yield* next(e)
@@ -1943,6 +1942,8 @@ export const register: Register = on => {
     return yield* next(o ? { ...e, ...o } : e)
   })
 
+  // The commands a tool call queued for the turn's end: /rename (open_pane, name_session), then /reload-plugins (reload_plugins).
+  // First, a tool of this plugin the engine retracted since the last turn (TOOLS): registered again, for the next prompt.
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
     if (e.agentId) return done
@@ -2457,7 +2458,8 @@ export const register: Register = on => {
           ...fixesOf(all).map(f => act(f.hotkey, f.label, () => $.prompt.submit({ text: fixText(t.key, f.says, open) }))),
           ...(g ? g.rest : []),
           act('u', rowBusy.includes(t.key) ? 'Refreshing…' : 'Refresh', refreshRow(t.key)),
-          compactAct(sa), ...rungActs(sa),
+          compactAct(sa),
+          ...rungActs(sa),
           ...viewActs(id, sid, [t.key, ...(sid ? [sid] : [])]),
           act('k', 'Ask', ask(`task ${t.key}${about ? ` (${about})` : ''}`)),
         ),

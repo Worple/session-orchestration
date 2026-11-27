@@ -67,7 +67,7 @@ test('a malformed file passes the step through', async ($, on) => {
   expect(seen).toEqual([['opus', 'max']])
 })
 
-test('a project action can\'t take + or -, the pane\'s own Up and Down a rung', () => {
+test('a project action can\'t take h or v, the pane\'s own Up and Down a rung', () => {
   expect(parseActions('[{"label":"X","hotkey":"h","command":"x"}]').errors[0]).toMatch(/pane's own/)
   expect(parseActions('[{"label":"X","hotkey":"v","command":"x"}]').errors[0]).toMatch(/pane's own/)
 })
@@ -100,7 +100,7 @@ const press = async ($: Parameters<Parameters<typeof test>[1]>[0], on: Parameter
   return { runs, toasts }
 }
 
-test('+ and - on a card run session-status --set <id> --up/--down --by pane and toast the first line', async ($, on) => {
+test('h (Up a rung) on a card runs session-status --set <id> --up --by pane and toasts the first line', async ($, on) => {
   const r = await press($, on, 'act-h', 0, '"rev" (22222222): model sonnet from its next request (live)\nmore\n')
   expect(r.runs).toContainEqual(['--set', '11111111-aaaa', '--up', '--by', 'pane'])
   expect(r.toasts).toContain('"rev" (22222222): model sonnet from its next request (live)')
@@ -111,7 +111,7 @@ test('a failure toasts its reason', async ($, on) => {
   expect(r.toasts).toContain('Settings "fix it": busy')
 })
 
-test('- runs --down; a failure with no output toasts the exit code', async ($, on) => {
+test('v (Down a rung) runs --down; a failure with no output toasts the exit code', async ($, on) => {
   const r = await press($, on, 'act-v', 4, '')
   expect(r.runs).toContainEqual(['--set', '11111111-aaaa', '--down', '--by', 'pane'])
   expect(r.toasts).toContain('Settings "fix it": exit 4')
