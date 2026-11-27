@@ -29,6 +29,28 @@
 # Any other session pays one bash start and a file test (and, until context-watch caches its kind, lib.sh and a
 # first-prompt read).
 input=$(cat)
+# deny REASON NAME: the decision, and NAME as a telemetry=full block line (lib.sh usage).
+deny() {
+  jq -nc --arg r "$1" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
+  ( l=$(cd "${0%/*}/.." 2>/dev/null && pwd)/lib.sh; cd "${cwd:-.}" 2>/dev/null; . "$l" && usage "coordinator-guard-$2" block "" "hooks/coordinator-guard.sh:${BASH_LINENO[0]}" ) >/dev/null 2>&1
+  exit 0
+}
+# --by pane and bypassPermissions stay with the user: they type `! session-status --set …` themselves, never through
+# the Bash tool, so any such call is a model's, in every session kind. A flag token is the flag after the start or
+# whitespace and before whitespace, `=`, a quote or the end (not `--set-upstream`, `--bye`).
+if [[ $input =~ \"tool_name\":\ *\"Bash\" ]]; then
+  gc=$(jq -r '.tool_input.command // ""' <<<"$input") q="'" dq='"'
+  ft() { echo "(^|[[:space:]])--($1)([[:space:]=$q$dq]|\$)"; }   # the flag token regex
+  ok() { echo "(^|[[:space:]])--$1[ =](($2)|$q($2)$q|$dq($2)$dq)([[:space:]]|\$)"; }   # an allowed use of it
+  wrapped="(eval|sh -c|bash -c|zsh -c)[^;&|]*$(ft 'set|handover')"
+  if [[ $gc =~ $wrapped ]] || { [[ $gc =~ $(ft 'set|handover') ]] &&
+    { [[ $gc == *bypassPermissions* ]] || {
+      # drop each allowed use, then any flag token left has another value
+      rest=$(sed -E ":a;s/$(ok by lead)/\1 /;ta;:b;s/$(ok mode 'default|manual|acceptEdits|auto|dontAsk')/\1 /;tb" <<<"$gc")
+      [[ $rest =~ $(ft 'by|mode') ]]; }; }; }; then
+    deny "Only the user sets --by pane, plan or bypassPermissions: they type it in their own terminal (! session-status --set …). Run --set without them, or queue an ask." by-pane
+  fi
+fi
 # a subagent: its cd and edits aren't the coordinator's, but a sidebar session it starts is just as unseen; a
 # sub-coordinator's subagent keeps the sub's limits (its starts and edits), all but the cd rule
 sa=; [[ $input =~ \"agent_id\":\ *\"[^\"]+\" ]] && ! [[ $input =~ \"tool_name\":\ *\"mcp__ccd_session__(start_session|hand_off_to_session)\" ]] && sa=1
@@ -57,12 +79,6 @@ case $kind in coordinator) [ -z "$sa" ] || exit 0; skey= ;;
   *) exit 0 ;;
 esac
 
-# deny REASON NAME: the decision, and NAME as a telemetry=full block line (lib.sh usage).
-deny() {
-  jq -nc --arg r "$1" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
-  ( l=$(cd "${0%/*}/.." 2>/dev/null && pwd)/lib.sh; cd "${cwd:-.}" 2>/dev/null; . "$l" && usage "coordinator-guard-$2" block "" "hooks/coordinator-guard.sh:${BASH_LINENO[0]}" ) >/dev/null 2>&1
-  exit 0
-}
 { read -r tool; read -r cwd; read -r path; } < <(jq -r '.tool_name // "", .cwd // "", (.tool_input.file_path // .tool_input.notebook_path // "")' <<<"$input")
 cmd=; [ "$tool" != Bash ] || cmd=$(jq -r '.tool_input.command // ""' <<<"$input")
 # starts CMD: each `claude … --bg` command word in CMD as NAME\x1fRESUME\x1fPROMPT\x1e; `!` for one the guard can't
