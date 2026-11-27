@@ -1,9 +1,9 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "session-orchestration",
+  "name": "session-orchestration-hub",
   "description": "Coordinate parallel Claude Code sessions.",
   "owner": {
-    "name": "vargroozzz"
+    "name": "Worple"
   },
   "plugins": [
     {
