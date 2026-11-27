@@ -1,4 +1,4 @@
-# Phase 1 spikes, 2026-11-27
+# Phase 1 spikes, 2026-11-24 to 2026-11-27
 
 Claude Code 2.1.331 inside WSL Ubuntu 24.04. A throwaway plugin (`~/spikes/turnstep`, not committed) has one `turn.step` hook. Before each main-loop request it reads `/tmp/spike-model` and `/tmp/spike-effort`, passes `next({ ...e, model, effort })`, and logs what it saw, what it sent, and `$.session.id()`.
 

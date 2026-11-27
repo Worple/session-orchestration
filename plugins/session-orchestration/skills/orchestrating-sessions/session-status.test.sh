@@ -2507,12 +2507,19 @@ grep -qF 'refused: --shared: these lines would put personal details in a team fi
 jq '.pending.file = "p.md"' "$tmp/sj" > "$sj"
 out=$(init "$s" --write --shared) || :; grep -qF 'has person keys, which never go in a team file: pending.file (move them' <<<"$out" ||
   { echo "init (s1) person key: $out"; exit 1; }
+# policy.* (what --set lets a lead change) is a person key too
+jq '.policy.modes = ["default"]' "$tmp/sj" > "$sj"
+out=$(init "$s" --write --shared) || :; grep -qF 'has person keys, which never go in a team file: policy.modes' <<<"$out" ||
+  { echo "init (s1) policy person key: $out"; exit 1; }
 cp "$tmp/sj" "$sj"
 # the team section is scrubbed too: a fact with a home path never reaches the committed CLAUDE.md
 out=$(init "$s" --write --shared 'branch_pattern=~/b/<key>') || :
 grep -qE '^  CLAUDE\.md \(team section\):[0-9]+: a home path: .*~/b/<key>' <<<"$out" &&
   ! git -C "$s" rev-parse -q --verify "refs/heads/coordination/setup-$(date +%F)" >/dev/null || { echo "init (s1) team section home path: $out"; exit 1; }
 sb=coordination/setup-$(date +%F); swt=$s/.worktrees/$sb
+# the person's own policy.* (their project file and their config.json) never reaches the team file
+pl=$s/.claude/coordination.local.json uc=$tmp/.config/session-orchestration/config.json; cp "$pl" "$tmp/pl"; mkdir -p "${uc%/*}"
+jq '.policy = {"modes": ["default", "manual", "acceptEdits"], "max_effort": "high"}' "$tmp/pl" > "$pl"; echo '{"policy":{"models":["sonnet"]}}' > "$uc"
 out=$(init "$s" --write --shared) && [ -z "$(git -C "$s" status --short --untracked-files=all)" ] &&
   [ "$(git -C "$s" diff --name-only origin/main "$sb" | paste -sd' ' -)" = ".claude/coordination/coordination.json .gitattributes CLAUDE.md" ] &&
   [ "$(git -C "$s" show "$sb:CLAUDE.md" | sed -n 1,3p)" = $'# c\n\n## Coordinated sessions (team)' ] &&
@@ -2524,6 +2531,9 @@ out=$(init "$s" --write --shared) && [ -z "$(git -C "$s" status --short --untrac
   [ "$(git -C "$s" log -1 --format=%an "$sb")" = t ] &&
   grep -qxF "Team PR: show its diff in one pane ask (git -C $swt show), then on yes: git -C $swt push -u origin $sb && gh pr create -R o/sail --base main --head $sb --title 'coordination: shared setup (repo keys, team CLAUDE.md section, merge=union for team memory)' --body 'Shared coordination files: every collaborator reads them once this merges; personal files stay out of git.'" <<<"$out" &&
   grep -qF 'Personal: everything above, out of git' <<<"$out" || { echo "init (s1) --shared: $out / $(git -C "$s" status --short --untracked-files=all)"; exit 1; }
+[ "$(git -C "$s" show "$sb:.claude/coordination/coordination.json" | jq -c .policy)" = null ] && [ "$(jq -c .policy.max_effort "$pl")" = '"high"' ] ||
+  { echo "init (s1) --shared carried policy.*, or dropped the person's: $(git -C "$s" show "$sb:.claude/coordination/coordination.json") / $(cat "$pl")"; exit 1; }
+cp "$tmp/pl" "$pl"; rm "$uc"
 out=$(init "$s" --write --shared) || :; grep -qF "refused: --shared: $sb exists already" <<<"$out" || { echo "init (s1) second --shared: $out"; exit 1; }
 # merged: the pull replaces this checkout's ignored repo file, and the next --shared has nothing to open
 git -C "$swt" push -q origin "$sb:main" && git -C "$s" pull -q --ff-only origin main && [ -z "$(git -C "$s" status --short)" ] &&

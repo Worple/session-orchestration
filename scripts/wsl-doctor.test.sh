@@ -8,7 +8,7 @@ mkdir -p "$tmp/bin" "$tmp/mnt/c/bin" "$tmp/mnt/src" "$tmp/repo"
 stub() { printf '#!/bin/sh\n%s\n' "$2" > "$1"; chmod +x "$1"; }
 stub "$tmp/bin/node" 'echo v22.11.0'
 stub "$tmp/bin/claude" "echo '2.1.331 (Claude Code)'"
-for c in jq python3 gh git perl curl tmux; do stub "$tmp/bin/$c" 'exit 0'; done
+for c in jq python3 gh git perl curl tmux openssl; do stub "$tmp/bin/$c" 'exit 0'; done
 fail() { echo "wsl-doctor.test: $1"; printf '%s\n' "$out"; exit 1; }
 # doc DIR [PATH]: run the doctor from DIR; sets $out and $rc.
 doc() {
@@ -17,7 +17,7 @@ doc() {
 }
 
 doc "$tmp/repo"
-[ "$rc" = 0 ] && [ "$(grep -c '^ok ' <<<"$out")" = 10 ] || fail "all present: rc=$rc"
+[ "$rc" = 0 ] && [ "$(grep -c '^ok ' <<<"$out")" = 11 ] || fail "all present: rc=$rc"
 grep -qx "ok node $tmp/bin/node v22.11.0" <<<"$out" || fail "node line"
 
 stub "$tmp/bin/node" 'echo v20.1.0'
