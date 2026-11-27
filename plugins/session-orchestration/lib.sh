@@ -531,8 +531,7 @@ config() {
     history.dirs|fable.accounts|docs_watch.files) local l; l=$(jq -r 'if type == "array" and all(.[]; type == "string" and length > 0 and (test("\n") | not)) then .[] else error end' <<<"$v" 2>/dev/null) && v=$l && ok=1 ;;
     # policy.* (a person key): the models a lead may set (empty: any), its top effort, and its permission modes, never
     # bypassPermissions or plan (a pane's own --by pane)
-    policy.models|policy.modes) local l x; l=$(jq -r 'if type == "array" and all(.[]; type == "string" and length > 0 and (test("
-") | not)) then .[] else error end' <<<"$v" 2>/dev/null) && ok=1 &&
+    policy.models|policy.modes) local l x; l=$(jq -r 'if type == "array" and all(.[]; type == "string" and length > 0 and (test("\n") | not)) then .[] else error end' <<<"$v" 2>/dev/null) && ok=1 &&
       while IFS= read -r x; do [ -z "$x" ] && continue
         if [ "$key" = policy.models ]; then model_ok "$x" || ok=; else { mode_ok "$x" && [[ $x != bypassPermissions && $x != plan ]]; } || ok=; fi
       done <<<"$l"; [ -z "$ok" ] || v=$l ;;
@@ -560,8 +559,7 @@ config() {
     start.mode) echo read_only ;; start.kinds.feedback_apply) config start.mode ;;
     feedback.mode) echo auto ;; feedback.repo_dir|feedback.project_dir|pending.file|history.dirs|fable.accounts|retro.schedule|retro.sections|plan.advisor.*) ;;
     retro.scope) echo project ;; retro.account) echo "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" ;; telemetry) [ -n "$v" ] && echo off || echo full ;;   # a mistyped value opts out
-    policy.models) ;; policy.max_effort) echo max ;; policy.modes) printf '%s
-' default manual acceptEdits auto dontAsk ;;
+    policy.models) ;; policy.max_effort) echo max ;; policy.modes) printf '%s\n' default manual ;;
     plan.enabled) echo true ;; plan.max_parallel) echo 3 ;;
     plan.models.*) case ${key#plan.models.} in design|review) v=opus/xhigh ;; build|coordinator) v=opus/medium ;;
         mechanical|release) v=sonnet/medium ;; scan) v=haiku/low ;; retro) v=opus/xhigh ;; research) v=opus/high ;; esac
@@ -576,7 +574,8 @@ config() {
 # policy_allows BY MODEL EFFORT MODE: whether BY (pane or lead) may set them (an empty one is unchanged): exit 0 allowed,
 # 1 refused with the reason on stdout, 2 an unknown BY. A value the CLI wouldn't take is refused for both. A pane may set
 # any valid value; a lead only a model equal to or starting with a policy.models entry (when it has any), an effort up
-# to policy.max_effort, and a mode in policy.modes.
+# to policy.max_effort, and a mode in policy.modes (default: default and manual, a tightening). A policy.* value that
+# isn't valid refuses a lead's every change: a mistyped limit still limits (the caller prints config's warning).
 policy_allows() {
   local by=$1 m=${2:-} e=${3:-} d=${4:-} l x ok= seen=
   case $by in pane|lead) ;; *) return 2 ;; esac
@@ -584,6 +583,9 @@ policy_allows() {
   [ -z "$e" ] || effort_step "$e" 0 >/dev/null || { echo "effort $e is not valid"; return 1; }
   [ -z "$d" ] || mode_ok "$d" || { echo "mode $d is not valid"; return 1; }
   [ "$by" = pane ] && return 0
+  for x in models max_effort modes; do
+    [[ $(config "policy.$x" 2>&1 >/dev/null) != *"is not valid"* ]] || { echo "policy.$x is not valid: fix it in your personal config"; return 1; }
+  done
   l=$(config policy.models 2>/dev/null)
   if [ -n "$m" ] && [ -n "$l" ]; then
     while IFS= read -r x; do [[ $m == "$x"* ]] && ok=1; done <<<"$l"

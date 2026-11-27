@@ -1039,6 +1039,9 @@ J=$tmp/cfg/jobs/22222222/state.json; mkdir -p "${J%/*}"
 jq -n --arg id "$rid" '{sessionId: $id, name: "rev", state: "running", respawnFlags: ["-n", "rev", "--model", "opus", "--effort", "max"]}' > "$J"
 O() { cat "$tmp/.cache/session-status/settings/$rid.json"; }
 LOG() { tail -1 "$(pof "$root")/settings.jsonl"; }
+# a lead may loosen a mode only where the person's policy.modes says so (the default is default and manual)
+wide() { echo '{"policy":{"modes":["default","manual","acceptEdits","auto"]}}' > "$root/.claude/coordination.local.json"; }
+wide
 # 1. live: a model for its next request, an effort for its next turn; logged, nothing stopped or resumed
 setacct cfg "$(sess "$rid" rev idle 1)"
 out=$(run --set "$rid" --model sonnet --effort low --why cheap) &&
@@ -1109,11 +1112,14 @@ out=$(run --set "$rid" --model sonnet --how resume) &&
   [ "$(jq -c .respawnFlags "$J")" = '["-n","rev","--plugin-dir","/p","--permission-mode","bypassPermissions","--model","sonnet","--effort","max"]' ] ||
   { echo "set resume without a mode: $out / $(jq -c .respawnFlags "$J")"; exit 1; }
 calls >/dev/null
-# a policy.* value that isn't valid says so (policy_allows reads it quietly, falling back to the default)
+# a policy.* value that isn't valid says so, and refuses a lead's change (exit 5): a mistyped limit still limits
 echo '{"policy":{"max_effort":"extreme"}}' > "$root/.claude/coordination.local.json"
-out=$(run --set "$rid" --model sonnet 2>&1) && grep -qxF 'warning: config policy.max_effort=extreme is not valid: using the default' <<<"$out" ||
-  { echo "set policy warning missing: $out"; exit 1; }
-rm "$root/.claude/coordination.local.json"; calls >/dev/null
+rc=0; out=$(run --set "$rid" --model sonnet 2>&1) || rc=$?
+[ $rc = 5 ] && grep -qxF 'warning: config policy.max_effort=extreme is not valid: using the default' <<<"$out" &&
+  grep -qxF 'policy.max_effort is not valid: fix it in your personal config' <<<"$out" &&
+  [ "$(tail -1 <<<"$out")" = 'needs your approval: set "rev" (22222222) to model sonnet' ] && ! calls | grep -q 'stop\|--bg' ||
+  { echo "set with an invalid policy value: $rc $out"; exit 1; }
+wide; calls >/dev/null
 # no job state, one of another session (a short-id clash) or without respawnFlags (Claude Code's file is undocumented):
 # exit 1, nothing stopped, pointing to --how fresh
 setacct cfg "$(sess "$rid" rev idle 1)"; mv "$J" "$tmp/state.keep"
@@ -1401,8 +1407,10 @@ calls >/dev/null; run --handover "$kid" -- 'x' >/dev/null; c=$(calls)
 grep -q '^cfg --bg --model sonnet --effort low -n PROJ-9-c3b ' <<<"$c" && [ ! -e "$ovd/$kid.json" ] || { echo "handover ignored the override file: $c"; exit 1; }
 # --mode: one --permission-mode on the line, though the account's settings default to plan.
 echo '{"permissions":{"defaultMode":"plan"}}' > "$tmp/cfg/settings.json"
+echo '{"policy":{"modes":["default","manual","acceptEdits","auto"]}}' > "$root/.claude/coordination.local.json"   # a lead may loosen to acceptEdits
 calls >/dev/null; run --handover "$kid" --mode acceptEdits -- 'x' >/dev/null; c=$(calls)
 [ "$(grep -o -- '--permission-mode' <<<"$c" | wc -l)" = 1 ] && grep -qF -- '--permission-mode acceptEdits' <<<"$c" || { echo "handover --mode: $c"; exit 1; }
+rm "$root/.claude/coordination.local.json"
 calls >/dev/null; run --handover "$kid" -- 'x' >/dev/null; c=$(calls)
 grep -qF -- '--permission-mode default' <<<"$c" || { echo "handover kept no plan-default override: $c"; exit 1; }
 rm "$tmp/cfg/settings.json"
@@ -2363,8 +2371,24 @@ L() { (cd "$root" && HOME=$tmp XDG_STATE_HOME=$tmp/state XDG_CONFIG_HOME=$tmp/.c
 [ "$(L deescalate_rung sonnet low)" = "haiku low" ] && ! L deescalate_rung haiku low && ! L deescalate_rung opus extreme ||
   { echo "deescalate_rung"; exit 1; }
 L mode_ok acceptEdits && L mode_ok default && ! L mode_ok yolo || { echo mode_ok; exit 1; }
-L policy_allows lead sonnet low acceptEdits && ! L policy_allows lead '' '' bypassPermissions &&
-  ! L policy_allows lead '' '' plan && L policy_allows pane opus max bypassPermissions || { echo "policy defaults"; exit 1; }
+# by default a lead only tightens a mode (default, manual); loosening one is the user's, unless policy.modes widens it
+L policy_allows lead sonnet low manual && L policy_allows lead '' '' default && ! L policy_allows lead '' '' acceptEdits &&
+  ! L policy_allows lead '' '' auto && ! L policy_allows lead '' '' bypassPermissions &&
+  ! L policy_allows lead '' '' plan && L policy_allows pane opus max bypassPermissions && L policy_allows pane '' '' auto &&
+  [ "$(L config policy.modes | paste -sd' ' -)" = 'default manual' ] || { echo "policy defaults"; exit 1; }
+echo '{"policy":{"modes":["default","manual","acceptEdits","auto"]}}' > "$root/.claude/coordination.local.json"
+L policy_allows lead '' '' acceptEdits && L policy_allows lead '' '' auto || { echo "policy.modes widened"; exit 1; }
+# a policy.* value that isn't valid refuses a lead's every change (a mistyped limit still limits), never a pane's
+echo '{"policy":{"max_effort":"extreme"}}' > "$root/.claude/coordination.local.json"
+rc=0; out=$(L policy_allows lead sonnet low '' 2>/dev/null) || rc=$?
+[ $rc = 1 ] && [ "$out" = 'policy.max_effort is not valid: fix it in your personal config' ] && L policy_allows pane opus max '' 2>/dev/null ||
+  { echo "invalid policy.max_effort: $rc $out"; exit 1; }
+echo '{"policy":{"modes":["yolo"]}}' > "$root/.claude/coordination.local.json"
+rc=0; out=$(L policy_allows lead sonnet low '' 2>/dev/null) || rc=$?
+[ $rc = 1 ] && [ "$out" = 'policy.modes is not valid: fix it in your personal config' ] || { echo "invalid policy.modes: $rc $out"; exit 1; }
+echo '{"policy":{"models":"opus"}}' > "$root/.claude/coordination.local.json"
+rc=0; out=$(L policy_allows lead '' '' manual 2>/dev/null) || rc=$?
+[ $rc = 1 ] && [ "$out" = 'policy.models is not valid: fix it in your personal config' ] || { echo "invalid policy.models: $rc $out"; exit 1; }
 rc=0; L policy_allows nobody '' low '' >/dev/null || rc=$?; [ $rc = 2 ] || { echo "unknown BY"; exit 1; }
 echo '{"policy":{"models":["sonnet","haiku"],"max_effort":"high","modes":["manual"]}}' > "$root/.claude/coordination.local.json"
 ! L policy_allows lead opus low '' && L policy_allows lead 'sonnet[1m]' high manual &&
