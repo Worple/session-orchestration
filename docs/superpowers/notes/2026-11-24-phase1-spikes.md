@@ -2,13 +2,13 @@
 
 Claude Code 2.1.331 inside WSL Ubuntu 24.04. A throwaway plugin (`~/spikes/turnstep`, not committed) has one `turn.step` hook. Before each main-loop request it reads `/tmp/spike-model` and `/tmp/spike-effort`, passes `next({ ...e, model, effort })`, and logs what it saw, what it sent, and `$.session.id()`.
 
-S2 and S3 ran in `claude -p` (print) mode, which needs no workspace-trust prompt. The `--bg` confirmation of both is folded into Task 9's live check, together with S5. Upstream's `--compact` already depends on `--bg --resume` keeping the id (`resume_with` checks `backgrounded · ID8`).
+S2 and S3 ran first in `claude -p` (print) mode, which needs no workspace-trust prompt, and then in a real `--bg` session in a trusted scratch repo. The `--bg` results are what count, and they differ for S3 (see "S3 in a background session").
 
 ## Decisions
 
 ```
 LIVE=on
-RESUME_KEEPS=yes
+RESUME_KEEPS=no for --bg resume with flags (it starts a copy), so the resume tier rewrites the job's saved respawnFlags and resumes without flags
 DEFAULT_MODE_WORD=default
 ```
 
@@ -38,6 +38,20 @@ claude -p --resume <id of an opus/high session> --model sonnet --effort low --pe
 - **The same session id came back,** and the conversation was kept: it answered `3`, which was correct.
 - **The new row has the new values:** `requestedModel: claude-sonnet-5-5` and `effort: "low"`. The new user row has `permissionMode: "acceptEdits"`; earlier rows had `default`.
 
+## S2 and S3 in a background session (`--bg`, in a trusted scratch repo)
+
+- **S2 holds in `--bg`.** The same hook, flipped 30 s into a `--bg` run, sent `haiku` on steps 2 and 3. The transcript has 4 opus rows, then 3 haiku rows.
+- **S3 differs in `--bg`.**
+  - `claude stop` takes the 8-character short id. Given the full id it says `No session matching`.
+  - `claude --bg --resume ID --model sonnet --effort low --permission-mode acceptEdits '…'` on a stopped background session does not continue it. Claude says: `note: background session 8debd5d4 keeps its own saved options, so the flags you passed started a copy as 972cfc99. Without flags, the same command continues 8debd5d4 itself.`
+  - The copy holds the whole conversation and runs on the new settings, but under a new id. The `--help` text agrees ("continues that session … under the same ID, or starts a copy and says so").
+- **Saved options:** they are `respawnFlags` in `$CLAUDE_CONFIG_DIR/jobs/<short id>/state.json` (default `~/.claude/jobs/…`), next to `sessionId`, `name` and `state`.
+- **Rewriting them works.**
+  - With the job stopped, its `--model`, `--effort` and `--permission-mode` entries were replaced by `--model sonnet --effort low --permission-mode acceptEdits`, and the job was resumed with `claude --bg --resume ID '…'`, without flags.
+  - Claude said `note: woke session 8debd5d4 with its saved options (--plugin-dir, --allowedTools, -n, --model, --effort, --permission-mode).` and then `backgrounded · 8debd5d4 · spike-bg`.
+  - The next row is `claude-sonnet-5-5` at effort `low`, with `permissionMode: "acceptEdits"`, in the same transcript and under the same id.
+- **Risk:** `state.json` is an undocumented internal file. The resume tier checks its shape before stopping anything, and fails closed (exit 1, nothing stopped, pointing to `--how fresh`) when it doesn't match.
+
 ## Permission-mode word
 
 - `claude --help` lists `acceptEdits, auto, bypassPermissions, manual, dontAsk, plan`.
@@ -47,5 +61,6 @@ claude -p --resume <id of an opus/high session> --model sonnet --effort low --pe
 
 ## What this changes in the plan
 
+- **Task 6, resume tier:** it rewrites the stopped job's `respawnFlags` and resumes without flags, keeping the id. Upstream's `supersedes` and board bookkeeping keep working, and the change survives later resumes such as `--compact`.
 - **Task 6, live tier:** the message must say that effort lands at the next turn. A lead that needs effort applied right away, mid-turn, uses `--how resume` once the agent is idle.
 - **Task 9:** the hook applies both fields as planned. The engine decides when a rewritten effort takes effect.
