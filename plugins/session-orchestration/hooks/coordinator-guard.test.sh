@@ -214,4 +214,8 @@ check "$(g c1 Bash '{"command":"session-status --set 22222222 $'"'"'--by'"'"' pa
 check "$(g c1 Bash '{"command":"\"$SS\" \"--set\" \"$id\" \"--mode\" \"plan\""}')" deny 'every argument quoted'
 check "$(g c1 Bash '{"command":"git push --set-upstream origin x"}')" allow 'git --set-upstream'
 check "$(g c1 Bash '{"command":"claude --settings x.json"}')" allow 'claude --settings'
+check "$(g c1 Bash '{"command":"session-status --set 22222222 --b\\y pane"}')" deny 'backslash inside --by'
+check "$(g c1 Bash '{"command":"session-status --se\\t 22222222 --by pane"}')" deny 'backslash inside --set'
+check "$(g c1 Bash '{"command":"session-status --set 22222222 --mo\\de plan"}')" deny 'backslash inside --mode'
+check "$(g c1 Bash '{"command":"session-status --set 22222222 --model sonnet --why \"see a/b/c\""}')" allow 'slashes survive'
 echo ok

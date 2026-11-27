@@ -41,7 +41,7 @@ deny() {
 # [[:alnum:]_-] (or the string's ends): not `--set-upstream`, `--bye`. Pure bash, so no tool failure can fail open.
 if [[ $input =~ \"tool_name\":\ *\"Bash\" ]]; then
   gc=$(jq -r '.tool_input.command // ""' <<<"$input") n=
-  n=${gc//\'/}; n=${n//\"/}; n=${n//\/}
+  n=${gc//\'/}; n=${n//\"/}; n=${n//\\/}
   w='[^[:alnum:]_-]'; ft() { echo "(^|$w)--($1)($w|\$)"; }   # the flag token regex
   wrapped="(eval|sh -c|bash -c|zsh -c)[^;&|]*(^|[[:space:]])--(set|handover)([[:space:]='\"]|\$)"
   if [[ $gc =~ $wrapped ]] || { [[ $n =~ $(ft 'set|handover') ]] &&
