@@ -36,18 +36,21 @@ deny() {
   exit 0
 }
 # --by pane and bypassPermissions stay with the user: they type `! session-status --set …` themselves, never through
-# the Bash tool, so any such call is a model's, in every session kind. A flag token is the flag after the start or
-# whitespace and before whitespace, `=`, a quote or the end (not `--set-upstream`, `--bye`).
+# the Bash tool, so any such call is a model's, in every session kind. (B) runs on a copy without quotes or
+# backslashes (`--b''y`, `"--by"`, `\--by` read as `--by`); a flag token there is `--X` between characters outside
+# [[:alnum:]_-] (or the string's ends): not `--set-upstream`, `--bye`. Pure bash, so no tool failure can fail open.
 if [[ $input =~ \"tool_name\":\ *\"Bash\" ]]; then
-  gc=$(jq -r '.tool_input.command // ""' <<<"$input") q="'" dq='"'
-  ft() { echo "(^|[[:space:]])--($1)([[:space:]=$q$dq]|\$)"; }   # the flag token regex
-  ok() { echo "(^|[[:space:]])--$1[ =](($2)|$q($2)$q|$dq($2)$dq)([[:space:]]|\$)"; }   # an allowed use of it
-  wrapped="(eval|sh -c|bash -c|zsh -c)[^;&|]*$(ft 'set|handover')"
-  if [[ $gc =~ $wrapped ]] || { [[ $gc =~ $(ft 'set|handover') ]] &&
-    { [[ $gc == *bypassPermissions* ]] || {
-      # drop each allowed use, then any flag token left has another value
-      rest=$(sed -E ":a;s/$(ok by lead)/\1 /;ta;:b;s/$(ok mode 'default|manual|acceptEdits|auto|dontAsk')/\1 /;tb" <<<"$gc")
-      [[ $rest =~ $(ft 'by|mode') ]]; }; }; }; then
+  gc=$(jq -r '.tool_input.command // ""' <<<"$input") n=
+  n=${gc//\'/}; n=${n//\"/}; n=${n//\/}
+  w='[^[:alnum:]_-]'; ft() { echo "(^|$w)--($1)($w|\$)"; }   # the flag token regex
+  wrapped="(eval|sh -c|bash -c|zsh -c)[^;&|]*(^|[[:space:]])--(set|handover)([[:space:]='\"]|\$)"
+  if [[ $gc =~ $wrapped ]] || { [[ $n =~ $(ft 'set|handover') ]] &&
+    { [[ $n == *bypassPermissions* ]] || {
+      # drop each allowed use (--by lead, --mode M, spaced or with =), then a flag token left has another value
+      for a in 'by[ =]lead' 'mode[ =](default|manual|acceptEdits|auto|dontAsk)'; do
+        while [[ $n =~ (^|$w)--$a($w|$) ]]; do n=${n/"${BASH_REMATCH[0]}"/ }; done
+      done
+      [[ $n =~ $(ft 'by|mode') ]]; }; }; }; then
     deny "Only the user sets --by pane, plan or bypassPermissions: they type it in their own terminal (! session-status --set …). Run --set without them, or queue an ask." by-pane
   fi
 fi
