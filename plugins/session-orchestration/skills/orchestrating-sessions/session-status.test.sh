@@ -1055,7 +1055,16 @@ out=$(run --set "$rid" --effort high) && [ "$out" = '"rev" (22222222): effort hi
 # 3. a rung up from the override file's values; a rung down from the transcript's (opus/max) once it's gone
 run --set "$rid" --up >/dev/null && [ "$(O | jq -r '.model+" "+.effort')" = 'sonnet xhigh' ] || { echo "set --up failed: $(O)"; exit 1; }
 rm "$tmp/.cache/session-status/settings/$rid.json"
-run --set "$rid" --down >/dev/null && [ "$(O | jq -r '.model+" "+.effort')" = 'opus xhigh' ] || { echo "set --down failed: $(O)"; exit 1; }
+# only the half a rung changes is written: a model nobody changed isn't pinned
+run --set "$rid" --down >/dev/null && [ "$(O | jq -c '[.model, .effort]')" = '[null,"xhigh"]' ] || { echo "set --down failed: $(O)"; exit 1; }
+run --set "$rid" --up >/dev/null && [ "$(O | jq -c '[.model, .effort]')" = '[null,"max"]' ] || { echo "set --up, effort only: $(O)"; exit 1; }
+# --clear: the override file goes, logged with "new": {} (why: cleared); with none, it says so; alone or a usage error
+out=$(run --set "$rid" --clear) && [ "$out" = '"rev" (22222222): live override cleared' ] &&
+  [ ! -e "$tmp/.cache/session-status/settings/$rid.json" ] && [ "$(LOG | jq -c '[.tier, .by, .why, .new]')" = '["live","lead","cleared",{}]' ] &&
+  ! calls | grep -q 'stop\|--bg' || { echo "set --clear: $out / $(LOG)"; exit 1; }
+out=$(run --set "$rid" --clear) && [ "$out" = '"rev" (22222222): no live override' ] || { echo "set --clear with none: $out"; exit 1; }
+for bad in '--model sonnet' '--up' '--mode default' '--how resume'; do
+  rc=0; out=$(run --set "$rid" --clear $bad) || rc=$?; [ $rc = 2 ] || { echo "set --clear $bad: $rc $out"; exit 1; }; done
 # live while it isn't running: from when it next runs
 setacct cfg "$(sess "$rid" rev '' null)"
 out=$(run --set "$rid" --effort xhigh) && [ "$out" = '"rev" (22222222): effort xhigh when it next runs (live)' ] &&
@@ -1081,9 +1090,33 @@ rc=0; out=$(FAIL_BG_IN=cfg run --set "$rid" --mode auto) || rc=$?
   [ "$(ls -A "$tmp/.cache/session-status/settings")" = "$rid.json" ] && [ ! -e "$tmp/.cache/session-status/compact-$rid" ] ||
   { echo "set failed resume: $rc $out / $(jq -c .respawnFlags "$J")"; exit 1; }
 rm "$tmp/.cache/session-status/settings/$rid.json"; calls >/dev/null
-# 5. a mode mid-turn or on a prompt: refused, nothing stopped
+# bgdo CMD: the stub claude runs the shell line CMD before it answers a --bg (bgdone: as it was)
+bgdo() { mv "$tmp/bin/claude" "$tmp/bin/claude.real"
+  printf '#!/bin/sh\n[ "$1" != --bg ] || { %s; }\nexec "%s" "$@"\n' "$1" "$tmp/bin/claude.real" > "$tmp/bin/claude"; chmod +x "$tmp/bin/claude"; }
+bgdone() { mv -f "$tmp/bin/claude.real" "$tmp/bin/claude"; }
+# a failed resume whose job state can't be put back: a copy of the original beside it, named; never "settings unchanged"
+setacct cfg "$(sess "$rid" rev idle 1)"; bgdo "chmod 000 '$J'"
+rc=0; out=$(FAIL_BG_IN=cfg run --set "$rid" --mode auto) || rc=$?; bgdone; chmod 644 "$J"
+[ $rc = 1 ] && grep -qF "the original is ~/cfg/jobs/22222222/state.json.before-set" <<<"$out" && cmp -s "$J.before-set" "$tmp/state.before" &&
+  ! grep -q 'settings unchanged' <<<"$out" && [ "$(jq -r '.respawnFlags | index("auto") != null' "$J")" = true ] ||
+  { echo "set failed restore: $rc $out"; exit 1; }
+cp "$tmp/state.before" "$J"; rm "$J.before-set"; calls >/dev/null
+# a failed resume whose override file can't go back: it stays where it was put aside, named
+setacct cfg "$(sess "$rid" rev idle 1)"; echo '{"effort":"low","by":"lead","why":"","at":1}' > "$tmp/.cache/session-status/settings/$rid.json"
+bgdo "chmod a-w '$tmp/.cache/session-status/settings'"
+rc=0; out=$(FAIL_BG_IN=cfg run --set "$rid" --mode auto) || rc=$?; bgdone; chmod u+w "$tmp/.cache/session-status/settings"
+held=$(ls -A "$tmp/.cache/session-status/settings")
+[ $rc = 1 ] && [[ $held == ".$rid.held."* ]] && grep -qF "couldn't put the override file back: it is ~/.cache/session-status/settings/$held" <<<"$out" &&
+  [ "$(jq -r .effort "$tmp/.cache/session-status/settings/$held")" = low ] && cmp -s "$J" "$tmp/state.before" ||
+  { echo "set failed resume, override not put back: $rc $out / $held"; exit 1; }
+rm "$tmp/.cache/session-status/settings/$held"; calls >/dev/null
+# 5. a mode mid-turn, on a prompt or otherwise not idle (as --compact): refused, nothing stopped
 for st in busy waiting; do setacct cfg "$(sess "$rid" rev $st 1)"
   rc=0; out=$(run --set "$rid" --mode auto) || rc=$?; [ $rc = 3 ] && ! calls | grep -q 'stop\|--bg' || { echo "set $st not refused: $rc $out"; exit 1; }; done
+setacct cfg "$(sess "$rid" rev '' 1)"
+rc=0; out=$(run --set "$rid" --mode auto) || rc=$?
+[ $rc = 3 ] && [ "$out" = '"rev" (22222222) is blocked, not idle: not stopped; try when it is idle' ] && ! calls | grep -q 'stop\|--bg' ||
+  { echo "set while not idle: $rc $out"; exit 1; }
 # 6. interactive: a mode is refused (no resume); a model still changes live
 setacct cfg "$(sess "$rid" rev idle 1 interactive)"
 rc=0; out=$(run --set "$rid" --mode auto) || rc=$?
@@ -1108,11 +1141,33 @@ out=$(run --set "$rid" --by pane --mode bypassPermissions) && c=$(calls | grep -
   { echo "set bypassPermissions by pane failed: $out / ${c:-} / $(jq -c .respawnFlags "$J")"; exit 1; }
 # a resume that leaves the mode keeps the saved one; a replaced --model=… or --effort=… entry goes; the rest stays in order
 jq '.respawnFlags = ["-n", "rev", "--model=opus", "--plugin-dir", "/p", "--effort=max", "--permission-mode", "bypassPermissions"]' "$J" > "$J.t" && mv "$J.t" "$J"
-out=$(run --set "$rid" --model sonnet --how resume) &&
-  [ "$(jq -c .respawnFlags "$J")" = '["-n","rev","--plugin-dir","/p","--permission-mode","bypassPermissions","--model","sonnet","--effort","max"]' ] ||
+out=$(run --set "$rid" --model sonnet --effort high --how resume) &&
+  [ "$(jq -c .respawnFlags "$J")" = '["-n","rev","--plugin-dir","/p","--permission-mode","bypassPermissions","--model","sonnet","--effort","high"]' ] ||
   { echo "set resume without a mode: $out / $(jq -c .respawnFlags "$J")"; exit 1; }
 calls >/dev/null
+# mid: last ran on claude-opus-5-5/high (no requestedModel), started with --model opus and the skip-permissions flags
+mid=33333333-2222-3333-4444-555555555555 MJ=$tmp/cfg/jobs/33333333/state.json; mkdir -p "${MJ%/*}"
+printf '%s\n' '{"type":"user","message":{"content":"Tidy up"}}' \
+  '{"type":"assistant","effort":"high","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"hi"}]}}' > "$proj/$mid.jsonl"
+jq -n --arg id "$mid" '{sessionId: $id, respawnFlags: ["-n", "m", "--dangerously-skip-permissions", "--model", "opus", "--effort", "high", "--allow-dangerously-skip-permissions"]}' > "$MJ"
+# a mode-only resume keeps the saved --model opus (an alias, never pinned to the transcript's full id) and --effort; a
+# mode set drops the skip-permissions flags, which would outrank it
+setacct cfg "$(sess "$mid" m idle 1)"
+out=$(run --set "$mid" --mode default --by pane) &&
+  [ "$(jq -c .respawnFlags "$MJ")" = '["-n","m","--model","opus","--effort","high","--permission-mode","default"]' ] ||
+  { echo "set mode-only resume: $out / $(jq -c .respawnFlags "$MJ")"; exit 1; }
+# not running: the saved options get the change (and the override file's fields), the override file goes, logged as
+# resume; nothing stopped or woken
+setacct cfg "$(sess "$mid" m '' null)"; calls >/dev/null; wide
+echo '{"effort":"low","by":"lead","why":"","at":1}' > "$tmp/.cache/session-status/settings/$mid.json"
+out=$(run --set "$mid" --mode auto) &&
+  [ "$out" = '"m" (33333333): mode auto when it next runs (resume)' ] &&
+  [ "$(jq -c .respawnFlags "$MJ")" = '["-n","m","--model","opus","--effort","low","--permission-mode","auto"]' ] &&
+  [ ! -e "$tmp/.cache/session-status/settings/$mid.json" ] && [ "$(LOG | jq -r '"\(.tier) \(.id)"')" = "resume $mid" ] &&
+  ! calls | grep -q 'stop\|--bg' && [ ! -e "$tmp/.cache/session-status/compact-$mid" ] ||
+  { echo "set resume, not running: $out / $(jq -c .respawnFlags "$MJ")"; exit 1; }
 # a policy.* value that isn't valid says so, and refuses a lead's change (exit 5): a mistyped limit still limits
+setacct cfg "$(sess "$rid" rev idle 1)"; calls >/dev/null
 echo '{"policy":{"max_effort":"extreme"}}' > "$root/.claude/coordination.local.json"
 rc=0; out=$(run --set "$rid" --model sonnet 2>&1) || rc=$?
 [ $rc = 5 ] && grep -qxF 'warning: config policy.max_effort=extreme is not valid: using the default' <<<"$out" &&
@@ -1150,6 +1205,16 @@ mkdir -p "$tmp/.cache/session-status/compact-$rid"
 rc=0; out=$(run --set "$rid" --mode auto) || rc=$?
 [ $rc = 3 ] && grep -q 'being compacted' <<<"$out" && [ -d "$tmp/.cache/session-status/compact-$rid" ] && ! calls | grep -q 'stop\|--bg' ||
   { echo "set while locked: $rc $out"; exit 1; }
+# 11. fresh: --handover with only what changes (it reads the override file itself): another model doesn't take the
+# old one's effort along (opus/max here)
+fid=44444444-2222-3333-4444-555555555555
+printf '%s\n' '{"type":"user","message":{"content":"Work on ABC-50"}}' \
+  '{"type":"assistant","requestedModel":"opus","effort":"max","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"hi"}]}}' > "$proj/$fid.jsonl"
+printf -- '- Replies folder (for reports): `replies/`.\n' > "$root/CLAUDE.md"; mkdir -p "$root/replies"; echo state > "$root/replies/ABC-50.md"
+setacct cfg "$(sess "$fid" ABC-50 idle 1)"; calls >/dev/null
+out=$(run --set "$fid" --model haiku --how fresh -- 'Then land it.') && c=$(calls | grep -v ' agents ') &&
+  grep -q '^cfg --bg --model haiku -n ABC-50 Work on ABC-50: continue from replies/ABC-50.md. Then land it.' <<<"$c" &&
+  [ "$(LOG | jq -r '"\(.tier) \(.id)"')" = "fresh $fid" ] || { echo "set fresh: $out / ${c:-}"; exit 1; }
 fi
 
 if section handover; then
