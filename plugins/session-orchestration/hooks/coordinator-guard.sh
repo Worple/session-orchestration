@@ -37,12 +37,21 @@ deny() {
 }
 # --by pane and bypassPermissions stay with the user: they type `! session-status --set …` themselves, never through
 # the Bash tool, so any such call is a model's, in every session kind. (B) runs on a copy without quotes or
-# backslashes (`--b''y`, `"--by"`, `\--by` read as `--by`); a flag token there is `--X` between characters outside
-# [[:alnum:]_-] (or the string's ends): not `--set-upstream`, `--bye`. Pure bash, so no tool failure can fail open.
+# backslashes (`--b''y`, `"--by"`, `\--by` read as `--by`; a backslash-newline goes first, so `--b\<newline>y` too); a flag
+# token there is `--X` between characters outside [[:alnum:]_-] (or the string's ends): not `--set-upstream`, `--bye`.
+# Pure bash, so no tool failure can fail open.
+nc=   # the copy of a Bash command (the task rule below reads it too)
 if [[ $input =~ \"tool_name\":\ *\"Bash\" ]]; then
   gc=$(jq -r '.tool_input.command // ""' <<<"$input") n=
-  n=${gc//\'/}; n=${n//\"/}; n=${n//\\/}
+  n=${gc//$'\\\n'/}; n=${n//\'/}; n=${n//\"/}; n=${n//\\/}; nc=$n   # nc: the copy, kept for the task rule below
   w='[^[:alnum:]_-]'; ft() { echo "(^|$w)--($1)($w|\$)"; }   # the flag token regex
+  # Claude Code's own flags, the same on the copy: a `claude` word (at the start, or after a space, ;, &, | or () with
+  # bypassPermissions, a --(allow-)dangerously-skip-permissions token or --permission-mode plan.
+  # shortcut: a text check (a path to claude, a script file or an edit of Claude Code's files gets past it)
+  cw='(^|[[:space:];&|(])claude([[:space:];&|)]|$)' pp="(^|$w)--permission-mode([[:space:]]+|=)plan($w|\$)"
+  [[ $n =~ $cw ]] && { [[ $n == *bypassPermissions* ]] || [[ $n =~ $pp ]] ||
+      [[ $n =~ $(ft 'dangerously-skip-permissions|allow-dangerously-skip-permissions') ]]; } &&
+    deny "Only the user sets --by pane, plan or bypassPermissions: they type it in their own terminal (! session-status --set …). Run --set without them, or queue an ask." claude-mode
   wrapped="(eval|sh -c|bash -c|zsh -c)[^;&|]*(^|[[:space:]])--(set|handover)([[:space:]='\"]|\$)"
   if [[ $gc =~ $wrapped ]] || { [[ $n =~ $(ft 'set|handover') ]] &&
     { [[ $n == *bypassPermissions* ]] || {
@@ -135,6 +144,9 @@ other_key() {
   grep -oE "$KEYRE" <<<"$n" | grep -vxF -e "$skey" | head -1 | grep .
 }
 if [ -n "$task" ]; then
+  # any task, chunk or review session: --set is a coordinator's (features/agent-settings.md); --handover (--self) stays
+  [ -z "$nc" ] || [[ ! $nc =~ $(ft set) ]] ||
+    deny "Only a coordinator changes session settings (--set): ask your coordinator." task-set
   # one that answers to a coordinator: a chunk, a review, keyed, or messaged (context-watch.sh's test for the reply
   # card; .card is gone after a compaction until the next PostToolUse, so a review doesn't rely on it)
   read -r _ key _ < "$k"; [ "$kind $key" != 'task -' ] || [ -e "${k%.kind}.card" ] || [ -e "${k%.kind}.msg" ] || exit 0

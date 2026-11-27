@@ -218,4 +218,19 @@ check "$(g c1 Bash '{"command":"session-status --set 22222222 --b\\y pane"}')" d
 check "$(g c1 Bash '{"command":"session-status --se\\t 22222222 --by pane"}')" deny 'backslash inside --set'
 check "$(g c1 Bash '{"command":"session-status --set 22222222 --mo\\de plan"}')" deny 'backslash inside --mode'
 check "$(g c1 Bash '{"command":"session-status --set 22222222 --model sonnet --why \"see a/b/c\""}')" allow 'slashes survive'
+check "$(g c1 Bash '{"command":"session-status --set 22222222 --b\\\ny pane"}')" deny 'backslash-newline inside --by'
+check "$(g c1 Bash '{"command":"session-status --se\\\nt 22222222 --by pane"}')" deny 'backslash-newline inside --set'
+# a task session changes no session's settings (--set is a coordinator's); its own --handover --self stays
+check "$(g w1 Bash '{"command":"session-status --set 22222222 --model haiku"}')" deny 'set from a worker'
+check "$(g w1 Bash '{"command":"\"$SS\" \"--set\" 22222222 --effort low"}')" deny 'set from a worker, quoted'
+# claude's own flags: bypassPermissions, the skip-permissions flags and plan mode stay with the user too
+check "$(g c1 Bash '{"command":"claude --bg --permission-mode bypassPermissions x"}')" deny 'claude bypassPermissions'
+check "$(g c1 Bash '{"command":"claude --bg --resume 0123abcd --dangerously-skip-permissions x"}')" deny 'claude --dangerously-skip-permissions'
+check "$(g c1 Bash '{"command":"ls; claude --bg --allow-dangerously-skip-permissions x"}')" deny 'claude --allow-dangerously-skip-permissions'
+check "$(g c1 Bash '{"command":"claude --bg --permission-mode plan x"}')" deny 'claude plan mode'
+check "$(g c1 Bash '{"command":"claude --bg --permission-mode=\"plan\" x"}')" deny 'claude plan mode, = and quoted'
+check "$(g w1 Bash '{"command":"(claude -p --permission-mode bypass\"P\"ermissions x)"}')" deny 'claude bypass, quote-split (worker)'
+check "$(g c1 Bash '{"command":"claude --bg --permission-mode default -n w x"}')" allow 'claude default mode'
+check "$(g c1 Bash '{"command":"claude agents"}')" allow 'claude agents'
+check "$(g c1 Bash '{"command":"grep -rn bypassPermissions docs"}')" allow 'bypassPermissions without claude'
 echo ok
