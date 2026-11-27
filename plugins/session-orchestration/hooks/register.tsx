@@ -1262,6 +1262,19 @@ const handedDir = ($: EngineInterface) => homePath($, HANDED_DIR)
 // context-watch.sh's stamps, ${XDG_CACHE_HOME:-$HOME/.cache}/session-status: an empty XDG_CACHE_HOME is unset there (||).
 const stampDir = async ($: EngineInterface) => `${(await $.env.get('XDG_CACHE_HOME').catch(() => undefined)) ||
   `${(await $.env.get('HOME').catch(() => undefined)) ?? ''}/.cache`}/session-status`
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+// A live override file (session-status --set): its valid model and effort; a bad field is dropped, undefined when none is left.
+export function parseOverride(text: string): { model?: string; effort?: (typeof EFFORTS)[number] } | undefined {
+  let raw: unknown
+  try { raw = JSON.parse(text) } catch { return undefined }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
+  const { model, effort } = raw as Record<string, unknown>
+  const out: { model?: string; effort?: (typeof EFFORTS)[number] } = {}
+  if (typeof model === 'string' && /^[a-z][a-z0-9.-]*(\[1m\])?$/.test(model)) out.model = model
+  const level = EFFORTS.find(l => l === effort)
+  if (level) out.effort = level
+  return out.model || out.effort ? out : undefined
+}
 let lastWeekly: string | undefined // the line this session last wrote
 // The usage file's line, "PERCENT<TAB>RESETS" (epoch s), from the seven_day window; undefined without one that resets.
 export function weeklyLine(limits: SessionRateLimit[]): string | undefined {
@@ -1905,6 +1918,14 @@ export const register: Register = on => {
 
   // The commands a tool call queued for the turn's end: /rename (open_pane, name_session), then /reload-plugins (reload_plugins).
   // First, a tool of this plugin the engine retracted since the last turn (TOOLS): registered again, for the next prompt.
+  // The main loop applies the live override file to each model request; a failed read is no override.
+  on('turn.step', async function* ($, e, next) {
+    if (e.agentId !== undefined) return yield* next(e)
+    const text = await $.session.id().then(async id => String(await $.fs.read(`${await stampDir($)}/settings/${id}.json`)), () => undefined).catch(() => undefined)
+    const o = text === undefined ? undefined : parseOverride(text)
+    return yield* next(o ? { ...e, ...o } : e)
+  })
+
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
     if (e.agentId) return done
