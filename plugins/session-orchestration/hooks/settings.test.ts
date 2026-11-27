@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import './register'
-import { parseOverride } from './register'
+import { parseActions, parseOverride } from './register'
 
 test('parseOverride keeps valid fields, drops bad ones, and rejects the rest', () => {
   expect(parseOverride('{"model":"sonnet","effort":"low"}')).toEqual({ model: 'sonnet', effort: 'low' })
@@ -65,4 +65,54 @@ test('a malformed file passes the step through', async ($, on) => {
   const seen = setup(on, '{"model":')
   await step($)
   expect(seen).toEqual([['opus', 'max']])
+})
+
+test('a project action can\'t take + or -, the pane\'s own Up and Down a rung', () => {
+  expect(parseActions('[{"label":"X","hotkey":"h","command":"x"}]').errors[0]).toMatch(/pane's own/)
+  expect(parseActions('[{"label":"X","hotkey":"v","command":"x"}]').errors[0]).toMatch(/pane's own/)
+})
+
+const PANE = { plugin: 'session-orchestration', component: 'Pane', requestId: 'coordinator' } as const
+const PROPS = { title: 'Coordinator', isFocused: false, bodyColumns: 160, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} } as const
+const NOW = Date.UTC(2026, 9, 13, 12, 0)
+const ACT = ['11111111-aaaa', 'fix it', 'blocked', String(NOW / 1000 - 60), '', '0', 'Done.', '300000', '1000000', 'idle', 'background'].join('\t')
+const STATUS = `PROJ-4157  Code Review    app#76 OPEN no-human-approval  | no-wt | sess:"fix it" blocked | Race to settle`
+
+const press = async ($: Parameters<Parameters<typeof test>[1]>[0], on: Parameters<Parameters<typeof test>[1]>[1], key: string, exitCode: number, out: string, err = '') => {
+  mock.clock(on, { now: NOW })
+  const runs: string[][] = []
+  const toasts: string[] = []
+  on('ui.toast', async (_, e) => { toasts.push(String(e.text ?? e)); return { value: undefined } })
+  on('process.run', async (_, e) => {
+    const args = e.argv.slice(2)
+    runs.push(args)
+    const set = args[0] === '--set'
+    const stdout = set ? out : args[0] === '--activity' ? ACT : args.length === 0 ? STATUS : ''
+    return { value: { exitCode: set ? exitCode : 0, stdout, stderr: set ? err : '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  await $.tool.call({ tool: 'mcp__session-orchestration__open_pane' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS })
+  await ui.press({ key: 'refresh' })
+  await ui.press({ key: 'task-PROJ-4157' })
+  await ui.press({ key })
+  await ui.unmount()
+  return { runs, toasts }
+}
+
+test('+ and - on a card run session-status --set <id> --up/--down --by pane and toast the first line', async ($, on) => {
+  const r = await press($, on, 'act-h', 0, '"rev" (22222222): model sonnet from its next request (live)\nmore\n')
+  expect(r.runs).toContainEqual(['--set', '11111111-aaaa', '--up', '--by', 'pane'])
+  expect(r.toasts).toContain('"rev" (22222222): model sonnet from its next request (live)')
+})
+
+test('a failure toasts its reason', async ($, on) => {
+  const r = await press($, on, 'act-h', 3, '', 'busy')
+  expect(r.toasts).toContain('Settings "fix it": busy')
+})
+
+test('- runs --down; a failure with no output toasts the exit code', async ($, on) => {
+  const r = await press($, on, 'act-v', 4, '')
+  expect(r.runs).toContainEqual(['--set', '11111111-aaaa', '--down', '--by', 'pane'])
+  expect(r.toasts).toContain('Settings "fix it": exit 4')
 })

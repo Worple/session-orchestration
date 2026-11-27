@@ -38,6 +38,7 @@ const actionResult = atom({ plugin: 'session-orchestration', key: 'actionResult'
 const actionBusy = atom({ plugin: 'session-orchestration', key: 'actionBusy' } as const, null)
 const activity = atom({ plugin: 'session-orchestration', key: 'activity' } as const, '')
 const compacting = atom({ plugin: 'session-orchestration', key: 'compacting' } as const, [])
+const setting = atom({ plugin: 'session-orchestration', key: 'setting' } as const, [])
 const naming = atom({ plugin: 'session-orchestration', key: 'naming' } as const, null)
 const reloading = atom({ plugin: 'session-orchestration', key: 'reloading' } as const, false)
 const asksOpen = atom({ plugin: 'session-orchestration', key: 'asksOpen' } as const, [])
@@ -286,7 +287,7 @@ export const fixesOf = (all: Fact[]) => FIXES.filter(f => all.some(x => x.fix ==
 // ponytail: the card actions' letters below are the act(...) calls' in the render hook; keep the two in step.
 export const BUILTIN_KEYS: Record<string, string> = {
   r: 'Refresh', ...Object.fromEntries(FIXES.map(f => [f.hotkey, f.label])), a: 'Attach', u: 'Refresh (row)',
-  k: 'Ask', x: 'Dismiss', c: 'Copy command', z: 'Compact', p: 'Peek', d: 'Diff', w: 'All projects', e: 'Archive',
+  k: 'Ask', x: 'Dismiss', c: 'Copy command', z: 'Compact', h: 'Up a rung', v: 'Down a rung', p: 'Peek', d: 'Diff', w: 'All projects', e: 'Archive',
   t: 'Attach in tab', l: 'Logs in split', y: 'Daily brief', b: 'Earlier day', n: 'Later day', s: 'Brief or list',
 }
 const taken = (key: string) => /^\d$/.test(key) ? 'a 1-9 item key' : BUILTIN_KEYS[key]
@@ -1554,6 +1555,22 @@ async function watchInbox($: EngineInterface, url: string) {
   return ` Review inbox not watched (${oneLine(r.deny ?? r.text ?? '') || 'no answer'}): ArtifactComments watch ${url} yourself.`
 }
 
+// A card's Up/Down a rung: session-status --set <id> --up|--down --by pane (run by the pane, so `--by pane` is legitimate).
+// Exit: 0 done, 1 failed, 2 usage or no session, 3 busy/locked/interactive, 4 too big, 5 needs approval: the toast says the command's own line.
+async function runSet($: EngineInterface, id: string, name: string, args: string[]) {
+  let taken = false // checked and marked in one write: a second press before the redraw finds it busy
+  await update($, setting, l => ((taken = !l.includes(id)) ? [...l, id] : l))
+  if (!taken) return $.ui.toast(`Settings "${name}" is already changing`)
+  try {
+    const r = await runBash($, [`${$.plugin.root}/skills/orchestrating-sessions/session-status`, '--set', id, ...args, '--by', 'pane'], { timeoutMs: 60_000 })
+    $.ui.toast(r.exitCode === 0 ? oneLine(r.stdout.split('\n')[0]) : `Settings "${name}": ${oneLine(r.stdout || r.stderr) || `exit ${r.exitCode}`}`)
+  } catch (err) {
+    $.ui.toast(`Settings "${name}" failed: ${err instanceof Error ? err.message : String(err)}`)
+  } finally {
+    await update($, setting, l => l.filter(x => x !== id))
+  }
+}
+
 async function runCompact($: EngineInterface, id: string, name: string) {
   let taken = false // checked and marked in one write: a second press before the redraw finds it busy
   await update($, compacting, l => ((taken = !l.includes(id)) ? [...l, id] : l))
@@ -2133,6 +2150,11 @@ export const register: Register = on => {
       if (running) return act('z', 'Compacting…', () => runCompact($, running, a?.name ?? id))
       return a && canCompact(a) && act('z', 'Compact', () => runCompact($, a.id, a.name))
     }
+    // A card's Up/Down a rung (model and effort): any session with activity.
+    const rungActs = (a: Activity | undefined) => a ? [
+      act('h', 'Up a rung', () => runSet($, a.id, a.name, ['--up'])),
+      act('v', 'Down a rung', () => runSet($, a.id, a.name, ['--down'])),
+    ] : []
     // A row names its session by name: two live sessions of one name, and neither's activity shows.
     const activityOf = (name: string) => {
       const [a, ...more] = acts_.filter(x => x.name === name)
@@ -2435,7 +2457,7 @@ export const register: Register = on => {
           ...fixesOf(all).map(f => act(f.hotkey, f.label, () => $.prompt.submit({ text: fixText(t.key, f.says, open) }))),
           ...(g ? g.rest : []),
           act('u', rowBusy.includes(t.key) ? 'Refreshing…' : 'Refresh', refreshRow(t.key)),
-          compactAct(sa),
+          compactAct(sa), ...rungActs(sa),
           ...viewActs(id, sid, [t.key, ...(sid ? [sid] : [])]),
           act('k', 'Ask', ask(`task ${t.key}${about ? ` (${about})` : ''}`)),
         ),
@@ -2465,6 +2487,7 @@ export const register: Register = on => {
           detail(accent, '│', <Text dimColor wrap="truncate-end">{w.command}</Text>),
           bar(accent, ...sessActs(w.command, w.name, wa, true).all,
             unanswered ? act('s', 'Stop', stopNow(w.id)) : compactAct(wa, w.id),
+            ...rungActs(wa),
             ...viewActs(id, w.id, [...(key ? [key] : []), w.id]),
             act('k', 'Ask', ask(`the session "${w.name}" that waits on me`))),
           ...peekView(id, accent),
@@ -2495,6 +2518,7 @@ export const register: Register = on => {
           // Superseded: its task moved on, so Stop (no need to ask, resuming.md) rather than Compact.
           bar(accent, ...sessActs(o.command, o.name, oa).all,
             o.superseded ? act('s', 'Stop', stopNow(o.id)) : compactAct(oa, o.id),
+            ...rungActs(oa),
             ...viewActs(id, o.id, [o.id]),
             act('k', 'Ask', ask(`the session "${o.name}"`))),
           ...peekView(id, accent),
