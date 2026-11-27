@@ -1025,6 +1025,96 @@ setacct .claude-work "$(sess "$rid" rev idle 1)"
 [ "$(run --outbox | cut -f2)" = "$rid" ] || { echo "--outbox, no socket: $(run --outbox)"; exit 1; }
 fi
 
+if section set; then
+# --set (features/agent-settings.md), against accounts_claude; rid last ran on opus/max (its transcript's last reply).
+# Live: the override file, merged, and a log line, nothing stopped. A mode: stopped while idle and resumed under its
+# id with the current model and effort and the mode, the override file gone. Refused, nothing stopped: busy, waiting,
+# interactive or locked (exit 3), over the resume limit (4), outside policy (5), a bad value or no change (2).
+accounts_claude
+rid=22222222-2222-3333-4444-555555555555
+printf '%s\n' '{"type":"user","message":{"content":"Review the PR"}}' \
+  '{"type":"assistant","requestedModel":"opus","effort":"max","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"hi"}]}}' > "$proj/$rid.jsonl"
+O() { cat "$tmp/.cache/session-status/settings/$rid.json"; }
+LOG() { tail -1 "$(pof "$root")/settings.jsonl"; }
+# 1. live: for its next request (an effort for its next turn), logged, nothing stopped or resumed
+setacct cfg "$(sess "$rid" rev idle 1)"
+out=$(run --set "$rid" --model sonnet --effort low --why cheap) &&
+  [ "$out" = '"rev" (22222222): model sonnet, effort low from its next request, effort from its next turn (live)' ] &&
+  [ "$(O | jq -r '"\(.model) \(.effort) \(.by) \(.why)"')" = 'sonnet low lead cheap' ] &&
+  [ "$(LOG | jq -r '"\(.tier) \(.old.model) \(.new.model)"')" = 'live opus sonnet' ] && ! calls | grep -q 'stop\|--bg' ||
+  { echo "set live failed: $out / $(O) / $(LOG)"; exit 1; }
+# 2. merged into the override file
+run --set "$rid" --effort high >/dev/null && [ "$(O | jq -r '.model+" "+.effort')" = 'sonnet high' ] || { echo "set live merge failed: $(O)"; exit 1; }
+# 3. a rung up from the override file's values; a rung down from the transcript's (opus/max) once it's gone
+run --set "$rid" --up >/dev/null && [ "$(O | jq -r '.model+" "+.effort')" = 'sonnet xhigh' ] || { echo "set --up failed: $(O)"; exit 1; }
+rm "$tmp/.cache/session-status/settings/$rid.json"
+run --set "$rid" --down >/dev/null && [ "$(O | jq -r '.model+" "+.effort')" = 'opus xhigh' ] || { echo "set --down failed: $(O)"; exit 1; }
+# live while it isn't running: from when it next runs
+setacct cfg "$(sess "$rid" rev '' null)"
+out=$(run --set "$rid" --effort xhigh) && [ "$out" = '"rev" (22222222): effort xhigh when it next runs (live)' ] &&
+  ! calls | grep -q 'stop\|--bg' || { echo "set live, not running: $out"; exit 1; }
+# 4. a mode: stopped while idle, resumed under its id with the current model and effort and the mode; the override
+# file and the lock gone, the change logged
+setacct cfg "$(sess "$rid" rev idle 1)"
+out=$(run --set "$rid" --mode acceptEdits --why trust) && c=$(calls | grep -v ' agents ') &&
+  [ "$out" = '"rev" (22222222): mode acceptEdits, resumed under its own id (resume)' ] &&
+  [[ $c == "$(printf 'cfg stop 22222222\ncfg --bg --resume %s --model opus --effort xhigh --permission-mode acceptEdits Settings changed by lead: mode acceptEdits (trust).' "$rid")"* ]] &&
+  [ ! -e "$tmp/.cache/session-status/settings/$rid.json" ] && [ ! -e "$tmp/.cache/session-status/compact-$rid" ] &&
+  [ "$(LOG | jq -r .tier)" = resume ] || { echo "set resume failed: $out / ${c:-}"; exit 1; }
+# a resume that fails after the stop says so (exit 1); the override file is back as it was, the lock gone
+setacct cfg "$(sess "$rid" rev idle 1)"; echo '{"effort":"low","by":"lead","why":"","at":1}' > "$tmp/.cache/session-status/settings/$rid.json"
+rc=0; out=$(FAIL_BG_IN=cfg run --set "$rid" --mode auto) || rc=$?
+[ $rc = 1 ] && grep -q '^stopped "rev" (22222222), but its resume failed' <<<"$out" && [ "$(O | jq -r .effort)" = low ] &&
+  [ "$(ls -A "$tmp/.cache/session-status/settings")" = "$rid.json" ] && [ ! -e "$tmp/.cache/session-status/compact-$rid" ] ||
+  { echo "set failed resume: $rc $out"; exit 1; }
+rm "$tmp/.cache/session-status/settings/$rid.json"; calls >/dev/null
+# 5. a mode mid-turn or on a prompt: refused, nothing stopped
+for st in busy waiting; do setacct cfg "$(sess "$rid" rev $st 1)"
+  rc=0; out=$(run --set "$rid" --mode auto) || rc=$?; [ $rc = 3 ] && ! calls | grep -q 'stop\|--bg' || { echo "set $st not refused: $rc $out"; exit 1; }; done
+# 6. interactive: a mode is refused (no resume); a model still changes live
+setacct cfg "$(sess "$rid" rev idle 1 interactive)"
+rc=0; out=$(run --set "$rid" --mode auto) || rc=$?
+[ $rc = 3 ] && grep -q interactive <<<"$out" && ! calls | grep -q 'stop\|--bg' || { echo "set interactive mode not refused: $rc $out"; exit 1; }
+out=$(run --set "$rid" --model sonnet) && [ "$out" = '"rev" (22222222): model sonnet from its next request (live)' ] &&
+  ! calls | grep -q 'stop\|--bg' || { echo "set interactive model failed: $out"; exit 1; }
+# 7. outside policy (--by lead): exit 5, nothing stopped, the ask the last line; bypassPermissions is never a lead's;
+# --by pane (typed in the user's own terminal) sets it
+setacct cfg "$(sess "$rid" rev idle 1)"
+echo '{"policy":{"modes":["manual"]}}' > "$root/.claude/coordination.local.json"
+rc=0; out=$(run --set "$rid" --mode auto) || rc=$?
+[ $rc = 5 ] && [ "$(tail -1 <<<"$out")" = 'needs your approval: set "rev" (22222222) to mode auto' ] && ! calls | grep -q 'stop\|--bg' ||
+  { echo "set outside policy not refused: $rc $out"; exit 1; }
+rc=0; out=$(run --set "$rid" --mode bypassPermissions) || rc=$?
+[ $rc = 5 ] && ! calls | grep -q 'stop\|--bg' || { echo "set bypassPermissions by lead not refused: $rc $out"; exit 1; }
+out=$(run --set "$rid" --by pane --mode bypassPermissions) && calls | grep -q -- "^cfg --bg --resume $rid .*--permission-mode bypassPermissions " ||
+  { echo "set bypassPermissions by pane failed: $out"; exit 1; }
+# a policy.* value that isn't valid says so (policy_allows reads it quietly, falling back to the default)
+echo '{"policy":{"max_effort":"extreme"}}' > "$root/.claude/coordination.local.json"
+out=$(run --set "$rid" --model sonnet 2>&1) && grep -qxF 'warning: config policy.max_effort=extreme is not valid: using the default' <<<"$out" ||
+  { echo "set policy warning missing: $out"; exit 1; }
+rm "$root/.claude/coordination.local.json"; calls >/dev/null
+# 8. over the resume limit: exit 4, nothing stopped, naming --how fresh
+xid=77777777-2222-3333-4444-555555555555
+printf '%s\n' '{"type":"user","message":{"content":"Big task"}}' \
+  '{"type":"assistant","message":{"usage":{"input_tokens":2,"cache_read_input_tokens":600000,"cache_creation_input_tokens":20000},"content":[{"type":"text","text":"hi"}]}}' > "$proj/$xid.jsonl"
+setacct cfg "$(sess "$xid" big idle 1)"
+rc=0; out=$(run --set "$xid" --mode auto) || rc=$?
+[ $rc = 4 ] && grep -qF -- '--how fresh' <<<"$out" && ! calls | grep -q 'stop\|--bg' || { echo "set over the resume limit: $rc $out"; exit 1; }
+# 9. a value the CLI wouldn't take, no change, a short id, an unknown one, a mode live: exit 2, nothing run
+setacct cfg "$(sess "$rid" rev idle 1)"
+rc=0; out=$(run --set "$rid" --effort extreme) || rc=$?; [ $rc = 2 ] || { echo "set --effort extreme: $rc $out"; exit 1; }
+rc=0; out=$(run --set "$rid") || rc=$?; [ $rc = 2 ] && grep -q '^usage:' <<<"$out" || { echo "set with no change: $rc $out"; exit 1; }
+rc=0; out=$(run --set 1234) || rc=$?; [ $rc = 2 ] || { echo "set 1234: $rc $out"; exit 1; }
+rc=0; out=$(run --set 99999999 --mode auto) || rc=$?; [ $rc = 2 ] || { echo "set unknown id: $rc $out"; exit 1; }
+rc=0; out=$(run --set "$rid" --mode auto --how live) || rc=$?; [ $rc = 2 ] || { echo "set a mode live: $rc $out"; exit 1; }
+! calls | grep -q 'stop\|--bg' || { echo "set usage errors ran something"; exit 1; }
+# 10. a --compact (or another --set) holds its lock: exit 3, nothing stopped, the lock left
+mkdir -p "$tmp/.cache/session-status/compact-$rid"
+rc=0; out=$(run --set "$rid" --mode auto) || rc=$?
+[ $rc = 3 ] && grep -q 'being compacted' <<<"$out" && [ -d "$tmp/.cache/session-status/compact-$rid" ] && ! calls | grep -q 'stop\|--bg' ||
+  { echo "set while locked: $rc $out"; exit 1; }
+fi
+
 if section handover; then
 accounts_claude   # and an adapter, so --init --check is configured:
 printf '#!/bin/sh\nexit 2\n' > "$root/.claude/session-status-adapter"; chmod +x "$root/.claude/session-status-adapter"

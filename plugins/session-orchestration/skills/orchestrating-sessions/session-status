@@ -2038,11 +2038,11 @@ killtree() {
 TMP=$(mktemp -d); NPID=; trap 'r=$?; [ -z "$NPID" ] || killtree "$NPID"; rm -rf "$TMP"; exit_fault $r' EXIT
 
 KEYRE=$(key_re "$ADAPTER")
-ACT=; SEND=; COMPACT=; HANDOVER=; PEEK=; WHERE=; ALLP=; YDAY=
+ACT=; SEND=; COMPACT=; HANDOVER=; PEEK=; WHERE=; ALLP=; YDAY=; SET=
 case "${1:-}" in --activity) ACT=1; shift ;; --send-when-idle) SEND=1; shift ;; --compact|--stop) COMPACT=$1; shift ;; --handover) HANDOVER=1; shift ;;
-  --peek) PEEK=1; shift ;; --dir|--diff) WHERE=$1; shift ;; --yesterday) YDAY=1; shift ;; esac
+  --peek) PEEK=1; shift ;; --dir|--diff) WHERE=$1; shift ;; --yesterday) YDAY=1; shift ;; --set) SET=1; shift ;; esac
 [ -n "$ACT" ] && [ "${1:-}" = --all-projects ] && { ALLP=1; shift; }
-if [ -z "$ACT$SEND$COMPACT$HANDOVER$PEEK" ]; then
+if [ -z "$ACT$SEND$COMPACT$HANDOVER$PEEK$SET" ]; then
   repos=$(adapter repos 2>/dev/null) ||
     repos=$(git rev-parse --git-dir >/dev/null 2>&1 && echo . || find . -mindepth 2 -maxdepth 2 -name .git | sed 's#/\.git$##')
   (cd "$ROOT" && while read -r r; do [ -n "$r" ] && (cd "$r" 2>/dev/null && pwd -P); done <<<"$repos") > "$TMP/repos"
@@ -2123,7 +2123,7 @@ messages_job() {
     grep -oE "^$KEYRE" "$NOTICE_ROWS" > "$NOTICE_MINE" 2>/dev/null
   messages_notices
 }
-if [ -n "$COORD$OWNER$ACT$SEND$COMPACT$HANDOVER$PEEK$WHERE$YDAY" ]; then :
+if [ -n "$COORD$OWNER$ACT$SEND$COMPACT$HANDOVER$PEEK$WHERE$YDAY$SET" ]; then :
 else
   # Notices run alongside everything else: the sweep only, like the other footers. Each source (the messages module,
   # the adapter) writes $TMP/notices.SOURCE and its exit code.
@@ -2228,9 +2228,10 @@ stop_session() {  # PREFIX ID
 }
 # Runs `<prefix> --bg --resume ID TEXT [--name NAME]` in DIR, and checks the session went on under its own id (a
 # resume of a running session starts a copy instead). NAME: keep that name in an account that doesn't know it.
-resume_with() {  # PREFIX DIR ID TEXT [NAME]
+# FLAGS: pre-quoted flags put right after the id (--set's --model, --effort, --permission-mode).
+resume_with() {  # PREFIX DIR ID TEXT [NAME] [FLAGS]
   local out
-  out=$(cd "$2" 2>/dev/null || cd "$ROOT"; bash -c "$1 --bg --resume \"\$0\" \"\$1\"${5:+ --name \"\$2\"}" "$3" "$4" "${5:-}" 2>&1)
+  out=$(cd "$2" 2>/dev/null || cd "$ROOT"; bash -c "$1 --bg --resume \"\$0\" ${6:+$6 }\"\$1\"${5:+ --name \"\$2\"}" "$3" "$4" "${5:-}" 2>&1)
   grep -q "backgrounded · ${3:0:8}" <<<"$out" && return 0
   echo "resume of ${3:0:8} didn't keep its id: $(tail -1 <<<"$out")"; return 1
 }
@@ -2445,6 +2446,7 @@ if [ -n "$YDAY" ]; then
   exit 0
 fi
 
+if [ -n "$SET" ]; then . "$(dirname "$SELF")/set.sh"; exit $?; fi
 # --compact ID: makes an idle background session run /compact. A running session can't take a command from
 # outside, so it is stopped (its conversation is kept) and resumed under the same id with /compact as its prompt.
 # Only when it's idle: never mid-turn (busy) or while it waits on a prompt (waiting), whose pending call a stop
