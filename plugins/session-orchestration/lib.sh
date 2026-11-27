@@ -70,7 +70,7 @@ user_config() { echo "${XDG_CONFIG_HOME:-$HOME/.config}/session-orchestration/co
 # person_keys_drop [MODULE]: the jq filter that drops the person keys (and MODULE's messages block) from a repo file;
 # coord_json reads the repo file through it, and --shared refuses a team file it would change.
 person_keys_drop() {
-  echo "del(.approvals, .terminal, .messages, .msgraph, .trusted, .team, .feedback, .telemetry, .handoff, .compact, .pending, .history, .fable, .start, .retro, .docs_watch, .pane, .coordinator, .report_artifacts$( [[ ${1:-} =~ ^[A-Za-z0-9_-]+$ ]] && echo ", .[\"$1\"]")) | if .features | type == \"object\" then del(.features.accounts, .features.accounts_weekly_switch, .features.notify, .features.retro, .features.remote, .features.docs_watch, .features.report_artifacts) else . end"
+  echo "del(.approvals, .terminal, .messages, .msgraph, .trusted, .team, .feedback, .telemetry, .handoff, .compact, .pending, .history, .fable, .start, .retro, .docs_watch, .pane, .coordinator, .report_artifacts, .policy$( [[ ${1:-} =~ ^[A-Za-z0-9_-]+$ ]] && echo ", .[\"$1\"]")) | if .features | type == \"object\" then del(.features.accounts, .features.accounts_weekly_switch, .features.notify, .features.retro, .features.remote, .features.docs_watch, .features.report_artifacts) else . end"
 }
 
 coord_memo= coord_memo_pwd=   # never inherited: valid only for the cwd its caller built it in
@@ -412,6 +412,8 @@ model_ok() {
   [[ $1 =~ $re ]] && { [ "${FABLE_OK:-}" = 1 ] || [[ $1 != *fable* ]] || fable_ok; } &&
     { [ $# = 1 ] || [[ $2 =~ ^(low|medium|high|xhigh|max)$ ]]; }
 }
+# mode_ok MODE: a permission mode the CLI takes (session-status --set --mode).
+mode_ok() { [[ $1 =~ ^(default|manual|acceptEdits|auto|dontAsk|plan|bypassPermissions)$ ]]; }
 # effort_step EFFORT N: EFFORT moved N steps (-1, 0, 1) along low medium high xhigh max, held at either end; fails on
 # any other EFFORT.
 effort_step() {
@@ -430,6 +432,20 @@ escalate_rung() {
     low|medium|high) echo "$m $(effort_step "$e" 1)" ;;
     xhigh|max) case $m in *haiku*) echo "sonnet$s $e" ;; *sonnet*) echo "opus$s $e" ;;
       *) if [ "$e" = xhigh ]; then echo "$m max"; else [[ $m == *opus* ]] && fable_ok && echo "fable$s max"; fi ;; esac ;;
+    *) return 1 ;;
+  esac
+}
+# deescalate_rung MODEL EFFORT: "MODEL EFFORT" one rung down (session-status --set --down), the first rule that matches:
+# max → xhigh on the same model; fable → opus at the same effort; xhigh, high or medium one effort down; at low, opus →
+# sonnet and sonnet → haiku. A [1m] suffix is kept. Fails at haiku/low or on an unknown effort.
+deescalate_rung() {
+  local m=$1 e=$2 s=; [[ $m == *'[1m]' ]] && s='[1m]'
+  case $e in
+    max) echo "$m xhigh" ;;
+    low|medium|high|xhigh)
+      if [[ $m == *fable* ]]; then echo "opus$s $e"
+      elif [ "$e" != low ]; then echo "$m $(effort_step "$e" -1)"
+      else case $m in *opus*) echo "sonnet$s low" ;; *sonnet*) echo "haiku$s low" ;; *) return 1 ;; esac; fi ;;
     *) return 1 ;;
   esac
 }
@@ -482,10 +498,11 @@ config() {
     plan.enabled|plan.max_parallel|plan.models.design|plan.models.build|plan.models.mechanical|plan.models.review|plan.models.release|plan.models.scan|plan.models.coordinator|plan.models.retro|plan.models.research) ;;
     plan.advisor.design|plan.advisor.build|plan.advisor.mechanical|plan.advisor.review|plan.advisor.release|plan.advisor.scan|plan.advisor.coordinator|plan.advisor.retro|plan.advisor.research) ;;
     handoff.at.chunk|handoff.at.task|handoff.at.coordinator|handoff.hard_after|handoff.stop_room|compact.window) ;;
+    policy.models|policy.max_effort|policy.modes) ;;
     pane.sections) pane_sections; return 0 ;;
     coordinator.purpose) coord_purpose; return 0 ;;
     features.report_artifacts|report_artifacts.account) report_artifacts_cfg "$key"; return 0 ;;
-    *) echo "unknown config key: ${key:-(none)} (one of tracker host key_pattern approvals.delegate approvals.pr_create features.accounts features.accounts_weekly_switch features.review_inbox features.notify start.mode start.kinds.feedback_apply start.sidebar features.retro features.remote retro.scope retro.schedule retro.account retro.sections features.docs_watch docs_watch.files docs_watch.pattern terminal messages feedback.mode feedback.repo_dir feedback.project_dir telemetry pending.file history.dirs fable.accounts coordinator.purpose plan.enabled plan.max_parallel plan.models.{design,build,mechanical,review,release,scan,coordinator,retro,research} plan.advisor.{design,build,mechanical,review,release,scan,coordinator,retro,research} handoff.at.{chunk,task,coordinator} handoff.hard_after handoff.stop_room compact.window pane.sections features.report_artifacts report_artifacts.account)" >&2; return 2 ;;
+    *) echo "unknown config key: ${key:-(none)} (one of tracker host key_pattern approvals.delegate approvals.pr_create features.accounts features.accounts_weekly_switch features.review_inbox features.notify start.mode start.kinds.feedback_apply start.sidebar features.retro features.remote retro.scope retro.schedule retro.account retro.sections features.docs_watch docs_watch.files docs_watch.pattern terminal messages feedback.mode feedback.repo_dir feedback.project_dir telemetry pending.file history.dirs fable.accounts coordinator.purpose policy.models policy.max_effort policy.modes plan.enabled plan.max_parallel plan.models.{design,build,mechanical,review,release,scan,coordinator,retro,research} plan.advisor.{design,build,mechanical,review,release,scan,coordinator,retro,research} handoff.at.{chunk,task,coordinator} handoff.hard_after handoff.stop_room compact.window pane.sections features.report_artifacts report_artifacts.account)" >&2; return 2 ;;
   esac
   v=$(coord_json | jq -r --arg k "$key" 'getpath($k | split(".")) | if . == null then empty else tostring end')
   [ -n "$v" ] && case $key in
@@ -512,6 +529,14 @@ config() {
     pending.file) [[ $v == '~'/* ]] && v=$HOME/${v#'~/'}; [[ $v == *.md && $v != '~'* && $v != *..* ]] && ok=1 ;;
     # a JSON list of folders, printed one per line
     history.dirs|fable.accounts|docs_watch.files) local l; l=$(jq -r 'if type == "array" and all(.[]; type == "string" and length > 0 and (test("\n") | not)) then .[] else error end' <<<"$v" 2>/dev/null) && v=$l && ok=1 ;;
+    # policy.* (a person key): the models a lead may set (empty: any), its top effort, and its permission modes, never
+    # bypassPermissions or plan (a pane's own --by pane)
+    policy.models|policy.modes) local l x; l=$(jq -r 'if type == "array" and all(.[]; type == "string" and length > 0 and (test("
+") | not)) then .[] else error end' <<<"$v" 2>/dev/null) && ok=1 &&
+      while IFS= read -r x; do [ -z "$x" ] && continue
+        if [ "$key" = policy.models ]; then model_ok "$x" || ok=; else { mode_ok "$x" && [[ $x != bypassPermissions && $x != plan ]]; } || ok=; fi
+      done <<<"$l"; [ -z "$ok" ] || v=$l ;;
+    policy.max_effort) [[ $v =~ ^(low|medium|high|xhigh|max)$ ]] && ok=1 ;;
     plan.max_parallel) [[ $v =~ ^[1-9][0-9]{0,2}$ ]] && ok=1 ;;
     plan.models.*) [[ $v == */* ]] && model_ok "${v%%/*}" "${v#*/}" && ok=1 ;;
     plan.advisor.*) case $v in fable|opus|sonnet) ok=1 ;; esac ;;
@@ -535,6 +560,8 @@ config() {
     start.mode) echo read_only ;; start.kinds.feedback_apply) config start.mode ;;
     feedback.mode) echo auto ;; feedback.repo_dir|feedback.project_dir|pending.file|history.dirs|fable.accounts|retro.schedule|retro.sections|plan.advisor.*) ;;
     retro.scope) echo project ;; retro.account) echo "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" ;; telemetry) [ -n "$v" ] && echo off || echo full ;;   # a mistyped value opts out
+    policy.models) ;; policy.max_effort) echo max ;; policy.modes) printf '%s
+' default manual acceptEdits auto dontAsk ;;
     plan.enabled) echo true ;; plan.max_parallel) echo 3 ;;
     plan.models.*) case ${key#plan.models.} in design|review) v=opus/xhigh ;; build|coordinator) v=opus/medium ;;
         mechanical|release) v=sonnet/medium ;; scan) v=haiku/low ;; retro) v=opus/xhigh ;; research) v=opus/high ;; esac
@@ -544,6 +571,32 @@ config() {
     handoff.at.chunk) echo 125000 ;; handoff.at.task) echo 145000 ;; handoff.at.coordinator) echo 145000 ;;
     handoff.hard_after) echo 25000 ;; handoff.stop_room) echo 15000 ;; compact.window) echo 220000 ;;
   esac
+}
+
+# policy_allows BY MODEL EFFORT MODE: whether BY (pane or lead) may set them (an empty one is unchanged): exit 0 allowed,
+# 1 refused with the reason on stdout, 2 an unknown BY. A value the CLI wouldn't take is refused for both. A pane may set
+# any valid value; a lead only a model equal to or starting with a policy.models entry (when it has any), an effort up
+# to policy.max_effort, and a mode in policy.modes.
+policy_allows() {
+  local by=$1 m=${2:-} e=${3:-} d=${4:-} l x ok= seen=
+  case $by in pane|lead) ;; *) return 2 ;; esac
+  [ -z "$m" ] || model_ok "$m" || { echo "model $m is not valid"; return 1; }
+  [ -z "$e" ] || effort_step "$e" 0 >/dev/null || { echo "effort $e is not valid"; return 1; }
+  [ -z "$d" ] || mode_ok "$d" || { echo "mode $d is not valid"; return 1; }
+  [ "$by" = pane ] && return 0
+  l=$(config policy.models 2>/dev/null)
+  if [ -n "$m" ] && [ -n "$l" ]; then
+    while IFS= read -r x; do [[ $m == "$x"* ]] && ok=1; done <<<"$l"
+    [ -n "$ok" ] || { echo "model $m is not in policy.models"; return 1; }
+  fi
+  if [ -n "$e" ]; then
+    l=$(config policy.max_effort 2>/dev/null)
+    for x in low medium high xhigh max; do
+      [ "$x" = "$l" ] && seen=1
+      [ "$x" = "$e" ] && [ -n "$seen" ] && [ "$x" != "$l" ] && { echo "effort $e is over policy.max_effort $l"; return 1; }
+    done
+  fi
+  [ -z "$d" ] || config policy.modes 2>/dev/null | grep -qxF -- "$d" || { echo "mode $d is not in policy.modes"; return 1; }
 }
 
 # The coordinator pane's section slugs (hooks/register.tsx sectionSlug: a title, lowercase, its "(…)" dropped), and

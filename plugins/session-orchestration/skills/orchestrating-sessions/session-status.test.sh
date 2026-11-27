@@ -1985,6 +1985,10 @@ cp "$a/.claude/coordination/coordination.json" "$tmp/cfg.json"; echo '{"tracker"
 [ "$(cfg "$a" tracker 2>&1)" = "$(printf 'warning: config tracker=trello is not valid: using the default\nnone')" ] || { echo "config fallback: $(cfg "$a" tracker 2>&1)"; exit 1; }
 grep -x 'warning: config tracker=trello is not valid: using the default' <<<"$(init "$a" --check)" >/dev/null || { echo "check warning: $(init "$a" --check)"; exit 1; }
 mv "$tmp/cfg.json" "$a/.claude/coordination/coordination.json"
+# policy.* is a person key: a committed file can't set it
+cp "$a/.claude/coordination/coordination.json" "$tmp/cfg.json"; echo '{"policy":{"max_effort":"low"}}' > "$a/.claude/coordination/coordination.json"
+[ "$(cfg "$a" policy.max_effort)" = max ] || { echo "config: the repo file set policy.max_effort"; exit 1; }
+mv "$tmp/cfg.json" "$a/.claude/coordination/coordination.json"
 rc=0; cfg "$a" nope 2>/dev/null || rc=$?; [ $rc = 2 ] || { echo "config: an unknown key didn't exit 2"; exit 1; }
 init "$a" --write --delegate >/dev/null && [ "$(cfg "$a/sub" approvals.delegate)" = true ] &&
   grep -x 'active: .* delegate=on pr_create=off start=read_only terminal=plain messages=none features=none' <<<"$(init "$a" --check)" >/dev/null || { echo "init --delegate: $(init "$a" --check)"; exit 1; }
@@ -2206,6 +2210,26 @@ init "$a" --check | grep -xF 'warning: terminals/wezterm.sh: no open_split, usin
 printf '# Terminal: wezterm\n\n> A note.\n' > "$a/.claude/coordination.local/terminals/wezterm.md"
 init "$a" --check | grep -x '  terminal wezterm: read /.*/terminals/wezterm\.md now' >/dev/null ||
   { echo "check doc without a start line: $(init "$a" --check)"; exit 1; }
+fi
+
+if section policy; then
+# policy helpers: mode_ok, deescalate_rung, policy_allows and the policy.* config keys (lib.sh), sourced in the fixture.
+mkdir -p "$root/.claude"
+L() { (cd "$root" && HOME=$tmp XDG_STATE_HOME=$tmp/state XDG_CONFIG_HOME=$tmp/.config; . "$here/../../lib.sh"; "$@"); }
+[ "$(L deescalate_rung opus max)" = "opus xhigh" ] && [ "$(L deescalate_rung fable xhigh)" = "opus xhigh" ] &&
+[ "$(L deescalate_rung opus high)" = "opus medium" ] && [ "$(L deescalate_rung 'opus[1m]' low)" = "sonnet[1m] low" ] &&
+[ "$(L deescalate_rung sonnet low)" = "haiku low" ] && ! L deescalate_rung haiku low && ! L deescalate_rung opus extreme ||
+  { echo "deescalate_rung"; exit 1; }
+L mode_ok acceptEdits && L mode_ok default && ! L mode_ok yolo || { echo mode_ok; exit 1; }
+L policy_allows lead sonnet low acceptEdits && ! L policy_allows lead '' '' bypassPermissions &&
+  ! L policy_allows lead '' '' plan && L policy_allows pane opus max bypassPermissions || { echo "policy defaults"; exit 1; }
+rc=0; L policy_allows nobody '' low '' >/dev/null || rc=$?; [ $rc = 2 ] || { echo "unknown BY"; exit 1; }
+echo '{"policy":{"models":["sonnet","haiku"],"max_effort":"high","modes":["manual"]}}' > "$root/.claude/coordination.local.json"
+! L policy_allows lead opus low '' && L policy_allows lead 'sonnet[1m]' high manual &&
+  [ "$(L policy_allows lead sonnet xhigh '')" = "effort xhigh is over policy.max_effort high" ] || { echo "policy narrowed"; exit 1; }
+echo '{"policy":{"modes":["bypassPermissions"]}}' > "$root/.claude/coordination.local.json"
+[ "$(L config policy.modes 2>&1 | head -1)" = 'warning: config policy.modes=["bypassPermissions"] is not valid: using the default' ] ||
+  { echo "bad modes fallback"; exit 1; }
 fi
 
 if section shared; then

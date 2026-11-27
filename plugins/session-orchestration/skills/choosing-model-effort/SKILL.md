@@ -55,6 +55,12 @@ Add a size when the work sits clearly at one end of its kind, by expected contex
 ("build:L: three files and a new test"). Past L, split the work (plans.md). A size changes the effort only; a model
 change is the kind's or an escalation's (`session-status --handover --escalate`, after the same failure twice).
 
+## Stepping down
+
+Once a session's remaining work is a lower kind (review passed and only release steps remain, or it is only waiting on
+CI), step it down: `session-status --set ID --down --why '…'`. Never go below the kind the remaining work needs. Go up
+with `--up` when the same failure repeats, in place of `--handover --escalate`, unless the context is too big.
+
 ## Use it
 
 - **A task start (`claude --bg`)**: `session-status --launch <session-name> --kind <kind>[:S|M|L] …` (sessions.md) runs
