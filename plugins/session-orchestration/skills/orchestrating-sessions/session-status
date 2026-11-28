@@ -152,10 +152,18 @@
 #                       for; --coordinators lists it), to the project's .claude/coordination.local.json
 #        session-status --owner KEY…   who owns each task and why: the row's session, then each candidate
 #                       (first prompt, marker, review, maybe) with its state, first prompt line and markers
-#        session-status --handover ID|--self [--model M] [--effort E] [--escalate] [--] 'WHAT NEXT'   a task or chunk
+#        session-status --handover ID|--self [--model M] [--effort E] [--mode P] [--by lead|pane] [--escalate] [--] 'WHAT NEXT'   a task or chunk
 #                       session too big to resume is stopped and a fresh one takes its task over, under its name, from the replies
 #                       folder's KEY.md (a chunk: KEY-build.md's handoff); --self, a session hands itself over at its
 #                       context mark, coordinator or not (see the block)
+#                       ; exit 1 the listing, stop or start failed, 2 usage or nothing to hand over from, 3 mid-turn, on
+#                       a prompt or interactive, 5 outside the person's policy (last line `needs your approval: handover …`)
+#        session-status --set ID [--model M] [--effort E] [--mode P] [--up|--down] [--how auto|live|resume|fresh]
+#                       [--why TEXT] [--by lead|pane] [-- 'NEXT'] | --set ID --clear   a session's model, effort or
+#                       permission mode, its conversation kept (set.sh, features/agent-settings.md); exit 1 a listing,
+#                       stop or resume failed or no job state, 2 usage or no such session, 3 busy, waiting, not idle,
+#                       locked or interactive, 4 too big to resume, 5 outside the person's policy (`needs your approval:
+#                       set …`)
 #        session-status --prev-name [NAME]   NAME-prev-K, the name a session renames itself to when it hands off: K the
 #                       lowest free number over every listed session name (NAME: the caller's own); --title also
 #                       titles the caller's terminal tab with it
@@ -240,6 +248,7 @@ exit_fault() {
   case $1 in 0|3|4|12[89]|1[3-9][0-9]|2[0-9][0-9]) return ;; esac
   case $SS_FLAG in --urls|--pending|--agents|--plan|--coordinator-of|--address|--successor|--handover|--resume-ended|--relay|--watch) return ;; esac
   [ "$SS_FLAG:$1" != --report-publish:1 ] || return   # its "publish: no" is an answer; a usage error (2) is logged
+  [ "$SS_FLAG:$1" != --set:5 ] || return   # outside policy: an answer (the user's approval), not a fault
   [ -n "${SESSION_STATUS_PEEK:-}${SESSION_STATUS_FORWARD:-}" ] ||
     bash -c '. "$1" && usage session-status error "$2" "$3"' _ "$SS_LIB" "$1" "${SS_FLAG:-skills/orchestrating-sessions/session-status}" </dev/null >/dev/null 2>&1
 }
@@ -420,8 +429,8 @@ fi
 # and est, with this session's act_K from `retro.py chunks 7 --session` (summed over the sessions its Supersedes: chain
 # reaches; left out if retro fails), go to lib.sh usage as a
 # chunk line; it prints the line or why nothing was logged.
-# bg_cmd PREFIX: `PREFIX --bg`, plus ` --permission-mode default` when that account's settings default to plan mode
-# (--handover and --plan --next start sessions with it).
+# bg_cmd PREFIX [MODE]: `PREFIX --bg`, plus ` --permission-mode default` when that account's settings default to plan mode
+# (--handover and --plan --next start sessions with it); with MODE, ` --permission-mode MODE` instead.
 # pre_dir PREFIX: the config dir a command prefix runs under, no trailing slash.
 pre_dir() {
   local cfg
@@ -429,7 +438,8 @@ pre_dir() {
   printf '%s' "${cfg%/}"
 }
 bg_cmd() {
-  printf '%s --bg' "$1"; [ "$(jq -r '.permissions.defaultMode // empty' "$(pre_dir "$1")/settings.json" 2>/dev/null)" != plan ] || printf ' --permission-mode default'
+  printf '%s --bg' "$1"; [ -z "${2:-}" ] || { printf ' --permission-mode %s' "$2"; return; }
+  [ "$(jq -r '.permissions.defaultMode // empty' "$(pre_dir "$1")/settings.json" 2>/dev/null)" != plan ] || printf ' --permission-mode default'
 }
 if [ "${1:-}" = --plan ]; then
   models= deny=; for k in design build mechanical review release scan; do models+="$k=$(config "plan.models.$k") " d=$(denied_tools "$k") deny+="$k=${d#*=} "; done
@@ -2038,11 +2048,11 @@ killtree() {
 TMP=$(mktemp -d); NPID=; trap 'r=$?; [ -z "$NPID" ] || killtree "$NPID"; rm -rf "$TMP"; exit_fault $r' EXIT
 
 KEYRE=$(key_re "$ADAPTER")
-ACT=; SEND=; COMPACT=; HANDOVER=; PEEK=; WHERE=; ALLP=; YDAY=
+ACT=; SEND=; COMPACT=; HANDOVER=; PEEK=; WHERE=; ALLP=; YDAY=; SET=
 case "${1:-}" in --activity) ACT=1; shift ;; --send-when-idle) SEND=1; shift ;; --compact|--stop) COMPACT=$1; shift ;; --handover) HANDOVER=1; shift ;;
-  --peek) PEEK=1; shift ;; --dir|--diff) WHERE=$1; shift ;; --yesterday) YDAY=1; shift ;; esac
+  --peek) PEEK=1; shift ;; --dir|--diff) WHERE=$1; shift ;; --yesterday) YDAY=1; shift ;; --set) SET=1; shift ;; esac
 [ -n "$ACT" ] && [ "${1:-}" = --all-projects ] && { ALLP=1; shift; }
-if [ -z "$ACT$SEND$COMPACT$HANDOVER$PEEK" ]; then
+if [ -z "$ACT$SEND$COMPACT$HANDOVER$PEEK$SET" ]; then
   repos=$(adapter repos 2>/dev/null) ||
     repos=$(git rev-parse --git-dir >/dev/null 2>&1 && echo . || find . -mindepth 2 -maxdepth 2 -name .git | sed 's#/\.git$##')
   (cd "$ROOT" && while read -r r; do [ -n "$r" ] && (cd "$r" 2>/dev/null && pwd -P); done <<<"$repos") > "$TMP/repos"
@@ -2123,7 +2133,7 @@ messages_job() {
     grep -oE "^$KEYRE" "$NOTICE_ROWS" > "$NOTICE_MINE" 2>/dev/null
   messages_notices
 }
-if [ -n "$COORD$OWNER$ACT$SEND$COMPACT$HANDOVER$PEEK$WHERE$YDAY" ]; then :
+if [ -n "$COORD$OWNER$ACT$SEND$COMPACT$HANDOVER$PEEK$WHERE$YDAY$SET" ]; then :
 else
   # Notices run alongside everything else: the sweep only, like the other footers. Each source (the messages module,
   # the adapter) writes $TMP/notices.SOURCE and its exit code.
@@ -2445,6 +2455,7 @@ if [ -n "$YDAY" ]; then
   exit 0
 fi
 
+if [ -n "$SET" ]; then . "$(dirname "$SELF")/set.sh"; exit $?; fi
 # --compact ID: makes an idle background session run /compact. A running session can't take a command from
 # outside, so it is stopped (its conversation is kept) and resumed under the same id with /compact as its prompt.
 # Only when it's idle: never mid-turn (busy) or while it waits on a prompt (waiting), whose pending call a stop
@@ -2602,22 +2613,41 @@ fi
 # --escalate: the successor runs one rung above that model/effort (lib.sh escalate_rung: effort up to xhigh, then
 # haiku → sonnet → opus, then max), for a session that failed the same way twice (sessions.md, Repeats and reloads); refused (exit 2,
 # nothing stopped) at the top rung or when the old model or effort is unknown. Logs a usage escalate line.
+# Before the plan row and the transcript, each of --model and --effort left out is the old id's override file's (set.sh),
+# when it has one; the file is removed once the successor has started.
+# --mode P (mode_ok) starts the successor with --permission-mode P, in place of the plan-default one. bypassPermissions
+# and plan need --by pane (lib.sh policy_allows; --by lead, the default, is refused with exit 5 and the approval line).
+# A lead's --model, --effort and --mode, and the half of a rung --escalate changes, are checked against the person's
+# policy too (lib.sh policy_allows), before anything is stopped: outside it, exit 5, the last line `needs your
+# approval: handover "NAME" (ID8) with model M, effort E, mode P` (the parts given).
 # The old session's advisor (lib.sh last_advisor) goes onto the line as --advisor A, where it still pairs with the
 # successor's model (lib.sh advisor_ok: none once that is fable, an --escalate to fable too) and, for fable, the
 # account it starts under has it.
 if [ -n "$HANDOVER" ]; then
-  self= model= effort= esc=
+  self= model= effort= esc= mode= by=lead
   if [ "${1:-}" = --self ]; then self=1; want=${CLAUDE_CODE_SESSION_ID:-}; shift; else want=${1:-}; [ $# -gt 0 ] && shift; fi
-  while [ $# -ge 2 ] && case $1 in --model) model=$2; shift ;; --effort) effort=$2; shift ;; --escalate) esc=1 ;; *) false ;; esac; do shift; done
+  while [ $# -ge 2 ] && case $1 in --model) model=$2; shift ;; --effort) effort=$2; shift ;; --mode) mode=$2; shift ;; --by) by=$2; shift ;; --escalate) esc=1 ;; *) false ;; esac; do shift; done
   [ "${1:-}" = -- ] && shift; next=${1:-}
   [ -z "$self" ] || [ -n "$want" ] || { echo "--self: CLAUDE_CODE_SESSION_ID is unset (run it from the session handing itself over)"; exit 2; }
   [ "${#want}" -ge 8 ] && [ -n "$next" ] && [ $# = 1 ] ||
-    { echo "usage: session-status --handover ID|--self [--model M] [--effort E] [--escalate] [--] 'WHAT NEXT' (ID: 8+ characters)"; exit 2; }
+    { echo "usage: session-status --handover ID|--self [--model M] [--effort E] [--mode P] [--by lead|pane] [--escalate] [--] 'WHAT NEXT' (ID: 8+ characters)"; exit 2; }
   [ -z "$model" ] || model_ok "$model" || { echo "--model $model: not a model name like opus (fable only under an account config fable.accounts lists, and not while its Fable limit is reached; leave --model out to keep the old session's)"; exit 2; }
   [ -z "$effort" ] || model_ok opus "$effort" || { echo "--effort $effort: one of low medium high xhigh max"; exit 2; }
+  [ -z "$mode" ] || mode_ok "$mode" || { echo "--mode $mode: one of default manual acceptEdits auto dontAsk plan bypassPermissions"; exit 2; }
+  case $by in lead|pane) ;; *) echo "--by $by: lead or pane"; exit 2 ;; esac
   row=$(find_session "$want") || { echo "couldn't list the sessions; try again"; exit 1; }
   [ -n "$row" ] || { echo "no session $want in any account"; exit 2; }
   read_row id name st pre started cwd kind status pid
+  ho_policy() {   # MODEL EFFORT MODE (an empty one unchecked): outside BY's policy, exit 5 naming the parts given
+    local reason w
+    reason=$(policy_allows "$by" "$1" "$2" "$3") && return 0
+    w=${1:+model $1}; [ -z "$2" ] || w="${w:+$w, }effort $2"; [ -z "$3" ] || w="${w:+$w, }mode $3"
+    [ -z "$reason" ] || echo "$reason"; echo "needs your approval: handover \"$name\" (${id:0:8}) with $w"; exit 5
+  }
+  if [ -n "$model$effort$mode$esc" ]; then   # before anything is stopped or started; a mistyped policy.* value named
+    for k in models max_effort modes; do config "policy.$k" >/dev/null; done
+    [ -z "$model$effort$mode" ] || ho_policy "$model" "$effort" "$mode"
+  fi
   f=$(transcript_of "$id"); [ -n "$f" ] || { echo "no transcript for \"$name\" (${id:0:8}): not handed over"; exit 2; }
   first=$(first_prompt "$f")
   rdir=$(sed -nE 's/.*[Rr]eplies folder[^`]*`([^`]+)`.*/\1/p' CLAUDE.md CLAUDE.local.md 2>/dev/null | head -1); rdir=${rdir%/}
@@ -2651,6 +2681,11 @@ if [ -n "$HANDOVER" ]; then
     [ "$kind" = background ] || { echo "\"$name\" is interactive: close it in its terminal, then hand over"; exit 3; }
   fi
   [ -n "$n" ] || [ -f "$rd/$rf.md" ] || { echo "no $rdir/$rf.md: ask \"$name\" for a status report first, or write one"; exit 2; }
+  # the old id's override file (set.sh): a field kept only where valid, after the flags and before the plan row
+  ovr=${XDG_CACHE_HOME:-$HOME/.cache}/session-status/settings/$id.json
+  vm=$(jq -r '.model | strings' "$ovr" 2>/dev/null); FABLE_OK=1 model_ok "$vm" || vm=
+  ve=$(jq -r '.effort | strings' "$ovr" 2>/dev/null); effort_step "$ve" 0 >/dev/null || ve=
+  model=${model:-$vm}; effort=${effort:-$ve}
   if [ -n "$n" ]; then
     b=$rd/$key-build.md own="\`## c$n: handoff ${id:0:8}\`"
     ! grep -qE "^## c$n: done" "$b" 2>/dev/null || { echo "c$n is done (## c$n: done in $rdir/$key-build.md): nothing to hand over"; exit 2; }
@@ -2677,7 +2712,9 @@ if [ -n "$HANDOVER" ]; then
     [ -n "$model" ] && r=$(escalate_rung "$model" "$effort") ||
       { if [ -n "$model" ] && [ -n "$effort" ]; then echo "--escalate: $model/$effort has no rung above it: not handed over; tell the user"
         else echo "--escalate: the old session's model or effort is unknown (pass --model and --effort of what it ran on): not handed over"; fi; exit 2; }
-    read -r model effort <<<"$r"
+    read -r em ee <<<"$r"   # the policy checks the half the rung changes
+    ho_policy "$([ "$em" = "$model" ] || echo "$em")" "$([ "$ee" = "$effort" ] || echo "$ee")" ''
+    model=$em effort=$ee
   fi
   if [ -n "$pid" ]; then stop_session "$pre" "$id" || { echo "couldn't stop \"$name\" (${id:0:8}): nothing started"; exit 1; }; fi
   base=$name; [[ $name =~ ^(.+)-prev-[0-9]+$ ]] && base=${BASH_REMATCH[1]}   # renamed already by its own handoff
@@ -2714,9 +2751,10 @@ if [ -n "$HANDOVER" ]; then
   oa=$(last_advisor "$f")
   [ -z "$oa" ] || { [ -n "$model" ] && FABLE_OK=1 advisor_ok "$model" "$oa" && { [ "$oa" != fable ] || ! fable_no "$(pre_dir "$acct")"; }; } || oa=
   pm+=${oa:+ --advisor $oa}
-  out=$(bash -c "$(bg_cmd "$acct")$pm -n \"\$0\" \"\$1\"" "$new" "$text" 2>&1)
+  out=$(bash -c "$(bg_cmd "$acct" "$mode")$pm -n \"\$0\" \"\$1\"" "$new" "$text" 2>&1)
   nid=$(grep -oE 'backgrounded · [0-9a-f]{8}' <<<"$out" | tail -1); nid=${nid##* }
   [ -n "$nid" ] || { echo "${pid:+stopped \"$name\" (${id:0:8}), but }the new session didn't start: $(tail -1 <<<"$out")"; exit 1; }
+  rm -f "$ovr"
   [ -z "$esc" ] || usage "$([ -n "$n" ] && echo chunk || echo task)" escalate "${model%\[1m\]}" "$effort" "$base"
   if [ -n "$self" ]; then
     # A background caller is stopped once its turn ends, as a coordinator's --handover stops it, from a detached

@@ -38,6 +38,7 @@ const actionResult = atom({ plugin: 'session-orchestration', key: 'actionResult'
 const actionBusy = atom({ plugin: 'session-orchestration', key: 'actionBusy' } as const, null)
 const activity = atom({ plugin: 'session-orchestration', key: 'activity' } as const, '')
 const compacting = atom({ plugin: 'session-orchestration', key: 'compacting' } as const, [])
+const setting = atom({ plugin: 'session-orchestration', key: 'setting' } as const, [])
 const naming = atom({ plugin: 'session-orchestration', key: 'naming' } as const, null)
 const reloading = atom({ plugin: 'session-orchestration', key: 'reloading' } as const, false)
 const asksOpen = atom({ plugin: 'session-orchestration', key: 'asksOpen' } as const, [])
@@ -288,6 +289,7 @@ export const BUILTIN_KEYS: Record<string, string> = {
   r: 'Refresh', ...Object.fromEntries(FIXES.map(f => [f.hotkey, f.label])), a: 'Attach', u: 'Refresh (row)',
   k: 'Ask', x: 'Dismiss', c: 'Copy command', z: 'Compact', p: 'Peek', d: 'Diff', w: 'All projects', e: 'Archive',
   t: 'Attach in tab', l: 'Logs in split', y: 'Daily brief', b: 'Earlier day', n: 'Later day', s: 'Brief or list',
+  h: 'Up a rung', v: 'Down a rung',
 }
 const taken = (key: string) => /^\d$/.test(key) ? 'a 1-9 item key' : BUILTIN_KEYS[key]
 
@@ -1262,6 +1264,19 @@ const handedDir = ($: EngineInterface) => homePath($, HANDED_DIR)
 // context-watch.sh's stamps, ${XDG_CACHE_HOME:-$HOME/.cache}/session-status: an empty XDG_CACHE_HOME is unset there (||).
 const stampDir = async ($: EngineInterface) => `${(await $.env.get('XDG_CACHE_HOME').catch(() => undefined)) ||
   `${(await $.env.get('HOME').catch(() => undefined)) ?? ''}/.cache`}/session-status`
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+// A live override file (session-status --set): its valid model and effort; a bad field is dropped, undefined when none is left.
+export function parseOverride(text: string): { model?: string; effort?: (typeof EFFORTS)[number] } | undefined {
+  let raw: unknown
+  try { raw = JSON.parse(text) } catch { return undefined }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
+  const { model, effort } = raw as Record<string, unknown>
+  const out: { model?: string; effort?: (typeof EFFORTS)[number] } = {}
+  if (typeof model === 'string' && /^[a-z][a-z0-9.-]*(\[1m\])?$/.test(model)) out.model = model
+  const level = EFFORTS.find(l => l === effort)
+  if (level) out.effort = level
+  return out.model || out.effort ? out : undefined
+}
 let lastWeekly: string | undefined // the line this session last wrote
 // The usage file's line, "PERCENT<TAB>RESETS" (epoch s), from the seven_day window; undefined without one that resets.
 export function weeklyLine(limits: SessionRateLimit[]): string | undefined {
@@ -1539,6 +1554,22 @@ async function watchInbox($: EngineInterface, url: string) {
   if (w?.auto_reply === 'armed') return ' Review inbox watched: its decisions wake you.'
   if (w?.watching) return ` Review inbox watched but not armed, so its comments don't wake you: ask the user to paste ${url} once, then ArtifactComments watch it.`
   return ` Review inbox not watched (${oneLine(r.deny ?? r.text ?? '') || 'no answer'}): ArtifactComments watch ${url} yourself.`
+}
+
+// A card's Up/Down a rung: session-status --set <id> --up|--down --by pane (run by the pane, so `--by pane` is legitimate).
+// Exit: 0 done, 1 failed, 2 usage or no session, 3 busy/locked/interactive, 4 too big, 5 needs approval: the toast says the command's own line.
+async function runSet($: EngineInterface, id: string, name: string, args: string[]) {
+  let taken = false // checked and marked in one write: a second press before the redraw finds it busy
+  await update($, setting, l => ((taken = !l.includes(id)) ? [...l, id] : l))
+  if (!taken) return $.ui.toast(`Settings "${name}" is already changing`)
+  try {
+    const r = await runBash($, [`${$.plugin.root}/skills/orchestrating-sessions/session-status`, '--set', id, ...args, '--by', 'pane'], { timeoutMs: 60_000 })
+    $.ui.toast(r.exitCode === 0 ? oneLine(r.stdout.split('\n')[0]) : `Settings "${name}": ${oneLine(r.stdout || r.stderr) || `exit ${r.exitCode}`}`)
+  } catch (err) {
+    $.ui.toast(`Settings "${name}" failed: ${err instanceof Error ? err.message : String(err)}`)
+  } finally {
+    await update($, setting, l => l.filter(x => x !== id))
+  }
 }
 
 async function runCompact($: EngineInterface, id: string, name: string) {
@@ -1903,6 +1934,14 @@ export const register: Register = on => {
     return done
   })
 
+  // The main loop applies the live override file to each model request; a failed read is no override.
+  on('turn.step', async function* ($, e, next) {
+    if (e.agentId !== undefined) return yield* next(e)
+    const text = await $.session.id().then(async id => String(await $.fs.read(`${await stampDir($)}/settings/${id}.json`)), () => undefined).catch(() => undefined)
+    const o = text === undefined ? undefined : parseOverride(text)
+    return yield* next(o ? { ...e, ...o } : e)
+  })
+
   // The commands a tool call queued for the turn's end: /rename (open_pane, name_session), then /reload-plugins (reload_plugins).
   // First, a tool of this plugin the engine retracted since the last turn (TOOLS): registered again, for the next prompt.
   on('turn.complete', async ($, e, next) => {
@@ -2112,6 +2151,11 @@ export const register: Register = on => {
       if (running) return act('z', 'Compacting…', () => runCompact($, running, a?.name ?? id))
       return a && canCompact(a) && act('z', 'Compact', () => runCompact($, a.id, a.name))
     }
+    // A card's Up/Down a rung (model and effort): any session with activity.
+    const rungActs = (a: Activity | undefined) => a ? [
+      act('h', 'Up a rung', () => runSet($, a.id, a.name, ['--up'])),
+      act('v', 'Down a rung', () => runSet($, a.id, a.name, ['--down'])),
+    ] : []
     // A row names its session by name: two live sessions of one name, and neither's activity shows.
     const activityOf = (name: string) => {
       const [a, ...more] = acts_.filter(x => x.name === name)
@@ -2415,6 +2459,7 @@ export const register: Register = on => {
           ...(g ? g.rest : []),
           act('u', rowBusy.includes(t.key) ? 'Refreshing…' : 'Refresh', refreshRow(t.key)),
           compactAct(sa),
+          ...rungActs(sa),
           ...viewActs(id, sid, [t.key, ...(sid ? [sid] : [])]),
           act('k', 'Ask', ask(`task ${t.key}${about ? ` (${about})` : ''}`)),
         ),
@@ -2444,6 +2489,7 @@ export const register: Register = on => {
           detail(accent, '│', <Text dimColor wrap="truncate-end">{w.command}</Text>),
           bar(accent, ...sessActs(w.command, w.name, wa, true).all,
             unanswered ? act('s', 'Stop', stopNow(w.id)) : compactAct(wa, w.id),
+            ...rungActs(wa),
             ...viewActs(id, w.id, [...(key ? [key] : []), w.id]),
             act('k', 'Ask', ask(`the session "${w.name}" that waits on me`))),
           ...peekView(id, accent),
@@ -2474,6 +2520,7 @@ export const register: Register = on => {
           // Superseded: its task moved on, so Stop (no need to ask, resuming.md) rather than Compact.
           bar(accent, ...sessActs(o.command, o.name, oa).all,
             o.superseded ? act('s', 'Stop', stopNow(o.id)) : compactAct(oa, o.id),
+            ...rungActs(oa),
             ...viewActs(id, o.id, [o.id]),
             act('k', 'Ask', ask(`the session "${o.name}"`))),
           ...peekView(id, accent),

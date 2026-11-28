@@ -37,7 +37,7 @@ check() {
 
 check node 22
 check claude 2.1.330
-for t in jq python3 gh git perl curl tmux; do check "$t"; done
+for t in jq python3 gh git perl curl tmux openssl; do check "$t"; done
 
 repo=$(git rev-parse --show-toplevel 2>/dev/null) || repo=
 [ -n "$repo" ] || repo=$PWD

@@ -6,14 +6,14 @@ const PANE = { plugin: 'session-orchestration', component: 'Pane', requestId: 'c
 const PROPS = { title: 'Coordinator', isFocused: false, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} } as const
 
 test('the actions file loads its good entries and names each bad one', () => {
-  expect(parseActions('[{"label":"Sign in","hotkey":"v","command":"gh auth login","when":"! gh auth status"}]'))
-    .toEqual({ list: [{ label: 'Sign in', hotkey: 'v', command: 'gh auth login', when: '! gh auth status' }], errors: [] })
+  expect(parseActions('[{"label":"Sign in","hotkey":"i","command":"gh auth login","when":"! gh auth status"}]'))
+    .toEqual({ list: [{ label: 'Sign in', hotkey: 'i', command: 'gh auth login', when: '! gh auth status' }], errors: [] })
   expect(parseActions('{').errors[0]).toMatch(/^\.claude\/coordinator-actions\.json: not JSON/)
   expect(parseActions('{"label":"x"}').errors).toEqual(['.claude/coordinator-actions.json: not a list of actions'])
   const { list, errors } = parseActions(JSON.stringify([
-    { label: 'Ok', hotkey: 'v', command: 'true' },
+    { label: 'Ok', hotkey: 'i', command: 'true' },
     { label: 'Ask clash', hotkey: 'k', command: 'true' },
-    { label: 'Dup', hotkey: 'v', command: 'true' },
+    { label: 'Dup', hotkey: 'i', command: 'true' },
     { label: 'Digit', hotkey: '1', command: 'true' },
     { label: 'No command', hotkey: 'j' },
     { label: 'Typo', hotkey: 'q', command: 'true', When: 'false' },
@@ -22,7 +22,7 @@ test('the actions file loads its good entries and names each bad one', () => {
   expect(list.map(a => a.label)).toEqual(['Ok'])
   expect(errors).toEqual([
     '.claude/coordinator-actions.json #2 "Ask clash": hotkey "k" is the pane\'s own (Ask)',
-    '.claude/coordinator-actions.json #3 "Dup": hotkey "v" is taken by "Ok"',
+    '.claude/coordinator-actions.json #3 "Dup": hotkey "i" is taken by "Ok"',
     '.claude/coordinator-actions.json #4 "Digit": hotkey must be one lowercase letter',
     '.claude/coordinator-actions.json #5 "No command": command must be a non-empty string',
     '.claude/coordinator-actions.json #6 "Typo": unknown field "When"',
@@ -35,9 +35,9 @@ test('fix lines: only at the start of a line, deduped against the file, given a 
   expect(st.fixes).toEqual(['fix: Sign in → gh auth login', 'fix: oops']) // the notice is someone else's words
   expect(st.other).toEqual([])
   expect(parseFix('fix: Re-login -> npx cli login')).toEqual({ label: 'Re-login', command: 'npx cli login' })
-  const { list, errors } = paneActions([{ label: 'Sign in', hotkey: 'v', command: 'gh auth login' }], [...st.fixes, 'fix: Kick auth → login'])
+  const { list, errors } = paneActions([{ label: 'Sign in', hotkey: 'g', command: 'gh auth login' }], [...st.fixes, 'fix: Kick auth → login'])
   expect(list).toEqual([
-    { label: 'Sign in', hotkey: 'v', command: 'gh auth login' }, // the file's, not the fix line's
+    { label: 'Sign in', hotkey: 'g', command: 'gh auth login' }, // the file's, not the fix line's
     { label: 'Kick auth', hotkey: 'i', command: 'login' }, // k is Ask's
   ])
   expect(errors).toEqual(['bad fix line (want "fix: LABEL → COMMAND"): fix: oops'])
@@ -59,7 +59,7 @@ test('an action shows while its when passes and the fix line is there; pressing 
   })
   on('fs.exists', async (_, e) => ({ value: e.path === '/proj/.claude/coordinator-actions.json' }))
   on('fs.read', async () => ({ value: JSON.stringify([
-    { label: 'Sign in', hotkey: 'v', command: 'gh auth login', when: '! gh auth status' },
+    { label: 'Sign in', hotkey: 'i', command: 'gh auth login', when: '! gh auth status' },
     { label: 'Bad', hotkey: 'r', command: 'x' },
   ]) }))
   const prompts: string[] = []

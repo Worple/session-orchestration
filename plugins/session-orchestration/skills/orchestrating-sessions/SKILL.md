@@ -202,6 +202,8 @@ without asking the user: they signed in for it.
   Before telling the user, check it against what the status command shows (PR state, unpushed commits, tracker
   status, as far as the project's adapter gives them) and the check the report's `Done:` line names. Neither shows
   it: ask the session, and report the task as not done yet.
+- **Change a running session's model, effort or mode with `--set`**
+  ([features/agent-settings.md](../../features/agent-settings.md)); never by handover alone.
 - **A worker's handover is not news.** A session at its context mark hands itself over (`--handover --self`; its
   row shows `superseded by`) without a message: don't tell the user. Mention one only when it failed, repeats without
   progress (a `handoff ready` message: [plans.md](plans.md)), or changes what waits on the user.

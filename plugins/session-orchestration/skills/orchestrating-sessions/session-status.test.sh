@@ -1025,6 +1025,198 @@ setacct .claude-work "$(sess "$rid" rev idle 1)"
 [ "$(run --outbox | cut -f2)" = "$rid" ] || { echo "--outbox, no socket: $(run --outbox)"; exit 1; }
 fi
 
+if section set; then
+# --set (features/agent-settings.md), against accounts_claude; rid last ran on opus/max (its transcript's last reply).
+# Live: the override file, merged, and a log line, nothing stopped. A mode: stopped while idle, its job's saved options
+# (J: Claude Code's jobs/ID8/state.json respawnFlags) rewritten with the current model and effort and the mode, and
+# resumed without flags under its id, the override file gone. Refused, nothing stopped: busy, waiting, interactive or
+# locked (exit 3), over the resume limit (4), outside policy (5), a bad value or no change (2), no job state (1).
+accounts_claude
+rid=22222222-2222-3333-4444-555555555555
+printf '%s\n' '{"type":"user","message":{"content":"Review the PR"}}' \
+  '{"type":"assistant","requestedModel":"opus","effort":"max","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"hi"}]}}' > "$proj/$rid.jsonl"
+J=$tmp/cfg/jobs/22222222/state.json; mkdir -p "${J%/*}"
+jq -n --arg id "$rid" '{sessionId: $id, name: "rev", state: "running", respawnFlags: ["-n", "rev", "--model", "opus", "--effort", "max"]}' > "$J"
+O() { cat "$tmp/.cache/session-status/settings/$rid.json"; }
+LOG() { tail -1 "$(pof "$root")/settings.jsonl"; }
+# a lead may loosen a mode only where the person's policy.modes says so (the default is default and manual)
+wide() { echo '{"policy":{"modes":["default","manual","acceptEdits","auto"]}}' > "$root/.claude/coordination.local.json"; }
+wide
+# 1. live: a model for its next request, an effort for its next turn; logged, nothing stopped or resumed
+setacct cfg "$(sess "$rid" rev idle 1)"
+out=$(run --set "$rid" --model sonnet --effort low --why cheap) &&
+  [ "$out" = '"rev" (22222222): model sonnet from its next request, effort low from its next turn (live)' ] &&
+  [ "$(O | jq -r '"\(.model) \(.effort) \(.by) \(.why)"')" = 'sonnet low lead cheap' ] &&
+  [ "$(LOG | jq -r '"\(.tier) \(.old.model) \(.new.model)"')" = 'live opus sonnet' ] && ! calls | grep -q 'stop\|--bg' ||
+  { echo "set live failed: $out / $(O) / $(LOG)"; exit 1; }
+# 2. merged into the override file
+out=$(run --set "$rid" --effort high) && [ "$out" = '"rev" (22222222): effort high from its next turn (live)' ] &&
+  [ "$(O | jq -r '.model+" "+.effort')" = 'sonnet high' ] || { echo "set live merge failed: $out / $(O)"; exit 1; }
+# 3. a rung up from the override file's values; a rung down from the transcript's (opus/max) once it's gone
+run --set "$rid" --up >/dev/null && [ "$(O | jq -r '.model+" "+.effort')" = 'sonnet xhigh' ] || { echo "set --up failed: $(O)"; exit 1; }
+rm "$tmp/.cache/session-status/settings/$rid.json"
+# only the half a rung changes is written: a model nobody changed isn't pinned
+run --set "$rid" --down >/dev/null && [ "$(O | jq -c '[.model, .effort]')" = '[null,"xhigh"]' ] || { echo "set --down failed: $(O)"; exit 1; }
+run --set "$rid" --up >/dev/null && [ "$(O | jq -c '[.model, .effort]')" = '[null,"max"]' ] || { echo "set --up, effort only: $(O)"; exit 1; }
+# --clear: the override file goes, logged with "new": {} (why: cleared); with none, it says so; alone or a usage error
+out=$(run --set "$rid" --clear) && [ "$out" = '"rev" (22222222): live override cleared' ] &&
+  [ ! -e "$tmp/.cache/session-status/settings/$rid.json" ] && [ "$(LOG | jq -c '[.tier, .by, .why, .new]')" = '["live","lead","cleared",{}]' ] &&
+  ! calls | grep -q 'stop\|--bg' || { echo "set --clear: $out / $(LOG)"; exit 1; }
+out=$(run --set "$rid" --clear) && [ "$out" = '"rev" (22222222): no live override' ] || { echo "set --clear with none: $out"; exit 1; }
+for bad in '--model sonnet' '--up' '--mode default' '--how resume'; do
+  rc=0; out=$(run --set "$rid" --clear $bad) || rc=$?; [ $rc = 2 ] || { echo "set --clear $bad: $rc $out"; exit 1; }; done
+# live while it isn't running: from when it next runs
+setacct cfg "$(sess "$rid" rev '' null)"
+out=$(run --set "$rid" --effort xhigh) && [ "$out" = '"rev" (22222222): effort xhigh when it next runs (live)' ] &&
+  ! calls | grep -q 'stop\|--bg' || { echo "set live, not running: $out"; exit 1; }
+# 4. a mode: stopped while idle, its saved options rewritten (the current model and effort, the mode; the rest kept in
+# order), resumed with no flags under its id (flags would start a copy); the override file and the lock gone, logged
+setacct cfg "$(sess "$rid" rev idle 1)"
+out=$(run --set "$rid" --mode acceptEdits --why trust) && c=$(calls | grep -v ' agents ') &&
+  [ "$out" = '"rev" (22222222): mode acceptEdits, resumed under its own id (resume)' ] &&
+  [[ $c == "$(printf 'cfg stop 22222222\ncfg --bg --resume %s Settings changed by lead: mode acceptEdits (trust). ' "$rid")"* ]] &&
+  ! grep -q -- '--model\|--effort\|--permission-mode' <<<"$c" &&
+  [ "$(jq -c .respawnFlags "$J")" = '["-n","rev","--model","opus","--effort","xhigh","--permission-mode","acceptEdits"]' ] &&
+  [ "$(jq -r .sessionId "$J")" = "$rid" ] && [ "$(ls -A "${J%/*}")" = state.json ] &&
+  [ ! -e "$tmp/.cache/session-status/settings/$rid.json" ] && [ ! -e "$tmp/.cache/session-status/compact-$rid" ] &&
+  [ "$(LOG | jq -r .tier)" = resume ] || { echo "set resume failed: $out / ${c:-} / $(jq -c .respawnFlags "$J")"; exit 1; }
+# a resume that fails after the stop says so (exit 1); the job state is byte for byte as it was, the override file
+# back, the lock gone
+setacct cfg "$(sess "$rid" rev idle 1)"; echo '{"effort":"low","by":"lead","why":"","at":1}' > "$tmp/.cache/session-status/settings/$rid.json"
+cp "$J" "$tmp/state.before"
+rc=0; out=$(FAIL_BG_IN=cfg run --set "$rid" --mode auto) || rc=$?
+[ $rc = 1 ] && grep -q '^stopped "rev" (22222222), but its resume failed' <<<"$out" && cmp -s "$J" "$tmp/state.before" &&
+  [ "$(ls -A "${J%/*}")" = state.json ] && [ "$(O | jq -r .effort)" = low ] &&
+  [ "$(ls -A "$tmp/.cache/session-status/settings")" = "$rid.json" ] && [ ! -e "$tmp/.cache/session-status/compact-$rid" ] ||
+  { echo "set failed resume: $rc $out / $(jq -c .respawnFlags "$J")"; exit 1; }
+rm "$tmp/.cache/session-status/settings/$rid.json"; calls >/dev/null
+# bgdo CMD: the stub claude runs the shell line CMD before it answers a --bg (bgdone: as it was)
+bgdo() { mv "$tmp/bin/claude" "$tmp/bin/claude.real"
+  printf '#!/bin/sh\n[ "$1" != --bg ] || { %s; }\nexec "%s" "$@"\n' "$1" "$tmp/bin/claude.real" > "$tmp/bin/claude"; chmod +x "$tmp/bin/claude"; }
+bgdone() { mv -f "$tmp/bin/claude.real" "$tmp/bin/claude"; }
+# a failed resume whose job state can't be put back: a copy of the original beside it, named; never "settings unchanged"
+setacct cfg "$(sess "$rid" rev idle 1)"; bgdo "chmod 000 '$J'"
+rc=0; out=$(FAIL_BG_IN=cfg run --set "$rid" --mode auto) || rc=$?; bgdone; chmod 644 "$J"
+[ $rc = 1 ] && grep -qF "the original is ~/cfg/jobs/22222222/state.json.before-set" <<<"$out" && cmp -s "$J.before-set" "$tmp/state.before" &&
+  ! grep -q 'settings unchanged' <<<"$out" && [ "$(jq -r '.respawnFlags | index("auto") != null' "$J")" = true ] ||
+  { echo "set failed restore: $rc $out"; exit 1; }
+cp "$tmp/state.before" "$J"; rm "$J.before-set"; calls >/dev/null
+# a failed resume whose override file can't go back: it stays where it was put aside, named
+setacct cfg "$(sess "$rid" rev idle 1)"; echo '{"effort":"low","by":"lead","why":"","at":1}' > "$tmp/.cache/session-status/settings/$rid.json"
+bgdo "chmod a-w '$tmp/.cache/session-status/settings'"
+rc=0; out=$(FAIL_BG_IN=cfg run --set "$rid" --mode auto) || rc=$?; bgdone; chmod u+w "$tmp/.cache/session-status/settings"
+held=$(ls -A "$tmp/.cache/session-status/settings")
+[ $rc = 1 ] && [[ $held == ".$rid.held."* ]] && grep -qF "couldn't put the override file back: it is ~/.cache/session-status/settings/$held" <<<"$out" &&
+  [ "$(jq -r .effort "$tmp/.cache/session-status/settings/$held")" = low ] && cmp -s "$J" "$tmp/state.before" ||
+  { echo "set failed resume, override not put back: $rc $out / $held"; exit 1; }
+rm "$tmp/.cache/session-status/settings/$held"; calls >/dev/null
+# 5. a mode mid-turn, on a prompt or otherwise not idle (as --compact): refused, nothing stopped
+for st in busy waiting; do setacct cfg "$(sess "$rid" rev $st 1)"
+  rc=0; out=$(run --set "$rid" --mode auto) || rc=$?; [ $rc = 3 ] && ! calls | grep -q 'stop\|--bg' || { echo "set $st not refused: $rc $out"; exit 1; }; done
+setacct cfg "$(sess "$rid" rev '' 1)"
+rc=0; out=$(run --set "$rid" --mode auto) || rc=$?
+[ $rc = 3 ] && [ "$out" = '"rev" (22222222) is blocked, not idle: not stopped; try when it is idle' ] && ! calls | grep -q 'stop\|--bg' ||
+  { echo "set while not idle: $rc $out"; exit 1; }
+# 6. interactive: a mode is refused (no resume); a model still changes live
+setacct cfg "$(sess "$rid" rev idle 1 interactive)"
+rc=0; out=$(run --set "$rid" --mode auto) || rc=$?
+[ $rc = 3 ] && grep -q interactive <<<"$out" && ! calls | grep -q 'stop\|--bg' || { echo "set interactive mode not refused: $rc $out"; exit 1; }
+out=$(run --set "$rid" --model sonnet) && [ "$out" = '"rev" (22222222): model sonnet from its next request (live)' ] &&
+  ! calls | grep -q 'stop\|--bg' || { echo "set interactive model failed: $out"; exit 1; }
+# 7. outside policy (--by lead): exit 5, nothing stopped, the ask the last line; bypassPermissions is never a lead's;
+# --by pane (typed in the user's own terminal) sets it
+setacct cfg "$(sess "$rid" rev idle 1)"
+echo '{"policy":{"modes":["manual"]}}' > "$root/.claude/coordination.local.json"
+rc=0; out=$(run --set "$rid" --mode auto) || rc=$?
+[ $rc = 5 ] && [ "$(tail -1 <<<"$out")" = 'needs your approval: set "rev" (22222222) to mode auto' ] && ! calls | grep -q 'stop\|--bg' ||
+  { echo "set outside policy not refused: $rc $out"; exit 1; }
+rc=0; out=$(run --set "$rid" --mode bypassPermissions) || rc=$?
+[ $rc = 5 ] && ! calls | grep -q 'stop\|--bg' || { echo "set bypassPermissions by lead not refused: $rc $out"; exit 1; }
+# exit 5 is an answer, not a fault: telemetry logs the failed resume's exit 1 above, never these
+U=$tmp/state/session-orchestration/usage.jsonl
+grep -q '"n":1,"at":"--set"' "$U" && ! grep -q '"n":5,"at":"--set"' "$U" || { echo "set telemetry: $(cat "$U" 2>&1)"; exit 1; }
+out=$(run --set "$rid" --by pane --mode bypassPermissions) && c=$(calls | grep -v ' agents ') &&
+  [[ $c == *"cfg --bg --resume $rid Settings changed by pane: mode bypassPermissions. "* ]] &&
+  jq -e '(.respawnFlags | index(["--permission-mode", "bypassPermissions"])) and ([.respawnFlags[] | select(. == "--permission-mode")] | length == 1)' "$J" >/dev/null ||
+  { echo "set bypassPermissions by pane failed: $out / ${c:-} / $(jq -c .respawnFlags "$J")"; exit 1; }
+# a resume that leaves the mode keeps the saved one; a replaced --model=… or --effort=… entry goes; the rest stays in order
+jq '.respawnFlags = ["-n", "rev", "--model=opus", "--plugin-dir", "/p", "--effort=max", "--permission-mode", "bypassPermissions"]' "$J" > "$J.t" && mv "$J.t" "$J"
+out=$(run --set "$rid" --model sonnet --effort high --how resume) &&
+  [ "$(jq -c .respawnFlags "$J")" = '["-n","rev","--plugin-dir","/p","--permission-mode","bypassPermissions","--model","sonnet","--effort","high"]' ] ||
+  { echo "set resume without a mode: $out / $(jq -c .respawnFlags "$J")"; exit 1; }
+calls >/dev/null
+# mid: last ran on claude-opus-5-5/high (no requestedModel), started with --model opus and the skip-permissions flags
+mid=33333333-2222-3333-4444-555555555555 MJ=$tmp/cfg/jobs/33333333/state.json; mkdir -p "${MJ%/*}"
+printf '%s\n' '{"type":"user","message":{"content":"Tidy up"}}' \
+  '{"type":"assistant","effort":"high","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"hi"}]}}' > "$proj/$mid.jsonl"
+jq -n --arg id "$mid" '{sessionId: $id, respawnFlags: ["-n", "m", "--dangerously-skip-permissions", "--model", "opus", "--effort", "high", "--allow-dangerously-skip-permissions"]}' > "$MJ"
+# a mode-only resume keeps the saved --model opus (an alias, never pinned to the transcript's full id) and --effort; a
+# mode set drops the skip-permissions flags, which would outrank it
+setacct cfg "$(sess "$mid" m idle 1)"
+out=$(run --set "$mid" --mode default --by pane) &&
+  [ "$(jq -c .respawnFlags "$MJ")" = '["-n","m","--model","opus","--effort","high","--permission-mode","default"]' ] ||
+  { echo "set mode-only resume: $out / $(jq -c .respawnFlags "$MJ")"; exit 1; }
+# not running: the saved options get the change (and the override file's fields), the override file goes, logged as
+# resume; nothing stopped or woken
+setacct cfg "$(sess "$mid" m '' null)"; calls >/dev/null; wide
+echo '{"effort":"low","by":"lead","why":"","at":1}' > "$tmp/.cache/session-status/settings/$mid.json"
+out=$(run --set "$mid" --mode auto) &&
+  [ "$out" = '"m" (33333333): mode auto when it next runs (resume)' ] &&
+  [ "$(jq -c .respawnFlags "$MJ")" = '["-n","m","--model","opus","--effort","low","--permission-mode","auto"]' ] &&
+  [ ! -e "$tmp/.cache/session-status/settings/$mid.json" ] && [ "$(LOG | jq -r '"\(.tier) \(.id)"')" = "resume $mid" ] &&
+  ! calls | grep -q 'stop\|--bg' && [ ! -e "$tmp/.cache/session-status/compact-$mid" ] ||
+  { echo "set resume, not running: $out / $(jq -c .respawnFlags "$MJ")"; exit 1; }
+# a policy.* value that isn't valid says so, and refuses a lead's change (exit 5): a mistyped limit still limits
+setacct cfg "$(sess "$rid" rev idle 1)"; calls >/dev/null
+echo '{"policy":{"max_effort":"extreme"}}' > "$root/.claude/coordination.local.json"
+rc=0; out=$(run --set "$rid" --model sonnet 2>&1) || rc=$?
+[ $rc = 5 ] && grep -qxF 'warning: config policy.max_effort=extreme is not valid: using the default' <<<"$out" &&
+  grep -qxF 'policy.max_effort is not valid: fix it in your personal config' <<<"$out" &&
+  [ "$(tail -1 <<<"$out")" = 'needs your approval: set "rev" (22222222) to model sonnet' ] && ! calls | grep -q 'stop\|--bg' ||
+  { echo "set with an invalid policy value: $rc $out"; exit 1; }
+wide; calls >/dev/null
+# no job state, one of another session (a short-id clash) or without respawnFlags (Claude Code's file is undocumented):
+# exit 1, nothing stopped, pointing to --how fresh
+setacct cfg "$(sess "$rid" rev idle 1)"; mv "$J" "$tmp/state.keep"
+for bad in none '.sessionId = "22222222-0000-0000-0000-000000000000"' '.respawnFlags = "-n rev"'; do
+  [ "$bad" = none ] || jq "$bad" "$tmp/state.keep" > "$J"
+  rc=0; out=$(run --set "$rid" --mode auto) || rc=$?
+  [ $rc = 1 ] && grep -q "can't change its saved options (no job state): try --how fresh$" <<<"$out" && ! calls | grep -q 'stop\|--bg' ||
+    { echo "set with job state $bad: $rc $out"; exit 1; }
+done
+mv "$tmp/state.keep" "$J"
+# 8. over the resume limit: exit 4, nothing stopped, naming --how fresh
+xid=77777777-2222-3333-4444-555555555555
+printf '%s\n' '{"type":"user","message":{"content":"Big task"}}' \
+  '{"type":"assistant","message":{"usage":{"input_tokens":2,"cache_read_input_tokens":600000,"cache_creation_input_tokens":20000},"content":[{"type":"text","text":"hi"}]}}' > "$proj/$xid.jsonl"
+setacct cfg "$(sess "$xid" big idle 1)"
+rc=0; out=$(run --set "$xid" --mode auto) || rc=$?
+[ $rc = 4 ] && grep -qF -- '--how fresh' <<<"$out" && ! calls | grep -q 'stop\|--bg' || { echo "set over the resume limit: $rc $out"; exit 1; }
+# 9. a value the CLI wouldn't take, no change, a short id, an unknown one, a mode live: exit 2, nothing run
+setacct cfg "$(sess "$rid" rev idle 1)"
+rc=0; out=$(run --set "$rid" --effort extreme) || rc=$?; [ $rc = 2 ] || { echo "set --effort extreme: $rc $out"; exit 1; }
+rc=0; out=$(run --set "$rid") || rc=$?; [ $rc = 2 ] && grep -q '^usage:' <<<"$out" || { echo "set with no change: $rc $out"; exit 1; }
+rc=0; out=$(run --set 1234) || rc=$?; [ $rc = 2 ] || { echo "set 1234: $rc $out"; exit 1; }
+rc=0; out=$(run --set 99999999 --mode auto) || rc=$?; [ $rc = 2 ] || { echo "set unknown id: $rc $out"; exit 1; }
+rc=0; out=$(run --set "$rid" --mode auto --how live) || rc=$?; [ $rc = 2 ] || { echo "set a mode live: $rc $out"; exit 1; }
+! calls | grep -q 'stop\|--bg' || { echo "set usage errors ran something"; exit 1; }
+# 10. a --compact (or another --set) holds its lock: exit 3, nothing stopped, the lock left
+mkdir -p "$tmp/.cache/session-status/compact-$rid"
+rc=0; out=$(run --set "$rid" --mode auto) || rc=$?
+[ $rc = 3 ] && grep -q 'being compacted' <<<"$out" && [ -d "$tmp/.cache/session-status/compact-$rid" ] && ! calls | grep -q 'stop\|--bg' ||
+  { echo "set while locked: $rc $out"; exit 1; }
+# 11. fresh: --handover with only what changes (it reads the override file itself): another model doesn't take the
+# old one's effort along (opus/max here)
+fid=44444444-2222-3333-4444-555555555555
+printf '%s\n' '{"type":"user","message":{"content":"Work on ABC-50"}}' \
+  '{"type":"assistant","requestedModel":"opus","effort":"max","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"hi"}]}}' > "$proj/$fid.jsonl"
+printf -- '- Replies folder (for reports): `replies/`.\n' > "$root/CLAUDE.md"; mkdir -p "$root/replies"; echo state > "$root/replies/ABC-50.md"
+setacct cfg "$(sess "$fid" ABC-50 idle 1)"; calls >/dev/null
+out=$(run --set "$fid" --model haiku --how fresh -- 'Then land it.') && c=$(calls | grep -v ' agents ') &&
+  grep -q '^cfg --bg --model haiku -n ABC-50 Work on ABC-50: continue from replies/ABC-50.md. Then land it.' <<<"$c" &&
+  [ "$(LOG | jq -r '"\(.tier) \(.id)"')" = "fresh $fid" ] || { echo "set fresh: $out / ${c:-}"; exit 1; }
+fi
+
 if section handover; then
 accounts_claude   # and an adapter, so --init --check is configured:
 printf '#!/bin/sh\nexit 2\n' > "$root/.claude/session-status-adapter"; chmod +x "$root/.claude/session-status-adapter"
@@ -1274,6 +1466,47 @@ printf '## c3b: handoff\nstate\n' > "$root/replies/PROJ-9-build.md"
 for bad in '--model fable' '--model claude-fable-5-1' '--effort ultra' '--model'; do
   out=$(run --handover "$kid" $bad -- 'x') && rc=0 || rc=$?
   [ "$rc" = 2 ] && ! calls | grep -q 'stop\|--bg' || { echo "handover $bad not refused: $out"; exit 1; }; done
+# The override file of the old id (skills/orchestrating-sessions/set.sh) stands in for flags left out; it goes after success.
+ovd=$tmp/.cache/session-status/settings; mkdir -p "$ovd"; echo '{"model":"sonnet","effort":"low","by":"lead","why":"x","at":1}' > "$ovd/$kid.json"
+calls >/dev/null; run --handover "$kid" -- 'x' >/dev/null; c=$(calls)
+grep -q '^cfg --bg --model sonnet --effort low -n PROJ-9-c3b ' <<<"$c" && [ ! -e "$ovd/$kid.json" ] || { echo "handover ignored the override file: $c"; exit 1; }
+# --mode: one --permission-mode on the line, though the account's settings default to plan.
+echo '{"permissions":{"defaultMode":"plan"}}' > "$tmp/cfg/settings.json"
+echo '{"policy":{"modes":["default","manual","acceptEdits","auto"]}}' > "$root/.claude/coordination.local.json"   # a lead may loosen to acceptEdits
+calls >/dev/null; run --handover "$kid" --mode acceptEdits -- 'x' >/dev/null; c=$(calls)
+[ "$(grep -o -- '--permission-mode' <<<"$c" | wc -l | tr -d ' ')" = 1 ] && grep -qF -- '--permission-mode acceptEdits' <<<"$c" || { echo "handover --mode: $c"; exit 1; }
+rm "$root/.claude/coordination.local.json"
+calls >/dev/null; run --handover "$kid" -- 'x' >/dev/null; c=$(calls)
+grep -qF -- '--permission-mode default' <<<"$c" || { echo "handover kept no plan-default override: $c"; exit 1; }
+rm "$tmp/cfg/settings.json"
+out=$(run --handover "$kid" --mode yolo -- 'x') && rc=0 || rc=$?
+[ "$rc" = 2 ] && ! calls | grep -q 'stop\|--bg' || { echo "handover --mode yolo not refused: $rc $out"; exit 1; }
+# bypassPermissions only with --by pane: a lead is refused (exit 5) before anything is stopped or started.
+calls >/dev/null; out=$(run --handover "$kid" --mode bypassPermissions -- 'x') && rc=0 || rc=$?
+[ "$rc" = 5 ] && [ "$(tail -1 <<<"$out")" = 'needs your approval: handover "PROJ-9-c3b" (dddddddd) with mode bypassPermissions' ] && ! calls | grep -q 'stop\|--bg' ||
+  { echo "handover --mode bypassPermissions by lead: $rc $out"; exit 1; }
+calls >/dev/null; run --handover "$kid" --mode bypassPermissions --by pane -- 'x' >/dev/null; c=$(calls)
+[ "$(grep -o -- '--permission-mode' <<<"$c" | wc -l | tr -d ' ')" = 1 ] && grep -qF -- '--permission-mode bypassPermissions' <<<"$c" || { echo "handover --by pane: $c"; exit 1; }
+# A lead capped by policy.models or policy.max_effort: a --model or --effort given, or the half --escalate changes,
+# outside it is refused (exit 5) before anything is stopped or started, the approval line naming only those parts.
+echo '{"policy":{"models":["sonnet","haiku"],"max_effort":"high","modes":["manual"]}}' > "$root/.claude/coordination.local.json"
+calls >/dev/null; out=$(run --handover "$kid" --model opus --mode manual -- 'x') && rc=0 || rc=$?
+[ "$rc" = 5 ] && [ "$(tail -1 <<<"$out")" = 'needs your approval: handover "PROJ-9-c3b" (dddddddd) with model opus, mode manual' ] &&
+  grep -qxF 'model opus is not in policy.models' <<<"$out" && ! calls | grep -q 'stop\|--bg' || { echo "handover --model outside policy: $rc $out"; exit 1; }
+out=$(run --handover "$kid" --model sonnet --effort high --escalate -- 'x') && rc=0 || rc=$?
+[ "$rc" = 5 ] && [ "$(tail -1 <<<"$out")" = 'needs your approval: handover "PROJ-9-c3b" (dddddddd) with effort xhigh' ] && ! calls | grep -q 'stop\|--bg' ||
+  { echo "handover --escalate outside policy: $rc $out"; exit 1; }
+out=$(run --handover "$kid" --model sonnet --effort high --by pane --escalate -- 'x') && grep -q '^cfg --bg --model sonnet --effort xhigh ' <<<"$(calls)" ||
+  { echo "handover --escalate by pane: $out"; exit 1; }
+# a policy.* value that isn't valid: config's warning, and a lead refused
+echo '{"policy":{"max_effort":"extreme"}}' > "$root/.claude/coordination.local.json"
+out=$(run --handover "$kid" --model sonnet -- 'x' 2>&1) && rc=0 || rc=$?
+[ "$rc" = 5 ] && grep -qxF 'warning: config policy.max_effort=extreme is not valid: using the default' <<<"$out" &&
+  grep -qxF 'policy.max_effort is not valid: fix it in your personal config' <<<"$out" && ! calls | grep -q 'stop\|--bg' ||
+  { echo "handover with an invalid policy value: $rc $out"; exit 1; }
+rm "$root/.claude/coordination.local.json"
+out=$(run --handover "$kid" --by nobody -- 'x') && rc=0 || rc=$?
+[ "$rc" = 2 ] && ! calls | grep -q 'stop\|--bg' || { echo "handover --by nobody not refused: $rc $out"; exit 1; }
 # No flags: the old session's last model and effort (a user's hand-picked fable too); a flag given wins.
 cp "$proj/$kid.jsonl" "$tmp/kid.jsonl"
 echo '{"type":"assistant","effort":"xhigh","message":{"model":"claude-fable-5-2"}}' >> "$proj/$kid.jsonl"
@@ -1985,6 +2218,10 @@ cp "$a/.claude/coordination/coordination.json" "$tmp/cfg.json"; echo '{"tracker"
 [ "$(cfg "$a" tracker 2>&1)" = "$(printf 'warning: config tracker=trello is not valid: using the default\nnone')" ] || { echo "config fallback: $(cfg "$a" tracker 2>&1)"; exit 1; }
 grep -x 'warning: config tracker=trello is not valid: using the default' <<<"$(init "$a" --check)" >/dev/null || { echo "check warning: $(init "$a" --check)"; exit 1; }
 mv "$tmp/cfg.json" "$a/.claude/coordination/coordination.json"
+# policy.* is a person key: a committed file can't set it
+cp "$a/.claude/coordination/coordination.json" "$tmp/cfg.json"; echo '{"policy":{"max_effort":"low"}}' > "$a/.claude/coordination/coordination.json"
+[ "$(cfg "$a" policy.max_effort)" = max ] || { echo "config: the repo file set policy.max_effort"; exit 1; }
+mv "$tmp/cfg.json" "$a/.claude/coordination/coordination.json"
 rc=0; cfg "$a" nope 2>/dev/null || rc=$?; [ $rc = 2 ] || { echo "config: an unknown key didn't exit 2"; exit 1; }
 init "$a" --write --delegate >/dev/null && [ "$(cfg "$a/sub" approvals.delegate)" = true ] &&
   grep -x 'active: .* delegate=on pr_create=off start=read_only terminal=plain messages=none features=none' <<<"$(init "$a" --check)" >/dev/null || { echo "init --delegate: $(init "$a" --check)"; exit 1; }
@@ -2208,6 +2445,42 @@ init "$a" --check | grep -x '  terminal wezterm: read /.*/terminals/wezterm\.md 
   { echo "check doc without a start line: $(init "$a" --check)"; exit 1; }
 fi
 
+if section policy; then
+# policy helpers: mode_ok, deescalate_rung, policy_allows and the policy.* config keys (lib.sh), sourced in the fixture.
+mkdir -p "$root/.claude"
+L() { (cd "$root" && HOME=$tmp XDG_STATE_HOME=$tmp/state XDG_CONFIG_HOME=$tmp/.config; . "$here/../../lib.sh"; "$@"); }
+[ "$(L deescalate_rung opus max)" = "opus xhigh" ] && [ "$(L deescalate_rung fable xhigh)" = "opus xhigh" ] &&
+[ "$(L deescalate_rung opus high)" = "opus medium" ] && [ "$(L deescalate_rung 'opus[1m]' low)" = "sonnet[1m] low" ] &&
+[ "$(L deescalate_rung sonnet low)" = "haiku low" ] && ! L deescalate_rung haiku low && ! L deescalate_rung opus extreme ||
+  { echo "deescalate_rung"; exit 1; }
+L mode_ok acceptEdits && L mode_ok default && ! L mode_ok yolo || { echo mode_ok; exit 1; }
+# by default a lead only tightens a mode (default, manual); loosening one is the user's, unless policy.modes widens it
+L policy_allows lead sonnet low manual && L policy_allows lead '' '' default && ! L policy_allows lead '' '' acceptEdits &&
+  ! L policy_allows lead '' '' auto && ! L policy_allows lead '' '' bypassPermissions &&
+  ! L policy_allows lead '' '' plan && L policy_allows pane opus max bypassPermissions && L policy_allows pane '' '' auto &&
+  [ "$(L config policy.modes | paste -sd' ' -)" = 'default manual' ] || { echo "policy defaults"; exit 1; }
+echo '{"policy":{"modes":["default","manual","acceptEdits","auto"]}}' > "$root/.claude/coordination.local.json"
+L policy_allows lead '' '' acceptEdits && L policy_allows lead '' '' auto || { echo "policy.modes widened"; exit 1; }
+# a policy.* value that isn't valid refuses a lead's every change (a mistyped limit still limits), never a pane's
+echo '{"policy":{"max_effort":"extreme"}}' > "$root/.claude/coordination.local.json"
+rc=0; out=$(L policy_allows lead sonnet low '' 2>/dev/null) || rc=$?
+[ $rc = 1 ] && [ "$out" = 'policy.max_effort is not valid: fix it in your personal config' ] && L policy_allows pane opus max '' 2>/dev/null ||
+  { echo "invalid policy.max_effort: $rc $out"; exit 1; }
+echo '{"policy":{"modes":["yolo"]}}' > "$root/.claude/coordination.local.json"
+rc=0; out=$(L policy_allows lead sonnet low '' 2>/dev/null) || rc=$?
+[ $rc = 1 ] && [ "$out" = 'policy.modes is not valid: fix it in your personal config' ] || { echo "invalid policy.modes: $rc $out"; exit 1; }
+echo '{"policy":{"models":"opus"}}' > "$root/.claude/coordination.local.json"
+rc=0; out=$(L policy_allows lead '' '' manual 2>/dev/null) || rc=$?
+[ $rc = 1 ] && [ "$out" = 'policy.models is not valid: fix it in your personal config' ] || { echo "invalid policy.models: $rc $out"; exit 1; }
+rc=0; L policy_allows nobody '' low '' >/dev/null || rc=$?; [ $rc = 2 ] || { echo "unknown BY"; exit 1; }
+echo '{"policy":{"models":["sonnet","haiku"],"max_effort":"high","modes":["manual"]}}' > "$root/.claude/coordination.local.json"
+! L policy_allows lead opus low '' && L policy_allows lead 'sonnet[1m]' high manual &&
+  [ "$(L policy_allows lead sonnet xhigh '')" = "effort xhigh is over policy.max_effort high" ] || { echo "policy narrowed"; exit 1; }
+echo '{"policy":{"modes":["bypassPermissions"]}}' > "$root/.claude/coordination.local.json"
+[ "$(L config policy.modes 2>&1 | head -1)" = 'warning: config policy.modes=["bypassPermissions"] is not valid: using the default' ] ||
+  { echo "bad modes fallback"; exit 1; }
+fi
+
 if section shared; then
 gh_offline; acme_repo; init "$a" --write >/dev/null
 # Shared mode. (s1) a repo others commit to, whose exclude hides .claude/* (SAIL's): setup writes nothing tracked and
@@ -2234,12 +2507,19 @@ grep -qF 'refused: --shared: these lines would put personal details in a team fi
 jq '.pending.file = "p.md"' "$tmp/sj" > "$sj"
 out=$(init "$s" --write --shared) || :; grep -qF 'has person keys, which never go in a team file: pending.file (move them' <<<"$out" ||
   { echo "init (s1) person key: $out"; exit 1; }
+# policy.* (what --set lets a lead change) is a person key too
+jq '.policy.modes = ["default"]' "$tmp/sj" > "$sj"
+out=$(init "$s" --write --shared) || :; grep -qF 'has person keys, which never go in a team file: policy.modes' <<<"$out" ||
+  { echo "init (s1) policy person key: $out"; exit 1; }
 cp "$tmp/sj" "$sj"
 # the team section is scrubbed too: a fact with a home path never reaches the committed CLAUDE.md
 out=$(init "$s" --write --shared 'branch_pattern=~/b/<key>') || :
 grep -qE '^  CLAUDE\.md \(team section\):[0-9]+: a home path: .*~/b/<key>' <<<"$out" &&
   ! git -C "$s" rev-parse -q --verify "refs/heads/coordination/setup-$(date +%F)" >/dev/null || { echo "init (s1) team section home path: $out"; exit 1; }
 sb=coordination/setup-$(date +%F); swt=$s/.worktrees/$sb
+# the person's own policy.* (their project file and their config.json) never reaches the team file
+pl=$s/.claude/coordination.local.json uc=$tmp/.config/session-orchestration/config.json; cp "$pl" "$tmp/pl"; mkdir -p "${uc%/*}"
+jq '.policy = {"modes": ["default", "manual", "acceptEdits"], "max_effort": "high"}' "$tmp/pl" > "$pl"; echo '{"policy":{"models":["sonnet"]}}' > "$uc"
 out=$(init "$s" --write --shared) && [ -z "$(git -C "$s" status --short --untracked-files=all)" ] &&
   [ "$(git -C "$s" diff --name-only origin/main "$sb" | paste -sd' ' -)" = ".claude/coordination/coordination.json .gitattributes CLAUDE.md" ] &&
   [ "$(git -C "$s" show "$sb:CLAUDE.md" | sed -n 1,3p)" = $'# c\n\n## Coordinated sessions (team)' ] &&
@@ -2251,6 +2531,9 @@ out=$(init "$s" --write --shared) && [ -z "$(git -C "$s" status --short --untrac
   [ "$(git -C "$s" log -1 --format=%an "$sb")" = t ] &&
   grep -qxF "Team PR: show its diff in one pane ask (git -C $swt show), then on yes: git -C $swt push -u origin $sb && gh pr create -R o/sail --base main --head $sb --title 'coordination: shared setup (repo keys, team CLAUDE.md section, merge=union for team memory)' --body 'Shared coordination files: every collaborator reads them once this merges; personal files stay out of git.'" <<<"$out" &&
   grep -qF 'Personal: everything above, out of git' <<<"$out" || { echo "init (s1) --shared: $out / $(git -C "$s" status --short --untracked-files=all)"; exit 1; }
+[ "$(git -C "$s" show "$sb:.claude/coordination/coordination.json" | jq -c .policy)" = null ] && [ "$(jq -c .policy.max_effort "$pl")" = '"high"' ] ||
+  { echo "init (s1) --shared carried policy.*, or dropped the person's: $(git -C "$s" show "$sb:.claude/coordination/coordination.json") / $(cat "$pl")"; exit 1; }
+cp "$tmp/pl" "$pl"; rm "$uc"
 out=$(init "$s" --write --shared) || :; grep -qF "refused: --shared: $sb exists already" <<<"$out" || { echo "init (s1) second --shared: $out"; exit 1; }
 # merged: the pull replaces this checkout's ignored repo file, and the next --shared has nothing to open
 git -C "$swt" push -q origin "$sb:main" && git -C "$s" pull -q --ff-only origin main && [ -z "$(git -C "$s" status --short)" ] &&

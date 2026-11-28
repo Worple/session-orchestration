@@ -57,6 +57,8 @@ declare module 'claude-code' {
       activity: string
       // Session ids a Compact press is running for: one at a time per session.
       compacting: string[]
+      // Session ids an Up or Down a rung press (session-status --set) is running for: one at a time per session.
+      setting: string[]
       // The coordinator's stable name, set by /rename once the turn that called open_pane ends.
       naming: string | null
       // reload_plugins was called: /reload-plugins runs once the turn ends.
