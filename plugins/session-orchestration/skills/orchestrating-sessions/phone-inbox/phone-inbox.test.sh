@@ -48,9 +48,12 @@ check() { # $1 case file, $2 wanted exit code
   node "$cli" < "$tmp/$1" >"$tmp/out" 2>"$tmp/err" || got=$?
   [ "$got" = "$2" ] || { echo "FAIL $1: exit $got, want $2 ($(head -c 200 "$tmp/err"))"; exit 1; }
   if [ "$2" = 0 ]; then
-    [ ! -s "$tmp/out" ] && [ ! -s "$tmp/err" ] || { echo "FAIL $1: printed something on success"; exit 1; }
+    [ "$(cat "$tmp/out")" = valid ] && [ ! -s "$tmp/err" ] || { echo "FAIL $1: want exactly valid on stdout and nothing on stderr"; exit 1; }
   else
     [ ! -s "$tmp/out" ] && [ "$(wc -l < "$tmp/err" | tr -d ' ')" = 1 ] || { echo "FAIL $1: want one stderr line and no stdout"; exit 1; }
+    # the hooks module takes exit 1 only with exactly this line, exit 2 only with this prefix
+    if [ "$2" = 1 ]; then [ "$(cat "$tmp/err")" = "bad signature" ] || { echo "FAIL $1: exit 1 needs stderr exactly 'bad signature'"; exit 1; }; fi
+    if [ "$2" = 2 ]; then case "$(cat "$tmp/err")" in "malformed input: "*) ;; *) echo "FAIL $1: exit 2 needs stderr starting 'malformed input: '"; exit 1;; esac; fi
   fi
 }
 check valid 0
@@ -109,6 +112,9 @@ if grep -qE '<script[^>]*src=' "$page"; then echo "FAIL page: no external script
 grep -q 'devTimer = setTimeout' "$page" || { echo "FAIL page: the device-doc read has no loading timer"; exit 1; }
 grep -q 'clearTimeout(devTimer)' "$page" || { echo "FAIL page: the device-doc timer is never cleared"; exit 1; }
 grep -q 'metadata.fromCache) return' "$page" || { echo "FAIL page: a cached device snapshot must not be acted on"; exit 1; }
+# An answer belongs to a card by root, ask id, key AND the exact question (ask ids restart in each coordinator session).
+grep -qF 'JSON.stringify([p.root, p.askId, p.key, p.question])' "$page" || { echo "FAIL page: an answer must be keyed with its question"; exit 1; }
+grep -qF 'JSON.stringify([root, ask.id, ask.key, ask.question])' "$page" || { echo "FAIL page: a card must be keyed with its question"; exit 1; }
 sed -n '/phone-inbox:pure-start/,/phone-inbox:pure-end/p' "$page" > "$tmp/pure.js"
 [ -s "$tmp/pure.js" ] || { echo "FAIL page: pure block not found"; exit 1; }
 

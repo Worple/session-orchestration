@@ -3,7 +3,8 @@
 //
 // CLI: stdin is {"jwk":{kty,crv,x,y},"payload":"<string>","sig":"<base64url>"}.
 //   exit 0 valid; 1 bad signature; 2 malformed input; 3 anything unexpected (could not verify).
-//   Prints nothing on 0 and one reason line on stderr otherwise.
+//   Prints exactly `valid` on stdout on 0 (a caller takes exit 0 without it for a verifier that did not run), and one
+//   reason line on stderr otherwise: `bad signature` on 1, `malformed input: <why>` on 2.
 // Module: verifySig(jwk, payload, sig) resolves true/false, and throws MalformedInput for malformed input.
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -59,7 +60,10 @@ const isEntry = (() => {
 
 if (isEntry) {
   try {
-    if (await main()) process.exit(0);
+    if (await main()) {
+      console.log('valid');
+      process.exit(0);
+    }
     console.error('bad signature');
     process.exit(1);
   } catch (e) {

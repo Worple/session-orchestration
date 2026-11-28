@@ -302,7 +302,7 @@ function payloadFor(root, ask, option, fp, at) {
     const latest = new Map() // newest answer per ask (answers arrive newest first)
     for (const a of answers) {
       const p = parsed(a)
-      if (p) { const k = p.root + '|' + p.askId + '|' + p.key; if (!latest.has(k)) latest.set(k, a) }
+      if (p) { const k = JSON.stringify([p.root, p.askId, p.key, p.question]); if (!latest.has(k)) latest.set(k, a) }
     }
     const box = $('projects')
     box.replaceChildren()
@@ -333,7 +333,7 @@ function payloadFor(root, ask, option, fp, at) {
   }
 
   function card(root, ask, latest) {
-    const cid = root + '|' + ask.id + '|' + ask.key
+    const cid = JSON.stringify([root, ask.id, ask.key, ask.question])
     const ans = latest.get(cid)
     const refused = ans && ans.data.result === 'refused'
     const busy = pending.has(cid) || (ans && !refused)
