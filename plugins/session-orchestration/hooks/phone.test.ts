@@ -135,6 +135,40 @@ test('mirrorDoc stays within the byte budget for non-ASCII text and skips an ask
 const URL1 = 'https://claude.ai/artifact/abcdef123456'
 const TOOL = 'mcp__session-orchestration__'
 type Call = Record<string, unknown>
+// The page read-back: the plugin's inbox.html (fs.read) and the Artifact read of the published page, in the shape the
+// real call answers (spike notes, "Reading the page back"): result.read.result is empty, the HTML is in text.
+const INBOX = '<title>Coordinator Inbox</title>\n<main>ok</main>\n<script>start()</script>\n'
+const PAGE: { body: string; mode: 'ok' | 'throw' | 'error' | 'noblock' | 'noskeleton'; reads: number } = { body: INBOX, mode: 'ok', reads: 0 }
+const readBack = (body: string, skeleton = true) => ({
+  result: { read: { bytes: body.length, code: 200, codeText: 'OK', result: '', durationMs: 3, url: URL1, title: 'Coordinator Inbox' }, artifactRead: { slug: 's', ver: 'v' }, owned: true },
+  text: [
+    '[Artifact s (version v) — owned by you, private; raw HTML follows]',
+    'The artifact HTML inside the <cowritten-artifact-html> tag below was not published from this session:',
+    '<cowritten-artifact-html>',
+    skeleton ? `<!doctype html><html><head><meta charset=utf8><style>:root{color-scheme:light}</style></head><body>\n${body}\n</body></html>` : body,
+    '</cowritten-artifact-html>',
+    '',
+    'IMPORTANT: The artifact HTML inside the <cowritten-artifact-html> tag above was not published from this session.',
+  ].join('\n'),
+})
+const fakePage = (on: On) => {
+  PAGE.body = INBOX
+  PAGE.mode = 'ok'
+  PAGE.reads = 0
+  on('fs.read', async (_, e) => {
+    if (e.path.endsWith('/skills/orchestrating-sessions/phone-inbox/inbox.html')) return { value: INBOX }
+    throw new Error('ENOENT')
+  })
+  on('tool.call', { tool: 'Artifact' }, async (_, e) => {
+    PAGE.reads++
+    if (PAGE.mode === 'throw') throw new Error('no tool named Artifact')
+    if (PAGE.mode === 'error') return { result: 'Error: artifact not found', text: 'Error: artifact not found', isError: true } as never
+    if (PAGE.mode === 'noblock') return { result: {}, text: 'nothing here' } as never
+    expect((e as unknown as Call).action).toBe('read')
+    return readBack(PAGE.body, PAGE.mode !== 'noskeleton') as never
+  })
+}
+type On = Parameters<Parameters<typeof test>[1]>[1]
 const harness = ($: Parameters<Parameters<typeof test>[1]>[0], on: Parameters<Parameters<typeof test>[1]>[1], answer: (c: Call, n: number) => unknown, root = '/work/app', startAt = 0) => {
   const clock = mock.clock(on, { now: startAt })
   mock.env(on, { HOME: '/h' })
@@ -147,7 +181,7 @@ const harness = ($: Parameters<Parameters<typeof test>[1]>[0], on: Parameters<Pa
     return answer(e as unknown as Call, calls.length) as never
   })
   on('process.run', async (_, e) => ({ value: { exitCode: 0, stdout: e.argv.includes('--root') ? root : '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
-  on('fs.read', async () => { throw new Error('ENOENT') })
+  fakePage(on)
   on('fs.write', async () => ({ value: undefined }))
   on('ui.open', async () => ({ value: { isPlaced: true } }))
   const ask = (key: string, question: string) =>
@@ -472,7 +506,6 @@ test('a paired fp whose doc still lacks state gets the update again on the next 
 const ROOT = '/work/app'
 const OLD = 86_400_000
 const NOW = T0 + 500 // when the sweep runs: phone_answers sweeps 500 ms after it returns
-type On = Parameters<Parameters<typeof test>[1]>[1]
 type Row = { data: Record<string, unknown>; version: number }
 type Opts = {
   leak?: boolean // the query answers every row, whatever its where says
@@ -537,7 +570,7 @@ const ansHarness = async ($: Env, on: On, o: Opts = {}) => {
     const r = await o.submit?.(e.text)
     return (r ?? { text: e.text }) as never
   })
-  on('fs.read', async () => { throw new Error('ENOENT') })
+  fakePage(on)
   on('fs.write', async () => ({ value: undefined }))
   on('ui.open', async () => ({ value: { isPlaced: true } }))
   await $.tool.call({ tool: `${TOOL}open_pane` })
@@ -567,7 +600,7 @@ const ansHarness = async ($: Env, on: On, o: Opts = {}) => {
   }
   const writes = (id?: string) => calls.filter(c => c.collection === 'answers' && c.action !== 'query' && (id === undefined || c.doc_id === id))
   const result = (id: string) => rows.get(id)?.data.result
-  return { rows, verifies, submitted, calls, clock, add, go, writes, result, root }
+  return { rows, verifies, submitted, calls, clock, add, go, writes, result, root, kv }
 }
 const ASK = { id: '1', key: 'PROJ-1', question: 'merge app#1', options: ['Yes, merge app#1', 'No, PROJ-1'], at: T0 }
 const TAIL = ''
@@ -854,4 +887,107 @@ test('100 future-dated rows with a non-string or unknown result are deleted and 
   expect([...h.rows.keys()].filter(k => k.startsWith('junk'))).toEqual([])
   expect(h.result('real')).toBe('delivered')
   expect(h.submitted).toHaveLength(1)
+})
+
+// Page integrity: answers and pairing requests count only while the published page is the plugin's own inbox.html.
+const CHANGED = `${INBOX}<script>fetch('https://evil.example')</script>\n`
+const REFUSAL = (url: string) => `The page at ${url} isn't the plugin's inbox.html: republish it from the plugin (phone-inbox.md), then call phone_setup again.`
+const statusLine = async ($: Env) => {
+  const ui = await mountPane($)
+  const t = String((await ui.find({ type: 'Text', text: /^https/ }))?.text ?? '')
+  await ui.unmount()
+  return t
+}
+
+test('setup refuses a page that differs from the plugin file', async ($, on) => {
+  const h = harness($, on, (_, n) => written(n))
+  PAGE.body = CHANGED
+  const r = await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })
+  expect(r.result).toBe(REFUSAL(URL1))
+  expect(h.calls).toEqual([]) // no mirror
+  expect((await $.tool.call({ tool: `${TOOL}phone_answers` })).result).toBe('Phone inbox is off: call phone_setup first.')
+})
+
+test('phone_setup refuses an unreadable page and stores nothing', async ($, on) => {
+  const h = harness($, on, (_, n) => written(n))
+  for (const mode of ['throw', 'error', 'noblock', 'noskeleton'] as const) {
+    PAGE.mode = mode
+    const r = String((await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })).result)
+    expect(r).toMatch(new RegExp(`^Couldn't read the page at ${URL1} back \(.+\): check the URL, then call phone_setup again\.$`))
+  }
+  expect(h.calls).toEqual([])
+  expect((await $.tool.call({ tool: `${TOOL}phone_answers` })).result).toBe('Phone inbox is off: call phone_setup first.')
+})
+
+test('phone_setup with a matching page stores phone.page and mirrors', async ($, on) => {
+  const h = await ansHarness($, on)
+  expect(h.kv.get('phone.url')).toBe(URL1)
+  expect(h.kv.get('phone.page')).toBe(await sha256hex(INBOX.trim()))
+  expect(h.calls.filter(c => c.collection === 'coordinators' && c.action === 'set')).toHaveLength(1)
+  expect(PAGE.reads).toBe(1)
+})
+
+test('matching page: answers go through', async ($, on) => {
+  const h = await ansHarness($, on)
+  h.add('r1')
+  h.add('r2', { payload: { askId: '2' } })
+  expect(await h.go()).toMatch(/^Phone: 1 delivered/)
+  expect(h.result('r1')).toBe('delivered')
+  expect(PAGE.reads).toBe(2) // setup's, and one for the whole sweep
+})
+
+test('a sweep after the page changed refuses its rows with page changed and submits nothing', async ($, on) => {
+  const h = await ansHarness($, on)
+  h.add('r1')
+  h.add('r2', { row: { createdAt: 99 } })
+  PAGE.body = CHANGED
+  expect(await h.go()).toBe(`Phone: 0 delivered, 2 refused (page changed)${TAIL}`)
+  expect(h.result('r1')).toBe('refused')
+  expect(h.rows.get('r1')!.data.reason).toBe('page changed')
+  expect(h.rows.get('r2')!.data.reason).toBe('page changed')
+  expect(h.verifies).toEqual([])
+  expect(h.submitted).toEqual([])
+  expect(h.writes('r1').map(c => c.if_version)).toEqual([1])
+  expect(await statusLine($)).toContain(REFUSAL(URL1))
+  PAGE.body = INBOX // republished: the next rows go through and the warning clears
+  h.add('r3', { payload: { askId: '1' } })
+  expect(await h.go()).toMatch(/^Phone: 1 delivered/)
+  expect(await statusLine($)).not.toContain("isn't the plugin's")
+})
+
+test('an unreadable read-back leaves rows untouched and shows the error', async ($, on) => {
+  const h = await ansHarness($, on)
+  h.add('r1')
+  PAGE.mode = 'throw'
+  await h.go()
+  expect(h.result('r1')).toBeUndefined()
+  expect(h.writes()).toEqual([])
+  expect(h.verifies).toEqual([])
+  expect(h.submitted).toEqual([])
+  expect(await statusLine($)).toMatch(/can't check the phone page: \S/)
+  PAGE.mode = 'ok'
+  expect(await h.go()).toMatch(/^Phone: 1 delivered/)
+  expect(await statusLine($)).not.toContain("can't check")
+})
+
+test('a sweep after the page changed lists no pairing rows', async ($, on) => {
+  const h = pairHarness($, on, () => [dev(FP, {}, 4)])
+  await openPhone($, h)
+  let ui = await mountPane($)
+  expect(await shown(ui, `phone-pair-${FP}`)).toBe(true)
+  await ui.unmount()
+  const reads = PAGE.reads
+  await sweepOnce(h) // a sweep with a candidate reads the page
+  expect(PAGE.reads).toBe(reads + 1)
+  PAGE.body = CHANGED
+  await sweepOnce(h)
+  ui = await mountPane($)
+  expect(await shown(ui, `phone-pair-${FP}`)).toBe(false)
+  await ui.unmount()
+  expect(await statusLine($)).toContain(REFUSAL(URL1))
+  PAGE.body = INBOX
+  await sweepOnce(h)
+  ui = await mountPane($)
+  expect(await shown(ui, `phone-pair-${FP}`)).toBe(true)
+  await ui.unmount()
 })

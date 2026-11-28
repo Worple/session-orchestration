@@ -241,6 +241,56 @@ export function phoneMirror($: EngineInterface): Promise<void> {
   return running
 }
 
+// Page integrity. The phone page holds the signing key, so answers (and pairing requests) are taken only while the
+// published page is byte for byte the plugin's own inbox.html. The read-back's text carries the page between the
+// publish skeleton's `</head><body>` and `</body></html>` inside <cowritten-artifact-html>, equal to the source
+// after trimming; nothing else is normalised.
+const PAGE_FILE = 'skills/orchestrating-sessions/phone-inbox/inbox.html'
+const PAGE_CHANGED = 'page changed'
+const CANT_CHECK = "can't check the phone page"
+const refusalText = (url: string) => `The page at ${url} isn't the plugin's inbox.html: republish it from the plugin (phone-inbox.md), then call phone_setup again.`
+type PageVerdict = { kind: 'match'; hash: string } | { kind: 'mismatch' } | { kind: 'unreadable'; why: string }
+
+// The body of the published page from the Artifact read's text, or why there is none.
+function pageBody(text: string): { body: string } | { why: string } {
+  const start = '\n<cowritten-artifact-html>\n'
+  const open = text.indexOf(start)
+  const end = text.lastIndexOf('</cowritten-artifact-html>')
+  if (open < 0 || end < open) return { why: 'no page content in the answer' }
+  const block = text.slice(open + start.length, end)
+  const head = '</head><body>'
+  const tail = '</body></html>'
+  const a = block.indexOf(head)
+  const b = block.lastIndexOf(tail)
+  if (a < 0 || b < a + head.length) return { why: "the page isn't in the expected layout" }
+  return { body: block.slice(a + head.length, b).trim() }
+}
+
+async function pageVerdict($: EngineInterface, url: string): Promise<PageVerdict> {
+  try {
+    const mine = (await $.fs.read(`${$.plugin.root}/${PAGE_FILE}`)) as unknown
+    if (typeof mine !== 'string') return { kind: 'unreadable', why: "the plugin's inbox.html is not text" }
+    const r = asObject(await $.tool.call({ tool: 'Artifact', action: 'read', url } as never))
+    const text = typeof r.text === 'string' ? r.text : ''
+    if (r.isError === true) return { kind: 'unreadable', why: oneLine(text || 'refused') }
+    const got = pageBody(text)
+    if ('why' in got) return { kind: 'unreadable', why: got.why }
+    const hash = await sha256hex(got.body)
+    return hash === (await sha256hex(mine.trim())) ? { kind: 'match', hash } : { kind: 'mismatch' }
+  } catch (err) {
+    return { kind: 'unreadable', why: errText(err) }
+  }
+}
+
+// One read per sweep, made only when something needs it.
+function pageGate($: EngineInterface, url: string): () => Promise<PageVerdict> {
+  let once: Promise<PageVerdict> | undefined
+  return () => (once ??= pageVerdict($, url))
+}
+const pageError = (v: PageVerdict, url: string) =>
+  v.kind === 'mismatch' ? refusalText(url) : v.kind === 'unreadable' ? `${CANT_CHECK}: ${v.why}` : undefined
+const isPageError = (e: string) => e.startsWith(CANT_CHECK) || e.startsWith("The page at ")
+
 export async function phoneSetup($: EngineInterface, url: unknown): Promise<string> {
   const u = typeof url === 'string' ? url.trim() : undefined
   if (u === undefined || (u !== '' && !PHONE_URL.test(u))) {
@@ -248,13 +298,18 @@ export async function phoneSetup($: EngineInterface, url: unknown): Promise<stri
   }
   if (!u) {
     await $.store.delete('phone.url')
+    await $.store.delete('phone.page')
     seenUrl = null
     forget()
     gen++
     await patch($, { url: null, last: null, error: null })
     return 'Phone inbox off.'
   }
+  const verdict = await pageVerdict($, u)
+  if (verdict.kind === 'mismatch') return refusalText(u)
+  if (verdict.kind === 'unreadable') return `Couldn't read the page at ${u} back (${verdict.why}): check the URL, then call phone_setup again.`
   await $.store.set('phone.url', u)
+  await $.store.set('phone.page', verdict.hash)
   seenUrl = u
   forget()
   gen++
@@ -301,7 +356,7 @@ async function markDoc($: EngineInterface, url: string, fp: string, state: 'pair
 
 // Lists the pairing requests and the paired devices in the view; sends a decision again to a document that lost it.
 // Returns its error line, if any.
-async function sweepDevices($: EngineInterface, url: string): Promise<string | undefined> {
+async function sweepDevices($: EngineInterface, url: string, gate: () => Promise<PageVerdict>): Promise<string | undefined> {
   const mine = gen
   const q = await artifactData($, url, { action: 'query', collection: 'devices', query: { order_by: { field: 'createdAt', direction: 'desc' }, limit: 50 } })
   if (q.error) return `${DEV_ERR}: ${q.error}`
@@ -312,6 +367,7 @@ async function sweepDevices($: EngineInterface, url: string): Promise<string | u
   const rows: PhoneView['pairing'] = []
   const docs = new Map<string, { jwk: Jwk; version: number | undefined }>()
   const heals: Promise<string | undefined>[] = []
+  const cands: (PhoneView['pairing'][number] & { jwk: Jwk; version: number | undefined })[] = []
   for (const doc of Array.isArray(raw) ? raw : []) {
     const id = asObject(doc).id
     const data = asObject(asObject(doc).data)
@@ -331,8 +387,14 @@ async function sweepDevices($: EngineInterface, url: string): Promise<string | u
     }
     const at = data.createdAt
     if (data.state !== undefined || typeof at !== 'number' || !Number.isFinite(at) || now - at > PAIR_MAX_AGE_MS) continue
-    rows.push({ fp, label: labelOf(data.label), code, at })
-    docs.set(fp, { jwk, version: ver })
+    cands.push({ fp, label: labelOf(data.label), code, at, jwk, version: ver })
+  }
+  // A request is listed only while the page is the plugin's own: a changed or unreadable page lists none.
+  if (cands.length > 0 && (await gate()).kind === 'match') {
+    for (const c of cands) {
+      rows.push({ fp: c.fp, label: c.label, code: c.code, at: c.at })
+      docs.set(c.fp, { jwk: c.jwk, version: c.version })
+    }
   }
   const healed = (await Promise.all(heals)).find(e => e)
   if (mine !== gen) return undefined
@@ -402,7 +464,7 @@ async function settleRow($: EngineInterface, url: string, id: string, version: n
   }
 }
 
-async function sweepAnswers($: EngineInterface, url: string): Promise<{ line: string; error?: string }> {
+async function sweepAnswers($: EngineInterface, url: string, gate: () => Promise<PageVerdict>): Promise<{ line: string; error?: string }> {
   const rootPath = await projectRoot($)
   if (!rootPath) return { line: NOTHING }
   const root = await hex16(rootPath)
@@ -451,6 +513,10 @@ async function sweepAnswers($: EngineInterface, url: string): Promise<{ line: st
     if (data.result !== undefined && !(typeof data.result === 'string' && ['queued', 'delivered', 'refused'].includes(data.result))) { await drop(d); continue }
     if (data.result !== undefined) continue
     try {
+      // An unhandled row of this root is work: the page is read (once per sweep) before anything is verified or submitted.
+      const page = await gate()
+      if (page.kind === 'unreadable') continue // untouched; the sweep's error line says why
+      if (page.kind === 'mismatch') { await refuse(id, ver, PAGE_CHANGED); continue }
       if (data.createdAt - t0 > PHONE_SKEW_MS) { await refuse(id, ver, 'clock ahead'); continue } // no verifier spawned for it
       const row = parseAnswerRow(id, ver, data)
       if (!row) { await refuse(id, ver, 'malformed answer'); continue }
@@ -512,12 +578,17 @@ async function runSweep($: EngineInterface): Promise<string> {
     const url = await storedUrl($)
     if (!url) return 'phone inbox off'
     await phoneMirror($)
-    const devErr = await sweepDevices($, url).catch(err => `${DEV_ERR}: ${errText(err)}`)
-    const ans = await sweepAnswers($, url).catch(err => ({ line: NOTHING, error: `${ANS_FAIL}: ${errText(err)}` }))
+    const gate = pageGate($, url)
+    let checked: PageVerdict | undefined
+    const seen = () => gate().then(v => (checked = v))
+    const devErr = await sweepDevices($, url, seen).catch(err => `${DEV_ERR}: ${errText(err)}`)
+    const ans = await sweepAnswers($, url, seen).catch(err => ({ line: NOTHING, error: `${ANS_FAIL}: ${errText(err)}` }))
     // The mirror owns the error line it left; the devices' and answers' from an earlier sweep are replaced by this one's.
     const cur = (await read($, phone)).error
-    const own = cur && ![DEV_ERR, ANS_ERR, ANS_FAIL].some(p => cur.startsWith(p))
-    const err = (own ? cur : undefined) ?? ans.error ?? devErr ?? null
+    const own = cur && ![DEV_ERR, ANS_ERR, ANS_FAIL].some(p => cur.startsWith(p)) && !isPageError(cur)
+    // A page check made by this sweep replaces an earlier verdict; with no work to gate, the earlier one stands.
+    const kept = cur && isPageError(cur) && !checked ? cur : undefined
+    const err = (own ? cur : undefined) ?? (checked ? pageError(checked, url) : undefined) ?? kept ?? ans.error ?? devErr ?? null
     const t = new Date(await $.clock.now()).toISOString().slice(11, 16)
     // What the sweep did with the answers shows beside the time: the pane's status line is where the person (and a test) reads it.
     await patch($, { url, last: `${t} ${err ?? 'mirrored'}${ans.line === NOTHING ? '' : ` · ${ans.line}`}`, error: err })
