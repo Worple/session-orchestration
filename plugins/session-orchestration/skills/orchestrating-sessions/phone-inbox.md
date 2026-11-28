@@ -16,8 +16,11 @@ click.
   tell them to tap "Pair this phone" on it and approve the code in the pane's Phone section (only if the code there
   matches the one on their phone).
 - **After a plugin update**, republish `inbox.html` to the same URL (Artifact tool with `url`), then call
-  `phone_setup` with that URL again. If it says `The page at <url> isn't the plugin's inbox.html`, republish
-  from the plugin and call it again.
+  `phone_setup` with that URL again. Any later publish to that URL, even an identical one, counts as a changed page
+  until you call `phone_setup` again: the phone's answers and pairing are blocked (feature doc, "The page check"),
+  and the pane's Phone line says to republish and call `phone_setup` again. After such a change,
+  tell the user to close the phone page and open it again. If `phone_setup` says `Couldn't read the page …` check
+  the URL; if it says `Couldn't clear the phone's pending answers …` call it again.
 - **When the user says they answered on the phone**, call `phone_answers`. It returns at once with
   `Phone: reading the answers now. …` and the passing answers arrive as prompts once your turn ends. The sweep runs on the pane's timer, so with no pane open it refuses: `phone_answers: open the
   coordinator pane first (open_pane): its timer is what sweeps.` Open the pane, then call it again. The counts are
@@ -36,8 +39,7 @@ busy. In a background (`--bg`) session phone answers are not picked up at all, s
 session has no Artifact tools.
 
 A refused answer shows on the phone as `Refused: <reason>` and on the pane's Phone line (the reasons are in the
-feature doc). Its ask is still open on the pane: tell the user, or let them answer there. `page changed`
-means the published page is no longer the plugin's file, and the pane warns.
+feature doc). Its ask is still open on the pane: tell the user, or let them answer there.
 
 The phone offers the listed options only. An answer in the user's own words goes through the terminal's question
 dialog. An ask too large to mirror is skipped: it's answered in the pane.

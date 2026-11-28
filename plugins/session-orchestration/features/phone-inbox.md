@@ -17,9 +17,10 @@ QUESTION`, and relays and their verification work unchanged.
 Two tools, both coordinator only:
 
 - `phone_setup {url}` stores the page URL (per account, in the plugin's store), mirrors the asks at once, and checks
-  that the published page is exactly the plugin's `inbox.html`. If it isn't: `The page at <url> isn't the plugin's
-  inbox.html: republish it from the plugin (phone-inbox.md), then call phone_setup again.` `phone_setup` with `""`
-  turns the phone inbox off.
+  that the published page is exactly the plugin's `inbox.html` (see "The page check" below). If it isn't: `The page at
+  <url> isn't the plugin's inbox.html: republish it from the plugin (phone-inbox.md), then call phone_setup again.`
+  If the page can't be read back: `Couldn't read the page at <url> back (<why>): check the URL, then call phone_setup
+  again.` `phone_setup` with `""` turns the phone inbox off.
 - `phone_answers` takes no input. The engine refuses a prompt submitted while a tool call's hook is running, so the
   tool can't sweep inside its own call. It schedules the sweep on the pane's timer and returns at once with `Phone:
   reading the answers now. Those that pass arrive as prompts once this turn ends; the pane's Phone line says what
@@ -66,7 +67,32 @@ question changed), `not an option`, `already answered`, `not delivered: <why>`, 
 
 After a plugin update the coordinator publishes the new `inbox.html` over the old page and calls `phone_setup` once
 more. The phone keeps its pairing across a republish to the same URL. That was tested in
-the claude.ai app on one Android phone; other browsers and iOS are untested.
+the claude.ai app on one Android phone; other browsers and iOS are untested. Then close the phone page and open it
+again (see "The page check").
+
+## The page check
+
+The coordinator only uses the page that `phone_setup` accepted. `phone_setup` reads the published page back and
+checks two things: its content is exactly the plugin's `inbox.html`, and its published version is the one
+`phone_setup` accepted. Any later publish to that URL counts as a changed page until `phone_setup` is called again,
+even an identical republish. While the page counts as changed:
+
+- answers are refused `page changed`;
+- pairing requests are hidden, and a Pair press is refused;
+- the pane's Phone line shows `The page at <url> isn't the plugin's inbox.html: republish it from the plugin
+  (phone-inbox.md), then call phone_setup again.`
+
+When `phone_setup` accepts a new version, it first refuses the answers still waiting with `page changed`, so nothing
+written while the page was different gets through. If it can't clear them, it refuses with `Couldn't clear the
+phone's pending answers (<why>): call phone_setup again.` and changes nothing.
+
+If the page can't be read back during a sweep, waiting answers are left untouched and the Phone line shows `can't
+check the phone page: <why>`.
+
+After a page change, close the phone page and open it again. Code loaded while the page was different keeps running
+in an open tab even after the page is fixed and accepted again.
+
+Activity on the phone is one short line per session (name, state, what it's doing), with no ids or paths.
 
 ## What the signature protects
 
@@ -74,15 +100,17 @@ the claude.ai app on one Android phone; other browsers and iOS are untested.
   rows without a paired device's valid signature are refused `bad signature` or `unpaired device`. A replayed answer
   is refused `already used`. An answer is bound to the exact ask id, key and question, and to the listed option.
 - Pairing is the trust step: only your Pair press in the pane trusts a device, and only if the codes match.
-- Page integrity: `phone_setup` and every sweep with answers to handle check the published page against the plugin's
-  own `inbox.html`. If a session republished the page with other code (which could make the phone sign things while
-  the page is open), its answers are refused `page changed` and the pane warns.
+- Page integrity: `phone_setup` and every sweep with answers to handle check the published page (see "The page
+  check"). If a session republished the page with other code (which could make the phone sign things while the page
+  is open), its answers are refused `page changed`, new pairing is blocked and the pane warns.
 
 It does not protect against:
 
 - A session that deliberately edits the plugin's store file (a plain JSON file under `~/.claude/plugins/store/`) to
   add its own device. The transcript-based approval gate has the same limit.
 - Anyone who holds the unlocked phone.
+- A phone page tab that is already open when the page is changed: it keeps running the code it loaded until it is
+  closed and opened again.
 
 One residual case: if the coordinator stops between marking an answer `Queued` and submitting it, the answer stays
 `Queued`. The ask is still waiting in the pane, so answer it there.
