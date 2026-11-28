@@ -371,21 +371,28 @@ const pageError = (v: PageVerdict, url: string) =>
   v.kind === 'mismatch' ? refusalText(url) : v.kind === 'unreadable' ? `${CANT_CHECK}: ${v.why}` : undefined
 const isPageError = (e: string) => e.startsWith(CANT_CHECK) || e.startsWith("The page at ")
 
-// Every unhandled answer row of this root on the page, refused `page changed` (versioned writes only). Best effort: a
-// session without ArtifactData, or a query that fails, leaves them for the sweep, which checks the pinned page anyway.
-async function refuseOpenRows($: EngineInterface, url: string): Promise<void> {
+// Every unhandled answer row of this root on the page, refused `page changed` (versioned writes only). Returns why it
+// could not (a query or write that failed, a row it could not read, no ArtifactData), else undefined. A version refusal
+// is another session having taken the row.
+async function refuseOpenRows($: EngineInterface, url: string): Promise<string | undefined> {
   try {
     const rootPath = await projectRoot($)
-    if (!rootPath) return
+    if (!rootPath) return undefined
     const root = await hex16(rootPath)
     const q = await artifactData($, url, { action: 'query', collection: 'answers', query: { where: [['root', '==', root]], order_by: { field: 'createdAt', direction: 'desc' }, limit: 100 } })
-    if (q.error) return
-    for (const d of dbDocs(q)) {
-      if (d.data.root !== root || d.data.result !== undefined || d.version === undefined || typeof d.data.createdAt !== 'number') continue
-      await writeRow($, url, d.id, d.version, { result: 'refused', reason: PAGE_CHANGED, resultAt: await $.clock.now() })
+    if (q.error) return q.error
+    const structured = asObject(q.result.db_read).docs
+    const docs = dbDocs(q)
+    if (Array.isArray(structured) && docs.length !== structured.length) return 'some answer rows could not be read'
+    for (const d of docs) {
+      if (d.data.root !== root || d.data.result !== undefined || d.data.createdAt === undefined) continue
+      if (d.version === undefined) return 'an answer row has no version'
+      const w = await writeRow($, url, d.id, d.version, { result: 'refused', reason: PAGE_CHANGED, resultAt: await $.clock.now() })
+      if ('error' in w) return w.error
     }
-  } catch {
-    // nothing more to do here
+    return undefined
+  } catch (err) {
+    return errText(err)
   }
 }
 
@@ -395,8 +402,8 @@ export async function phoneSetup($: EngineInterface, url: unknown): Promise<stri
     return 'phone_setup: url must be a private claude.ai artifact link, https://claude.ai/artifact/<id> (or https://claude.ai/code/artifact/<id>), or "" to turn the phone inbox off.'
   }
   if (!u) {
+    // The pin stays: turning the inbox off and on must not be a way to move it without refusing the open rows.
     await $.store.delete('phone.url')
-    await $.store.delete('phone.page')
     seenUrl = null
     forget()
     gen++
@@ -406,10 +413,14 @@ export async function phoneSetup($: EngineInterface, url: unknown): Promise<stri
   const verdict = await pageVerdict($, u)
   if (verdict.kind === 'mismatch') return refusalText(u)
   if (verdict.kind === 'unreadable') return `Couldn't read the page at ${u} back (${verdict.why}): check the URL, then call phone_setup again.`
-  // Accepting a page other than the one pinned (or the first one) first refuses the rows written so far: they were
-  // signed on whatever the page was until now, and a swap-and-restore followed by this call must not accept them.
+  // Moving the pin (another version or url) first refuses the rows written so far: they were signed on whatever the
+  // page was until now, and a swap-and-restore followed by this call must not accept them. When that can't be done,
+  // nothing is stored. The very first acceptance has no pin to move and no rows from an earlier page: best effort.
   const prev = asObject(await $.store.get('phone.page'))
-  if (prev.sha !== verdict.hash || prev.ver !== verdict.ver || (await $.store.get('phone.url')) !== u) await refuseOpenRows($, u)
+  if (prev.sha !== verdict.hash || prev.ver !== verdict.ver || (await $.store.get('phone.url')) !== u) {
+    const why = await refuseOpenRows($, u)
+    if (why !== undefined && filled(prev.sha)) return `Couldn't clear the phone's pending answers (${oneLine(why)}): call phone_setup again.`
+  }
   await $.store.set('phone.url', u)
   await $.store.set('phone.page', { sha: verdict.hash, ver: verdict.ver })
   seenUrl = u

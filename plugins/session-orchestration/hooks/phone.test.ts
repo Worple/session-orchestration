@@ -541,6 +541,7 @@ type Opts = {
   submit?: (text: string) => unknown // what prompt.submit answers (a promise holds it)
   stale?: string[] // row ids whose writes are refused as version_mismatch
   devices?: DevDoc[] // the device docs the phone page holds
+  fail?: { query?: boolean; write?: boolean } // answers queries or writes the page refuses, set by a test
 }
 const mismatchNow = { result: 'Error: db write failed (version_mismatch): now at version 9', text: 'Error: db write failed (version_mismatch): now at version 9', isError: true }
 const ansHarness = async ($: Env, on: On, o: Opts = {}) => {
@@ -562,6 +563,8 @@ const ansHarness = async ($: Env, on: On, o: Opts = {}) => {
     calls.push(c)
     const id = String(c.doc_id)
     PAGE.seq.push(`${String(c.collection)}:${String(c.action)}`)
+    if (c.collection === 'answers' && c.action === 'query' && o.fail?.query) return { result: 'Error: db query failed (boom)', text: 'Error: db query failed (boom)', isError: true } as never
+    if (c.collection === 'answers' && c.action === 'update' && o.fail?.write) return { result: 'Error: db write failed (boom)', text: 'Error: db write failed (boom)', isError: true } as never
     if (c.collection === 'devices') return queried(o.devices ?? []) as never
     if (c.collection !== 'answers') return written(calls.length) as never
     if (c.action === 'query') {
@@ -1167,4 +1170,40 @@ test('activityLines: one readable line per session, no ids, paths, epochs or cou
   expect(Array.from(out[1]!).length).toBeLessThanOrEqual(120)
   expect(out[1]!.endsWith('…')).toBe(true)
   expect(activityLines(text)).not.toMatch(/0123abcd|\/home\/me|1795843|51000/)
+})
+
+test('phone_setup to a new ver refuses when pending rows can\'t be cleared, and keeps the old pin', async ($, on) => {
+  const fail = { query: false, write: false }
+  const h = await ansHarness($, on, { fail })
+  h.add('r1')
+  const pin = h.kv.get('phone.page')
+  const mirrors = h.calls.filter(c => c.collection === 'coordinators').length
+  PAGE.ver = 'ver-2'
+  for (const which of ['query', 'write'] as const) {
+    fail[which] = true
+    const r = String((await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })).result)
+    expect(r).toMatch(/^Couldn't clear the phone's pending answers \(.*boom.*\): call phone_setup again\.$/)
+    expect(h.kv.get('phone.page')).toEqual(pin)
+    expect(h.kv.get('phone.url')).toBe(URL1)
+    expect(h.calls.filter(c => c.collection === 'coordinators')).toHaveLength(mirrors)
+    expect(h.result('r1')).toBeUndefined()
+    fail[which] = false
+  }
+  // and the sweep still holds the old pin: the new ver is a changed page
+  expect(await h.go()).toBe(`Phone: 0 delivered, 1 refused (page changed)${TAIL}`)
+  // once the rows can be cleared, the pin moves
+  expect(String((await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })).result)).toMatch(/^Phone inbox set/)
+  expect(h.kv.get('phone.page')).toMatchObject({ ver: 'ver-2' })
+})
+
+test('turning the inbox off keeps the pin, so turning it on at another ver clears the rows first', async ($, on) => {
+  const fail = { query: false, write: false }
+  const h = await ansHarness($, on, { fail })
+  const pin = h.kv.get('phone.page')
+  await $.tool.call({ tool: `${TOOL}phone_setup`, url: '' })
+  expect(h.kv.get('phone.page')).toEqual(pin)
+  PAGE.ver = 'ver-2'
+  fail.query = true
+  expect(String((await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })).result)).toMatch(/^Couldn't clear the phone's pending answers/)
+  expect(h.kv.get('phone.url')).toBeUndefined()
 })
