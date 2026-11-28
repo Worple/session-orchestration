@@ -137,7 +137,7 @@ function payloadFor(root, ask, option, fp, at) {
 
   let db = null, keyRec = null, fp = '', code = '', pub = null
   let unsubDevice = null, unsubCoords = null, unsubAnswers = null
-  let expiryTimer = null, loadTimer = null, lastSnap = null
+  let expiryTimer = null, loadTimer = null, devTimer = null, lastSnap = null
   let inboxOn = false, coordsLoaded = false
   let coords = [], answers = []
   const pending = new Set()
@@ -190,6 +190,7 @@ function payloadFor(root, ask, option, fp, at) {
     unsubDevice = unsubCoords = unsubAnswers = null
     clearTimeout(expiryTimer)
     clearTimeout(loadTimer)
+    clearTimeout(devTimer)
     inboxOn = false
     coordsLoaded = false
     coords = []
@@ -223,10 +224,20 @@ function payloadFor(root, ask, option, fp, at) {
     keyRec = rec
     const id = await identify(rec)
     pub = id.pub; fp = id.fp; code = id.code
-    unsubDevice = db.doc('devices/' + fp).onSnapshot(onDevice, e => showMsg('Could not read the pairing state (' + errName(e) + ').'))
+    // First read of every load: time-limit it from the moment of subscribing; never reload.
+    devTimer = setTimeout(() => {
+      showMsg('The page database has not answered after 10 s. Keep this page open; it carries on when it connects.')
+    }, LOAD_MS)
+    unsubDevice = db.doc('devices/' + fp).onSnapshot(onDevice, e => {
+      clearTimeout(devTimer)
+      showMsg('Could not read the pairing state (' + errName(e) + ').')
+    })
   }
 
   function onDevice(snap) {
+    // A cached copy may be stale: keep "Loading…" (never offer pairing or open the inbox) until the store answers.
+    if (snap.metadata && snap.metadata.fromCache) return
+    clearTimeout(devTimer)
     lastSnap = snap
     clearTimeout(expiryTimer)
     if (!snap.exists) { stopInbox(); $('me').textContent = ''; return showPair() }
@@ -268,7 +279,7 @@ function payloadFor(root, ask, option, fp, at) {
       coords = s.docs.map(d => ({ id: d.id, data: d.data() || {} }))
       if (!s.metadata.fromCache) { coordsLoaded = true; clearTimeout(loadTimer); setNote('') }
       render()
-    }, e => setNote('Could not read the coordinator’s data (' + errName(e) + ').'))
+    }, e => { clearTimeout(loadTimer); setNote('Could not read the coordinator’s data (' + errName(e) + ').') })
     unsubAnswers = db.collection('answers').where('device', '==', fp).orderBy('createdAt', 'desc').limit(20).onSnapshot(s => {
       answers = s.docs.map(d => ({ id: d.id, data: d.data() || {} }))
       render()

@@ -106,6 +106,9 @@ page=$here/inbox.html
 [ "$(head -c 7 "$page")" = "<title>" ] || { echo "FAIL page: must be a fragment starting with <title>"; exit 1; }
 if grep -qiE '<!doctype|<html|<head|<body' "$page"; then echo "FAIL page: no document skeleton allowed"; exit 1; fi
 if grep -qE '<script[^>]*src=' "$page"; then echo "FAIL page: no external scripts"; exit 1; fi
+grep -q 'devTimer = setTimeout' "$page" || { echo "FAIL page: the device-doc read has no loading timer"; exit 1; }
+grep -q 'clearTimeout(devTimer)' "$page" || { echo "FAIL page: the device-doc timer is never cleared"; exit 1; }
+grep -q 'metadata.fromCache) return' "$page" || { echo "FAIL page: a cached device snapshot must not be acted on"; exit 1; }
 sed -n '/phone-inbox:pure-start/,/phone-inbox:pure-end/p' "$page" > "$tmp/pure.js"
 [ -s "$tmp/pure.js" ] || { echo "FAIL page: pure block not found"; exit 1; }
 
