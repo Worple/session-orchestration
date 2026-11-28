@@ -203,7 +203,7 @@ const harness = ($: Parameters<Parameters<typeof test>[1]>[0], on: Parameters<Pa
   const calls: Call[] = []
   on('tool.call', { tool: 'ArtifactData' }, async (_, e) => {
     // phone_setup refuses the open answer rows of a new page first: that query is not what these tests count.
-    if ((e as unknown as Call).collection === 'answers' && (e as unknown as Call).action === 'query') return dbRead('query', 'answers', []) as never
+    if ((e as unknown as Call).collection === 'answers' && ['query', 'list'].includes(String((e as unknown as Call).action))) return dbRead('query', 'answers', []) as never
     calls.push(e as unknown as Call)
     return answer(e as unknown as Call, calls.length) as never
   })
@@ -541,7 +541,8 @@ type Opts = {
   submit?: (text: string) => unknown // what prompt.submit answers (a promise holds it)
   stale?: string[] // row ids whose writes are refused as version_mismatch
   devices?: DevDoc[] // the device docs the phone page holds
-  fail?: { query?: boolean; write?: boolean } // answers queries or writes the page refuses, set by a test
+  env?: { root: string } // the project root the process answers with (a test can change it)
+  fail?: { query?: boolean; write?: boolean; nodocs?: boolean } // answers queries or writes the page refuses, set by a test
 }
 const mismatchNow = { result: 'Error: db write failed (version_mismatch): now at version 9', text: 'Error: db write failed (version_mismatch): now at version 9', isError: true }
 const ansHarness = async ($: Env, on: On, o: Opts = {}) => {
@@ -563,10 +564,21 @@ const ansHarness = async ($: Env, on: On, o: Opts = {}) => {
     calls.push(c)
     const id = String(c.doc_id)
     PAGE.seq.push(`${String(c.collection)}:${String(c.action)}`)
-    if (c.collection === 'answers' && c.action === 'query' && o.fail?.query) return { result: 'Error: db query failed (boom)', text: 'Error: db query failed (boom)', isError: true } as never
+    if (c.collection === 'answers' && (c.action === 'query' || c.action === 'list') && o.fail?.query) return { result: 'Error: db query failed (boom)', text: 'Error: db query failed (boom)', isError: true } as never
     if (c.collection === 'answers' && c.action === 'update' && o.fail?.write) return { result: 'Error: db write failed (boom)', text: 'Error: db write failed (boom)', isError: true } as never
+    if (c.collection === 'answers' && c.action === 'list' && o.fail?.nodocs) return { result: { db_read: { op: 'list', collection: 'answers' } }, text: 'nothing' } as never
     if (c.collection === 'devices') return queried(o.devices ?? []) as never
     if (c.collection !== 'answers') return written(calls.length) as never
+    if (c.action === 'list') {
+      // every row of every root, a page at a time: `cursor` is the offset of the next one
+      const q = (c.query ?? {}) as { limit?: number; cursor?: string }
+      const all = [...rows].map(([i, r]) => ({ id: i, data: r.data, version: r.version }))
+      const from = Number(q.cursor ?? 0)
+      const to = from + (q.limit ?? 100)
+      const page = dbRead('list', 'answers', all.slice(from, to))
+      if (to < all.length) (page.result.db_read as Record<string, unknown>).next_cursor = String(to)
+      return page as never
+    }
     if (c.action === 'query') {
       // as the real query would: where, then order_by, then limit
       const q = c.query as { where?: unknown[][]; order_by?: { field: string; direction?: string }; limit?: number }
@@ -595,7 +607,7 @@ const ansHarness = async ($: Env, on: On, o: Opts = {}) => {
       if (r instanceof Error) throw r
       return done(r)
     }
-    return done(0, e.argv.includes('--root') ? ROOT : '')
+    return done(0, e.argv.includes('--root') ? (o.env?.root ?? ROOT) : '')
   })
   on('prompt.submit', async (_, e) => {
     submitted.push({ text: e.text, origin: e.origin })
@@ -630,7 +642,7 @@ const ansHarness = async ($: Env, on: On, o: Opts = {}) => {
     const text = String(status?.text ?? '')
     return text.split(' · ').find(s => s.startsWith('Phone: ')) ?? 'Phone: nothing new'
   }
-  const writes = (id?: string) => calls.filter(c => c.collection === 'answers' && c.action !== 'query' && (id === undefined || c.doc_id === id))
+  const writes = (id?: string) => calls.filter(c => c.collection === 'answers' && c.action !== 'query' && c.action !== 'list' && (id === undefined || c.doc_id === id))
   const result = (id: string) => rows.get(id)?.data.result
   return { rows, verifies, submitted, calls, clock, add, go, writes, result, root, kv }
 }
@@ -1206,4 +1218,64 @@ test('turning the inbox off keeps the pin, so turning it on at another ver clear
   fail.query = true
   expect(String((await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })).result)).toMatch(/^Couldn't clear the phone's pending answers/)
   expect(h.kv.get('phone.url')).toBeUndefined()
+})
+
+// Fix round 2: the pin is the account's, so the clearing is every root's and the whole collection.
+const rowFor = (root: string, n: number) => ({ version: 1, data: { root, payload: 'p', sig: 's', device: FP, createdAt: n } })
+
+test('phone_setup to a new ver refuses another root\'s pending rows too', async ($, on) => {
+  const h = await ansHarness($, on)
+  h.add('mine')
+  h.rows.set('theirs', rowFor('feedfacefeedface', 5))
+  PAGE.ver = 'ver-2'
+  expect(String((await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })).result)).toMatch(/^Phone inbox set/)
+  for (const id of ['mine', 'theirs']) {
+    expect(h.result(id)).toBe('refused')
+    expect(h.rows.get(id)!.data.reason).toBe('page changed')
+  }
+  expect(h.kv.get('phone.page')).toMatchObject({ ver: 'ver-2' })
+})
+
+test('phone_setup with no project root still clears every root\'s pending rows before moving the pin', async ($, on) => {
+  const env = { root: '/work/app' }
+  const h = await ansHarness($, on, { env })
+  h.rows.set('theirs', rowFor('feedfacefeedface', 5))
+  env.root = ''
+  PAGE.ver = 'ver-2'
+  await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })
+  expect(h.result('theirs')).toBe('refused')
+  expect(h.kv.get('phone.page')).toMatchObject({ ver: 'ver-2' })
+})
+
+test('the clearing pages past 1000 rows', async ($, on) => {
+  const h = await ansHarness($, on)
+  for (let i = 0; i < 2500; i++) h.rows.set(`old${i}`, rowFor(i % 2 ? 'feedfacefeedface' : h.root, i + 1))
+  PAGE.ver = 'ver-2'
+  const before = h.calls.length
+  expect(String((await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })).result)).toMatch(/^Phone inbox set/)
+  const lists = h.calls.slice(before).filter(c => c.action === 'list')
+  expect(lists).toHaveLength(3)
+  expect(lists.map(c => (c.query as { cursor?: string }).cursor)).toEqual([undefined, '1000', '2000'])
+  expect([...h.rows.values()].every(r => r.data.result === 'refused')).toBe(true)
+})
+
+test('more than 10 pages of rows is refused, with the old pin kept', async ($, on) => {
+  const h3 = await ansHarness($, on)
+  for (let i = 0; i < 10_001; i++) h3.rows.set(`x${i}`, rowFor(h3.root, i + 1))
+  PAGE.ver = 'ver-3'
+  const r = String((await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })).result)
+  expect(r).toMatch(/^Couldn't clear the phone's pending answers \(too many rows\): call phone_setup again\.$/)
+  expect(h3.kv.get('phone.page')).toMatchObject({ ver: 'ver-1' })
+})
+
+test('a query result without a docs array makes phone_setup refuse and keep the old pin', async ($, on) => {
+  const fail = { nodocs: false }
+  const h = await ansHarness($, on, { fail })
+  h.add('r1')
+  const pin = h.kv.get('phone.page')
+  PAGE.ver = 'ver-2'
+  fail.nodocs = true
+  expect(String((await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })).result)).toMatch(/^Couldn't clear the phone's pending answers \(.+\): call phone_setup again\.$/)
+  expect(h.kv.get('phone.page')).toEqual(pin)
+  expect(h.result('r1')).toBeUndefined()
 })

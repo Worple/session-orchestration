@@ -371,21 +371,34 @@ const pageError = (v: PageVerdict, url: string) =>
   v.kind === 'mismatch' ? refusalText(url) : v.kind === 'unreadable' ? `${CANT_CHECK}: ${v.why}` : undefined
 const isPageError = (e: string) => e.startsWith(CANT_CHECK) || e.startsWith("The page at ")
 
-// Every unhandled answer row of this root on the page, refused `page changed` (versioned writes only). Returns why it
-// could not (a query or write that failed, a row it could not read, no ArtifactData), else undefined. A version refusal
-// is another session having taken the row.
+// Every unhandled answer row on the page, of every root (the pin is the account's, so are the rows it vouched for),
+// refused `page changed` (versioned writes only). The whole collection is read, unordered, a page of 1000 at a time
+// (an ordered query is one page, and a writer picks its own createdAt). Returns why it could not (a read or write that
+// failed, a row it could not read, more than 10 pages, no ArtifactData), else undefined. A version refusal is another
+// session having taken the row.
+const CLEAR_PAGE = 1000
+const CLEAR_PAGES = 10
 async function refuseOpenRows($: EngineInterface, url: string): Promise<string | undefined> {
   try {
-    const rootPath = await projectRoot($)
-    if (!rootPath) return undefined
-    const root = await hex16(rootPath)
-    const q = await artifactData($, url, { action: 'query', collection: 'answers', query: { where: [['root', '==', root]], order_by: { field: 'createdAt', direction: 'desc' }, limit: 100 } })
-    if (q.error) return q.error
-    const structured = asObject(q.result.db_read).docs
-    const docs = dbDocs(q)
-    if (Array.isArray(structured) && docs.length !== structured.length) return 'some answer rows could not be read'
-    for (const d of docs) {
-      if (d.data.root !== root || d.data.result !== undefined || d.data.createdAt === undefined) continue
+    const all: Doc[] = []
+    let cursor: string | undefined
+    for (let page = 0; ; page++) {
+      if (page === CLEAR_PAGES) return 'too many rows'
+      const q = await artifactData($, url, { action: 'list', collection: 'answers', query: { limit: CLEAR_PAGE, ...(cursor !== undefined ? { cursor } : {}) } })
+      if (q.error) return q.error
+      const readResult = asObject(q.result.db_read)
+      const structured = readResult.docs
+      if (!Array.isArray(structured)) return 'the answers could not be read'
+      const docs = dbDocs(q)
+      if (docs.length !== structured.length) return 'some answer rows could not be read'
+      all.push(...docs)
+      const next = readResult.next_cursor ?? q.result.next_cursor
+      if (next === undefined || next === null || next === '') break
+      if (!filled(next)) return 'the answers could not be read'
+      cursor = next
+    }
+    for (const d of all) {
+      if (d.data.result !== undefined || typeof d.data.createdAt !== 'number') continue
       if (d.version === undefined) return 'an answer row has no version'
       const w = await writeRow($, url, d.id, d.version, { result: 'refused', reason: PAGE_CHANGED, resultAt: await $.clock.now() })
       if ('error' in w) return w.error
