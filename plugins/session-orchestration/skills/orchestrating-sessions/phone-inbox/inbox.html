@@ -1,0 +1,422 @@
+<title>Coordinator Inbox</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* One column, phone first: a status line, then each project with its open asks as cards of large answer buttons. */
+:root {
+  --bg: #edf1ef; --card: #ffffff; --fg: #16201c; --muted: #546158; --line: #ccd5cf;
+  --accent: #0a6a58; --on-accent: #ffffff; --wait: #8a5a00; --ok: #17703f; --bad: #b3261e;
+  --body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #101614; --card: #19211e; --fg: #e4ebe7; --muted: #9aa8a0; --line: #2b3732;
+    --accent: #5fd1b8; --on-accent: #08241d; --wait: #e8b24a; --ok: #66c88d; --bad: #ff8d84; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #101614; --card: #19211e; --fg: #e4ebe7; --muted: #9aa8a0; --line: #2b3732;
+  --accent: #5fd1b8; --on-accent: #08241d; --wait: #e8b24a; --ok: #66c88d; --bad: #ff8d84; color-scheme: dark;
+}
+body { background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 1rem; }
+main {
+  max-width: 34rem; margin: 0 auto; display: grid; gap: 1.25rem;
+  padding-block: 1.25rem 2.5rem;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+section { display: grid; gap: .9rem; min-width: 0; }
+h1 { font-size: 1.4rem; margin: 0; text-wrap: balance; }
+h2 { font-size: 1.1rem; margin: 0; text-wrap: balance; overflow-wrap: anywhere; }
+h3 { font-size: .8rem; margin: 0; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+p { margin: 0; line-height: 1.5; overflow-wrap: anywhere; }
+.muted { color: var(--muted); }
+.bad { color: var(--bad); }
+.note { color: var(--wait); }
+.code { font-family: var(--mono); font-size: 1.5rem; font-weight: 700; letter-spacing: .04em; overflow-wrap: anywhere; }
+label { font-weight: 600; }
+input {
+  font: inherit; min-height: 3rem; padding: .5rem .8rem; border-radius: .6rem; width: 100%; box-sizing: border-box;
+  border: 1px solid var(--line); background: var(--card); color: var(--fg);
+}
+button {
+  font: inherit; font-weight: 600; min-height: 3rem; padding: .7rem 1rem; border-radius: .6rem; width: 100%;
+  border: 1px solid var(--line); background: var(--card); color: var(--fg); text-align: left;
+}
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); text-align: center; }
+button:disabled { opacity: .5; }
+button:focus-visible, input:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.project { display: grid; gap: .6rem; min-width: 0; }
+.activity { font-size: .9rem; color: var(--muted); }
+.card {
+  display: grid; gap: .7rem; min-width: 0; padding: .9rem 1rem;
+  background: var(--card); border: 1px solid var(--line); border-radius: .75rem;
+}
+.q { font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+.meta { font-family: var(--mono); font-size: .8rem; color: var(--muted); overflow-wrap: anywhere; }
+.details { white-space: pre-wrap; line-height: 1.45; font-size: .95rem; overflow-wrap: anywhere; }
+.opts { display: grid; gap: .5rem; }
+.status { font-size: .9rem; font-weight: 600; overflow-wrap: anywhere; }
+.status.s-delivered { color: var(--ok); }
+.status.s-refused { color: var(--bad); }
+.status.s-sent, .status.s-queued { color: var(--wait); }
+ol { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; }
+li.recent { display: grid; gap: .2rem; min-width: 0; padding: .7rem .9rem; border: 1px solid var(--line); border-radius: .6rem; background: var(--card); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }
+</style>
+
+<main>
+  <div class="top">
+    <h1>Coordinator Inbox</h1>
+    <p class="muted" id="me"></p>
+  </div>
+  <p class="note" id="note" role="status" hidden></p>
+
+  <section id="v-msg">
+    <p id="msg">Loading…</p>
+    <button class="primary" id="msg-pair" type="button" hidden>Pair again</button>
+  </section>
+
+  <section id="v-pair" hidden>
+    <p>Pair this phone with the coordinator, then approve the code it shows here in the coordinator pane.</p>
+    <label for="label">Name for this phone</label>
+    <input id="label" type="text" value="Phone" maxlength="40" autocomplete="off">
+    <button class="primary" id="pair" type="button">Pair this phone</button>
+    <p class="bad" id="pair-err"></p>
+  </section>
+
+  <section id="v-wait" hidden>
+    <p><span class="code" id="code"></span> — approve this code in the coordinator pane</p>
+    <p class="muted">This page opens the inbox by itself once the code is approved.</p>
+  </section>
+
+  <section id="v-inbox" hidden>
+    <div id="projects" class="project"></div>
+    <div id="recent-box">
+      <h3>Recent answers</h3>
+      <ol id="recent"></ol>
+    </div>
+  </section>
+</main>
+
+<script>
+// phone-inbox:pure-start
+function b64url(bytes) {
+  const u = new Uint8Array(bytes)
+  let s = ''
+  for (let i = 0; i < u.length; i++) s += String.fromCharCode(u[i])
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+function thumbprintInput(jwk) {
+  return JSON.stringify({ crv: jwk.crv, kty: jwk.kty, x: jwk.x, y: jwk.y })
+}
+function codeOf(digestBytes) {
+  let hex = ''
+  for (let i = 0; i < 8; i++) hex += (digestBytes[i] < 16 ? '0' : '') + digestBytes[i].toString(16)
+  hex = hex.toUpperCase()
+  return hex.slice(0, 4) + '-' + hex.slice(4, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16)
+}
+function payloadFor(root, ask, option, fp, at) {
+  return JSON.stringify({ v: 1, root: root, askId: ask.id, key: ask.key, question: ask.question, option: option, at: at, device: fp })
+}
+// phone-inbox:pure-end
+
+;(() => {
+  const PAIR_MAX_AGE_MS = 600000, MAX_PAYLOAD_BYTES = 8192, MAX_LABEL = 40, LOAD_MS = 10000
+  const $ = id => document.getElementById(id)
+  const el = (tag, cls, text) => {
+    const e = document.createElement(tag)
+    if (cls) e.className = cls
+    if (text != null) e.textContent = text
+    return e
+  }
+  const txt = v => (v == null ? '' : typeof v === 'string' ? v : JSON.stringify(v))
+  const errName = e => (e && (e.code || e.name) ? String(e.code || e.name) + (e.message ? ': ' + e.message : '') : String(e))
+  const clock = ms => (Number.isFinite(ms) ? new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '')
+  const enc = new TextEncoder()
+
+  let db = null, keyRec = null, fp = '', code = '', pub = null
+  let unsubDevice = null, unsubCoords = null, unsubAnswers = null
+  let expiryTimer = null, loadTimer = null, lastSnap = null
+  let inboxOn = false, coordsLoaded = false
+  let coords = [], answers = []
+  const pending = new Set()
+  const errors = new Map()
+
+  // ---- key storage: IndexedDB phone-inbox / keys / device ----
+  function openStore() {
+    return new Promise((res, rej) => {
+      const r = indexedDB.open('phone-inbox', 1)
+      r.onupgradeneeded = () => r.result.createObjectStore('keys')
+      r.onsuccess = () => res(r.result)
+      r.onerror = () => rej(r.error)
+    })
+  }
+  async function keyOp(mode, fn) {
+    const store = await openStore()
+    return new Promise((res, rej) => {
+      const tx = store.transaction('keys', mode)
+      const q = fn(tx.objectStore('keys'))
+      tx.oncomplete = () => res(q ? q.result : undefined)
+      tx.onerror = () => rej(tx.error)
+      tx.onabort = () => rej(tx.error)
+    })
+  }
+  const getKey = () => keyOp('readonly', s => s.get('device'))
+  const putKey = v => keyOp('readwrite', s => s.put(v, 'device'))
+  const delKey = () => keyOp('readwrite', s => s.delete('device'))
+
+  // ---- views ----
+  function show(name) {
+    for (const v of ['msg', 'pair', 'wait', 'inbox']) $('v-' + v).hidden = v !== name
+  }
+  function showMsg(text, pairAgain) {
+    $('msg').textContent = text
+    $('msg-pair').hidden = !pairAgain
+    show('msg')
+  }
+  function showPair() {
+    $('pair-err').textContent = ''
+    $('pair').disabled = false
+    show('pair')
+  }
+  function setNote(text) {
+    $('note').textContent = text || ''
+    $('note').hidden = !text
+  }
+
+  function teardown() {
+    for (const u of [unsubDevice, unsubCoords, unsubAnswers]) if (u) { try { u() } catch (e) {} }
+    unsubDevice = unsubCoords = unsubAnswers = null
+    clearTimeout(expiryTimer)
+    clearTimeout(loadTimer)
+    inboxOn = false
+    coordsLoaded = false
+    coords = []
+    answers = []
+    setNote('')
+  }
+
+  async function repair() {
+    teardown()
+    try { await delKey() } catch (e) {}
+    keyRec = null
+    $('me').textContent = ''
+    showPair()
+  }
+
+  // ---- identity ----
+  async function identify(rec) {
+    const j = await crypto.subtle.exportKey('jwk', rec.publicKey)
+    const p = { kty: j.kty, crv: j.crv, x: j.x, y: j.y }
+    const dg = new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(thumbprintInput(p))))
+    return { pub: p, fp: b64url(dg), code: codeOf(dg) }
+  }
+  function cleanLabel(s) {
+    let t = String(s || '').replace(/\s+/g, ' ').trim().slice(0, MAX_LABEL)
+    if (/[\ud800-\udbff]$/.test(t)) t = t.slice(0, -1)
+    return t.trim() || 'Phone'
+  }
+
+  async function begin(rec) {
+    teardown()
+    keyRec = rec
+    const id = await identify(rec)
+    pub = id.pub; fp = id.fp; code = id.code
+    unsubDevice = db.doc('devices/' + fp).onSnapshot(onDevice, e => showMsg('Could not read the pairing state (' + errName(e) + ').'))
+  }
+
+  function onDevice(snap) {
+    lastSnap = snap
+    clearTimeout(expiryTimer)
+    if (!snap.exists) { stopInbox(); $('me').textContent = ''; return showPair() }
+    const d = snap.data() || {}
+    if (d.state === 'paired') {
+      $('me').textContent = 'This phone: ' + code
+      startInbox()
+      show('inbox')
+      return render()
+    }
+    stopInbox()
+    if (d.state === 'rejected') return showMsg('The coordinator did not approve this phone.', true)
+    const age = Date.now() - Number(d.createdAt || 0)
+    if (age > PAIR_MAX_AGE_MS) return showMsg('This pairing request expired', true)
+    $('code').textContent = code
+    show('wait')
+    expiryTimer = setTimeout(() => onDevice(lastSnap), PAIR_MAX_AGE_MS - age + 500)
+  }
+
+  // ---- the inbox ----
+  function stopInbox() {
+    if (!inboxOn) return
+    for (const u of [unsubCoords, unsubAnswers]) if (u) { try { u() } catch (e) {} }
+    unsubCoords = unsubAnswers = null
+    clearTimeout(loadTimer)
+    inboxOn = false
+    coordsLoaded = false
+    coords = []
+    answers = []
+    setNote('')
+  }
+  function startInbox() {
+    if (inboxOn) return
+    inboxOn = true
+    loadTimer = setTimeout(() => {
+      if (!coordsLoaded) setNote('The coordinator’s data has not answered yet. What you see may be out of date; keep this page open.')
+    }, LOAD_MS)
+    unsubCoords = db.collection('coordinators').onSnapshot(s => {
+      coords = s.docs.map(d => ({ id: d.id, data: d.data() || {} }))
+      if (!s.metadata.fromCache) { coordsLoaded = true; clearTimeout(loadTimer); setNote('') }
+      render()
+    }, e => setNote('Could not read the coordinator’s data (' + errName(e) + ').'))
+    unsubAnswers = db.collection('answers').where('device', '==', fp).orderBy('createdAt', 'desc').limit(20).onSnapshot(s => {
+      answers = s.docs.map(d => ({ id: d.id, data: d.data() || {} }))
+      render()
+    }, e => setNote('Could not read your answers (' + errName(e) + ').'))
+  }
+
+  function parsed(a) {
+    try { const p = JSON.parse(a.data.payload); return p && typeof p === 'object' ? p : null } catch (e) { return null }
+  }
+  function statusOf(d) {
+    if (!d.result) return { text: 'Sent — the coordinator picks it up within a minute', cls: 's-sent' }
+    if (d.result === 'queued') return { text: 'Queued', cls: 's-queued' }
+    if (d.result === 'delivered') return { text: 'Delivered', cls: 's-delivered' }
+    if (d.result === 'refused') return { text: 'Refused: ' + txt(d.reason), cls: 's-refused' }
+    return { text: txt(d.result), cls: '' }
+  }
+
+  function render() {
+    if (!inboxOn) return
+    const latest = new Map() // newest answer per ask (answers arrive newest first)
+    for (const a of answers) {
+      const p = parsed(a)
+      if (p) { const k = p.root + '|' + p.askId + '|' + p.key; if (!latest.has(k)) latest.set(k, a) }
+    }
+    const box = $('projects')
+    box.replaceChildren()
+    if (!coords.length) box.append(el('p', 'muted', 'Nothing to answer yet. Open asks from the coordinator appear here.'))
+    for (const c of coords) {
+      const proj = el('div', 'project')
+      proj.append(el('h2', '', txt(c.data.project) || 'Project'))
+      const act = txt(c.data.activity)
+      const at = clock(Number(c.data.updatedAt))
+      if (act || at) proj.append(el('p', 'activity', (act ? act + ' — ' : '') + (at ? 'as of ' + at : '')))
+      const asks = Array.isArray(c.data.asks) ? c.data.asks : []
+      if (!asks.length) proj.append(el('p', 'muted', 'Nothing needs you here.'))
+      for (const ask of asks) if (ask && typeof ask === 'object') proj.append(card(c.id, ask, latest))
+      box.append(proj)
+    }
+    const list = $('recent')
+    list.replaceChildren()
+    for (const a of answers) {
+      const p = parsed(a)
+      const li = el('li', 'recent')
+      li.append(el('div', 'q', p ? txt(p.question) : '(unreadable answer)'))
+      if (p) li.append(el('div', 'meta', txt(p.option)))
+      const st = statusOf(a.data)
+      li.append(el('div', 'status ' + st.cls, st.text))
+      list.append(li)
+    }
+    $('recent-box').hidden = !answers.length
+  }
+
+  function card(root, ask, latest) {
+    const cid = root + '|' + ask.id + '|' + ask.key
+    const ans = latest.get(cid)
+    const refused = ans && ans.data.result === 'refused'
+    const busy = pending.has(cid) || (ans && !refused)
+    const c = el('div', 'card')
+    c.append(el('div', 'q', txt(ask.question)))
+    c.append(el('div', 'meta', txt(ask.key)))
+    if (ask.details) c.append(el('div', 'details', txt(ask.details)))
+    if (ask.target) c.append(el('div', 'meta', txt(ask.target)))
+    const opts = el('div', 'opts')
+    for (const option of Array.isArray(ask.options) ? ask.options : []) {
+      if (typeof option !== 'string') continue
+      const b = el('button', '', option)
+      b.type = 'button'
+      b.disabled = !!busy
+      b.addEventListener('click', () => answer(root, ask, option, cid))
+      opts.append(b)
+    }
+    c.append(opts)
+    if (ans) {
+      const st = statusOf(ans.data)
+      c.append(el('div', 'status ' + st.cls, st.text))
+      if (refused && ans.data.reason === 'unpaired device') {
+        const b = el('button', 'primary', 'Pair again')
+        b.type = 'button'
+        b.addEventListener('click', repair)
+        c.append(b)
+      }
+    }
+    if (errors.has(cid)) c.append(el('div', 'status s-refused', errors.get(cid)))
+    return c
+  }
+
+  async function answer(root, ask, option, cid) {
+    errors.delete(cid)
+    pending.add(cid)
+    render()
+    try {
+      const at = Date.now()
+      const payload = payloadFor(root, ask, option, fp, at)
+      if (enc.encode(payload).length > MAX_PAYLOAD_BYTES) {
+        errors.set(cid, 'Too long to answer from the phone: answer in the terminal.')
+        return
+      }
+      const sig = b64url(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, keyRec.privateKey, enc.encode(payload)))
+      await db.collection('answers').doc(crypto.randomUUID()).set({ root: root, payload: payload, sig: sig, device: fp, createdAt: at })
+    } catch (e) {
+      errors.set(cid, 'Could not send: ' + errName(e))
+    } finally {
+      pending.delete(cid)
+      render()
+    }
+  }
+
+  // ---- pairing ----
+  $('pair').addEventListener('click', async () => {
+    $('pair').disabled = true
+    $('pair-err').textContent = ''
+    try {
+      const label = cleanLabel($('label').value)
+      const kp = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify'])
+      const rec = { privateKey: kp.privateKey, publicKey: kp.publicKey, at: Date.now() }
+      const id = await identify(rec)
+      await putKey(rec)
+      try {
+        await db.doc('devices/' + id.fp).set({ jwk: id.pub, label: label, createdAt: Date.now() })
+      } catch (e) {
+        try { await delKey() } catch (e2) {}
+        throw e
+      }
+      await begin(rec)
+    } catch (e) {
+      $('pair-err').textContent = 'Could not pair this phone: ' + errName(e)
+      $('pair').disabled = false
+    }
+  })
+  $('msg-pair').addEventListener('click', repair)
+
+  // ---- start ----
+  async function start() {
+    const timer = setTimeout(() => {
+      if (!db) showMsg('The page database has not answered after 10 s. Keep this page open; it carries on when it connects.')
+    }, LOAD_MS)
+    try {
+      db = window.claude && window.claude.use ? await window.claude.use('db') : null
+      if (window.claude && window.claude.use) await window.claude.use('user')
+    } catch (e) { db = null }
+    clearTimeout(timer)
+    if (!db) return showMsg('Open this page signed in as its owner.')
+    if (!(window.crypto && crypto.subtle && window.indexedDB)) return showMsg('This browser cannot keep a signing key for this phone.')
+    let rec
+    try { rec = await getKey() } catch (e) { return showMsg('Could not read this phone’s key (' + errName(e) + ').') }
+    if (!rec || !rec.privateKey || !rec.publicKey) return showPair()
+    try { await begin(rec) } catch (e) { showMsg('Could not use this phone’s key (' + errName(e) + ').', true) }
+  }
+  start()
+})()
+</script>

@@ -99,4 +99,52 @@ got=0; out=$(node "$tmp/imp.mjs" "file://$cli" "$tmp/valid" < /dev/null 2>&1) ||
 echo "Object.defineProperty(globalThis, 'crypto', { value: {}, configurable: true });" > "$tmp/nosubtle.mjs"
 got=0; node --import "$tmp/nosubtle.mjs" "$cli" < "$tmp/valid" >"$tmp/out" 2>"$tmp/err" || got=$?
 [ "$got" = 3 ] && [ ! -s "$tmp/out" ] && [ "$(wc -l < "$tmp/err" | tr -d ' ')" = 1 ] || { echo "FAIL no subtle: exit $got, want 3 ($(head -c 200 "$tmp/err"))"; exit 1; }
+
+# --- The page (inbox.html): its pure block must agree with the module end to end. ---
+page=$here/inbox.html
+[ -f "$page" ] || { echo "FAIL page: inbox.html is missing"; exit 1; }
+[ "$(head -c 7 "$page")" = "<title>" ] || { echo "FAIL page: must be a fragment starting with <title>"; exit 1; }
+if grep -qiE '<!doctype|<html|<head|<body' "$page"; then echo "FAIL page: no document skeleton allowed"; exit 1; fi
+if grep -qE '<script[^>]*src=' "$page"; then echo "FAIL page: no external scripts"; exit 1; fi
+sed -n '/phone-inbox:pure-start/,/phone-inbox:pure-end/p' "$page" > "$tmp/pure.js"
+[ -s "$tmp/pure.js" ] || { echo "FAIL page: pure block not found"; exit 1; }
+
+cat > "$tmp/page.mjs" <<'EOF'
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+const [pureFile, cli] = process.argv.slice(2);
+const fns = new Function(readFileSync(pureFile, 'utf8') + '\nreturn { b64url, thumbprintInput, codeOf, payloadFor };')();
+const eq = (a, b, what) => { if (a !== b) { console.log(`FAIL ${what}: got ${a} want ${b}`); process.exit(1); } };
+
+// Thumbprint fixture, pinned in Task 3 too.
+const jwk = { kty: 'EC', crv: 'P-256', x: 'CxijAnQFbFv29yvXuSU527dJRP1-fkjFNuFGLj9mbdw', y: 'cMplI_UDWlXdeRMubUmOKJj7yQ_QgWVvNdP0kYrE58Y' };
+eq(fns.thumbprintInput(jwk), '{"crv":"P-256","kty":"EC","x":"' + jwk.x + '","y":"' + jwk.y + '"}', 'thumbprintInput');
+const digest = createHash('sha256').update(fns.thumbprintInput(jwk)).digest();
+eq(digest.toString('base64url'), 'h3lQ9rYMb8Y4b1jtz1xMXr8nWCFztltYAKjaYNRNJs0', 'fixture fp');
+eq(fns.b64url(digest), 'h3lQ9rYMb8Y4b1jtz1xMXr8nWCFztltYAKjaYNRNJs0', 'b64url');
+eq(fns.b64url(new Uint8Array([251, 255, 254])), '-__-', 'b64url alphabet');
+eq(fns.b64url(new Uint8Array([1])), 'AQ', 'b64url no padding');
+eq(fns.codeOf(digest), '8779-50F6-B60C-6FC6', 'fixture code');
+
+// payloadFor: the exact string, keys in order.
+const ask = { id: 'a1', key: 'k-7', question: 'Use "?" — ñ ✓', options: ['Yes', 'No'], at: 1 };
+const want = '{"v":1,"root":"0123456789abcdef","askId":"a1","key":"k-7","question":"Use \\"?\\" — ñ ✓","option":"Yes","at":1700000000000,"device":"h3lQ9rYMb8Y4b1jtz1xMXr8nWCFztltYAKjaYNRNJs0"}';
+const payload = fns.payloadFor('0123456789abcdef', ask, 'Yes', 'h3lQ9rYMb8Y4b1jtz1xMXr8nWCFztltYAKjaYNRNJs0', 1700000000000);
+eq(payload, want, 'payloadFor');
+
+// End to end: sign the page's payload with WebCrypto and verify through the module's CLI.
+const { subtle } = globalThis.crypto;
+const kp = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+const ex = await subtle.exportKey('jwk', kp.publicKey);
+const pub = { kty: ex.kty, crv: ex.crv, x: ex.x, y: ex.y };
+const sig = fns.b64url(await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, kp.privateKey, new TextEncoder().encode(payload)));
+const run = (p) => spawnSync('node', [cli], { input: JSON.stringify({ jwk: pub, payload: p, sig }), encoding: 'utf8' });
+const good = run(payload);
+eq(good.status, 0, 'verify-sig exit for the page payload (' + good.stderr.trim() + ')');
+eq(run(payload.replace('"Yes"', '"No"')).status, 1, 'verify-sig exit for a changed payload');
+console.log('page ok');
+EOF
+got=0; out=$(node "$tmp/page.mjs" "$tmp/pure.js" "$cli" 2>&1) || got=$?
+[ "$got" = 0 ] && [ "$out" = "page ok" ] || { echo "FAIL page: exit $got: $out"; exit 1; }
 echo ok
