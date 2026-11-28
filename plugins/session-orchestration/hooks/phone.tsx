@@ -3,7 +3,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Color, EngineInterface, RenderElement, RenderNode } from 'claude-code'
 
-import { claimAndSubmit, clean, hex16, projectRoot, runBash } from './register'
+import { claimAndSubmit, clean, hex16, parseActivity, projectRoot, runBash } from './register'
 
 import type { Ask, PhoneView } from '../types'
 
@@ -118,6 +118,24 @@ export const mirrorDoc = (project: string, asks: Ask[], activity: string, now: n
   return doc
 }
 
+const LINE_MAX = 120
+// The activity atom (tab-separated rows with ids, paths and epochs) as the phone shows it: one line per session,
+// `<name> — <state>: <what>`, what being the current action, else the last text line. A malformed row is dropped.
+export const activityLines = (text: string): string => {
+  const one = (s: string) => clean(s).replace(/\s+/g, ' ').trim()
+  const lines: string[] = []
+  for (const a of parseActivity(text)) {
+    const name = one(a.name)
+    if (!name) continue
+    const what = one(a.doing) || one(a.last)
+    const state = one(a.state)
+    const line = `${name} — ${state}${what ? `: ${what}` : ''}`
+    const cps = Array.from(line)
+    lines.push(cps.length > LINE_MAX ? `${cps.slice(0, LINE_MAX - 1).join('')}…` : line)
+  }
+  return lines.join('\n')
+}
+
 // The pane's asks and activity, read here by the same keys (the engine's read wants atoms declared in this file).
 const asks = atom({ plugin: 'session-orchestration', key: 'asks' } as const, [])
 const activity = atom({ plugin: 'session-orchestration', key: 'activity' } as const, '')
@@ -163,7 +181,42 @@ async function storedUrl($: EngineInterface) {
 async function artifactData($: EngineInterface, url: string, input: Record<string, unknown>) {
   const r = asObject(await $.tool.call({ tool: 'ArtifactData', url, ...input } as never))
   const text = String(r.text ?? (typeof r.result === 'string' ? r.result : ''))
-  return { result: asObject(r.result), error: r.isError === true ? oneLine(text || 'refused') : undefined }
+  return { result: asObject(r.result), text, error: r.isError === true ? oneLine(text || 'refused') : undefined }
+}
+
+// The documents of a query or list result. The structured docs carry only id and version (their `data` is empty);
+// the fields are the JSON lines of the text, between a BEGIN and an END line with one nonce. A doc whose line can't be
+// found (or doesn't agree on its version) is left out: nothing is ever done to a row that was not read.
+type Doc = { id: string; version: number | undefined; data: Record<string, unknown> }
+function dbDocs(r: { result: Record<string, unknown>; text: string }): Doc[] {
+  const structured = asObject(r.result.db_read).docs
+  if (!Array.isArray(structured)) return []
+  const begin = /^=== BEGIN ARTIFACT DB (\S+) /m.exec(r.text)
+  if (!begin) return []
+  const from = begin.index + begin[0].length
+  const end = r.text.indexOf(`\n=== END ARTIFACT DB ${begin[1]} ===`, from)
+  if (end < 0) return []
+  const lines = new Map<string, Record<string, unknown> | null>() // null: the id appears twice
+  for (const line of r.text.slice(from, end).split('\n')) {
+    if (!line.startsWith('{')) continue
+    try {
+      const o = asObject(JSON.parse(line))
+      if (!str(o.id)) continue
+      lines.set(o.id, lines.has(o.id) ? null : o)
+    } catch {
+      // not a document line
+    }
+  }
+  const out: Doc[] = []
+  for (const s of structured) {
+    const d = asObject(s)
+    const line = str(d.id) ? lines.get(d.id) : undefined
+    if (!str(d.id) || !line || !isObject(line.data)) continue
+    const version = typeof d.version === 'number' ? d.version : undefined
+    if (typeof line.version === 'number' && line.version !== version) continue
+    out.push({ id: d.id, version, data: line.data })
+  }
+  return out
 }
 
 async function mirrorOnce($: EngineInterface) {
@@ -181,7 +234,7 @@ async function mirrorOnce($: EngineInterface) {
     }
     const root = await hex16(rootPath)
     const project = rootPath.split('/').filter(Boolean).at(-1) ?? ''
-    const doc = mirrorDoc(project, await read($, asks), await read($, activity), await $.clock.now())
+    const doc = mirrorDoc(project, await read($, asks), activityLines(await read($, activity)), await $.clock.now())
     const text = JSON.stringify({ ...doc, updatedAt: 0 })
     if (text === lastText) return
     const put = async (pin: number | undefined): Promise<{ error: string; stale: boolean } | { version: number }> => {
@@ -253,18 +306,29 @@ type PagePin = { sha: string; ver: string }
 type PageVerdict = { kind: 'match'; hash: string; ver: string } | { kind: 'mismatch' } | { kind: 'unreadable'; why: string }
 
 // The body of the published page from the Artifact read's text, or why there is none.
-function pageBody(text: string): { body: string } | { why: string } {
+// Two layouts: inside a <cowritten-artifact-html> block (another session's publish), or bare from `<!doctype html>`
+// to the end (this session's own). Either way the document has to be the whole page: its UTF-8 length is the read's
+// `bytes` and it ends in `</body></html>`; a cut-short read (a head only) or a page carrying a fake ending fails that.
+function pageBody(text: string, bytes: unknown): { body: string } | { why: string } {
   const start = '\n<cowritten-artifact-html>\n'
-  const open = text.indexOf(start)
-  const end = text.lastIndexOf('</cowritten-artifact-html>')
-  if (open < 0 || end < open) return { why: 'no page content in the answer' }
-  const block = text.slice(open + start.length, end)
   const head = '</head><body>'
   const tail = '</body></html>'
-  const a = block.indexOf(head)
-  const b = block.lastIndexOf(tail)
-  if (a < 0 || b < a + head.length) return { why: "the page isn't in the expected layout" }
-  return { body: block.slice(a + head.length, b).trim() }
+  let doc: string
+  const open = text.indexOf(start)
+  if (open >= 0) {
+    const end = text.lastIndexOf('</cowritten-artifact-html>')
+    if (end < open) return { why: 'no page content in the answer' }
+    doc = text.slice(open + start.length, end).replace(/\n$/, '')
+  } else {
+    const at = text.indexOf('<!doctype html>')
+    const last = text.lastIndexOf(tail)
+    if (at < 0 || last < at || text.slice(last + tail.length).trim() !== '') return { why: 'no page content in the answer' }
+    doc = text.slice(at, last + tail.length)
+  }
+  if (typeof bytes !== 'number' || bytes !== enc.encode(doc).length || !doc.endsWith(tail)) return { why: "the page wasn't read in full" }
+  const a = doc.indexOf(head)
+  if (a < 0) return { why: "the page isn't in the expected layout" }
+  return { body: doc.slice(a + head.length, doc.length - tail.length).trim() }
 }
 
 // With `pin` (the sha and published version id phone_setup accepted), the page also has to be that very version: a
@@ -276,7 +340,7 @@ async function pageVerdict($: EngineInterface, url: string, pin?: PagePin): Prom
     const r = asObject(await $.tool.call({ tool: 'Artifact', action: 'read', url } as never))
     const text = typeof r.text === 'string' ? r.text : ''
     if (r.isError === true) return { kind: 'unreadable', why: oneLine(text || 'refused') }
-    const got = pageBody(text)
+    const got = pageBody(text, asObject(asObject(r.result).read).bytes)
     if ('why' in got) return { kind: 'unreadable', why: got.why }
     const ver = asObject(asObject(r.result).artifactRead).ver
     if (!filled(ver)) return { kind: 'unreadable', why: 'no version id in the answer' }
@@ -307,6 +371,24 @@ const pageError = (v: PageVerdict, url: string) =>
   v.kind === 'mismatch' ? refusalText(url) : v.kind === 'unreadable' ? `${CANT_CHECK}: ${v.why}` : undefined
 const isPageError = (e: string) => e.startsWith(CANT_CHECK) || e.startsWith("The page at ")
 
+// Every unhandled answer row of this root on the page, refused `page changed` (versioned writes only). Best effort: a
+// session without ArtifactData, or a query that fails, leaves them for the sweep, which checks the pinned page anyway.
+async function refuseOpenRows($: EngineInterface, url: string): Promise<void> {
+  try {
+    const rootPath = await projectRoot($)
+    if (!rootPath) return
+    const root = await hex16(rootPath)
+    const q = await artifactData($, url, { action: 'query', collection: 'answers', query: { where: [['root', '==', root]], order_by: { field: 'createdAt', direction: 'desc' }, limit: 100 } })
+    if (q.error) return
+    for (const d of dbDocs(q)) {
+      if (d.data.root !== root || d.data.result !== undefined || d.version === undefined || typeof d.data.createdAt !== 'number') continue
+      await writeRow($, url, d.id, d.version, { result: 'refused', reason: PAGE_CHANGED, resultAt: await $.clock.now() })
+    }
+  } catch {
+    // nothing more to do here
+  }
+}
+
 export async function phoneSetup($: EngineInterface, url: unknown): Promise<string> {
   const u = typeof url === 'string' ? url.trim() : undefined
   if (u === undefined || (u !== '' && !PHONE_URL.test(u))) {
@@ -324,6 +406,10 @@ export async function phoneSetup($: EngineInterface, url: unknown): Promise<stri
   const verdict = await pageVerdict($, u)
   if (verdict.kind === 'mismatch') return refusalText(u)
   if (verdict.kind === 'unreadable') return `Couldn't read the page at ${u} back (${verdict.why}): check the URL, then call phone_setup again.`
+  // Accepting a page other than the one pinned (or the first one) first refuses the rows written so far: they were
+  // signed on whatever the page was until now, and a swap-and-restore followed by this call must not accept them.
+  const prev = asObject(await $.store.get('phone.page'))
+  if (prev.sha !== verdict.hash || prev.ver !== verdict.ver || (await $.store.get('phone.url')) !== u) await refuseOpenRows($, u)
   await $.store.set('phone.url', u)
   await $.store.set('phone.page', { sha: verdict.hash, ver: verdict.ver })
   seenUrl = u
@@ -375,8 +461,14 @@ async function markDoc($: EngineInterface, url: string, fp: string, state: 'pair
 async function sweepDevices($: EngineInterface, url: string, gate: () => Promise<PageVerdict>): Promise<string | undefined> {
   const mine = gen
   const q = await artifactData($, url, { action: 'query', collection: 'devices', query: { order_by: { field: 'createdAt', direction: 'desc' }, limit: 50 } })
-  if (q.error) return `${DEV_ERR}: ${q.error}`
-  const raw = asObject(q.result.db_read).docs
+  if (q.error) {
+    // Rows an earlier sweep listed can't be vouched for now: none stays pressable.
+    if (mine === gen) {
+      pairDocs = new Map()
+      await patch($, { pairing: [] })
+    }
+    return `${DEV_ERR}: ${q.error}`
+  }
   const now = await $.clock.now()
   const paired = storedDevices(await $.store.get('phone.devices'))
   const rejected = storedRejected(await $.store.get('phone.rejected'))
@@ -384,11 +476,10 @@ async function sweepDevices($: EngineInterface, url: string, gate: () => Promise
   const docs = new Map<string, { jwk: Jwk; version: number | undefined }>()
   const heals: Promise<string | undefined>[] = []
   const cands: (PhoneView['pairing'][number] & { jwk: Jwk; version: number | undefined })[] = []
-  for (const doc of Array.isArray(raw) ? raw : []) {
-    const id = asObject(doc).id
-    const data = asObject(asObject(doc).data)
-    const version = asObject(doc).version
-    const ver = typeof version === 'number' ? version : undefined
+  for (const doc of dbDocs(q)) {
+    const id = doc.id
+    const data = doc.data
+    const ver = doc.version
     const jwk = publicJwk(data.jwk)
     if (!str(id) || !jwk) continue
     const { fp, code } = await thumbprint(jwk) // never the doc's own idea of its fp
@@ -486,13 +577,12 @@ async function sweepAnswers($: EngineInterface, url: string, gate: () => Promise
   const root = await hex16(rootPath)
   const q = await artifactData($, url, { action: 'query', collection: 'answers', query: { where: [['root', '==', root]], order_by: { field: 'createdAt', direction: 'desc' }, limit: 100 } })
   if (q.error) return { line: NOTHING, error: `${ANS_FAIL}: ${q.error}` }
-  const raw = asObject(q.result.db_read).docs
   // Only this project's rows are ever read further or written, whatever the query returned.
   // The newest 100 come back (a batch of old or junk rows can't push out newer answers); the unhandled ones are
   // handled oldest first, so the first tap on an ask wins.
   const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
-  const docs = (Array.isArray(raw) ? raw : []).map(asObject).filter(d => str(d.id) && asObject(d.data).root === root)
-    .sort((a, b) => Number(asObject(a.data).createdAt ?? 0) - Number(asObject(b.data).createdAt ?? 0))
+  const docs = dbDocs(q).filter(d => d.data.root === root)
+    .sort((a, b) => Number(a.data.createdAt ?? 0) - Number(b.data.createdAt ?? 0))
   const devices = storedDevices(await $.store.get('phone.devices'))
   const mine: Record<string, number> = {} // the hashes this sweep accepted
   const keys: string[] = []
@@ -594,11 +684,19 @@ async function runSweep($: EngineInterface): Promise<string> {
     const url = await storedUrl($)
     if (!url) return 'phone inbox off'
     await phoneMirror($)
-    const gate = pageGate($, url)
-    let checked: PageVerdict | undefined
-    const seen = () => gate().then(v => (checked = v))
-    const devErr = await sweepDevices($, url, seen).catch(err => `${DEV_ERR}: ${errText(err)}`)
-    const ans = await sweepAnswers($, url, seen).catch(err => ({ line: NOTHING, error: `${ANS_FAIL}: ${errText(err)}` }))
+    // Each part reads the page itself, after its own query: a read made before the answers were queried would vouch
+    // for rows written after it.
+    const checks: PageVerdict[] = []
+    const devGate = pageGate($, url)
+    const ansGate = pageGate($, url)
+    const devErr = await sweepDevices($, url, () => devGate().then(v => (checks.push(v), v))).catch(err => `${DEV_ERR}: ${errText(err)}`)
+    const ans = await sweepAnswers($, url, () => ansGate().then(v => (checks.push(v), v))).catch(err => ({ line: NOTHING, error: `${ANS_FAIL}: ${errText(err)}` }))
+    const checked = checks.find(v => v.kind !== 'match') ?? checks[0]
+    if (checked && checked.kind !== 'match') {
+      // A page that isn't the plugin's leaves no pairing row pressable, whatever an earlier sweep listed.
+      pairDocs = new Map()
+      await patch($, { pairing: [] })
+    }
     // The mirror owns the error line it left; the devices' and answers' from an earlier sweep are replaced by this one's.
     const cur = (await read($, phone)).error
     const own = cur && ![DEV_ERR, ANS_ERR, ANS_FAIL].some(p => cur.startsWith(p)) && !isPageError(cur)
@@ -653,6 +751,13 @@ export async function phonePair($: EngineInterface, fp: string): Promise<void> {
     const doc = pairDocs.get(fp)
     if (!url || !row || !doc) return // a stale press
     pairDocs.delete(fp)
+    // The row was listed up to a minute ago, under a page that was the plugin's then: read the page again first.
+    const page = await pageGateRead($, url)
+    if (page.kind !== 'match') {
+      pairDocs = new Map()
+      await patch($, { pairing: [], error: pageError(page, url) ?? null })
+      return
+    }
     const t = await thumbprint(doc.jwk)
     if (t.fp !== fp) return
     const now = await $.clock.now()
