@@ -447,6 +447,8 @@ async function sweepAnswers($: EngineInterface, url: string): Promise<{ line: st
     const ver = d.version
     if (typeof ver !== 'number' || !Number.isInteger(ver)) continue
     if (!finite(data.createdAt)) { await drop(d); continue } // not a row the phone's page writes
+    // A result is one this module wrote; anything else is junk, and as unhandled-looking rows it would fill the page for good.
+    if (data.result !== undefined && !(typeof data.result === 'string' && ['queued', 'delivered', 'refused'].includes(data.result))) { await drop(d); continue }
     if (data.result !== undefined) continue
     try {
       if (data.createdAt - t0 > PHONE_SKEW_MS) { await refuse(id, ver, 'clock ahead'); continue } // no verifier spawned for it

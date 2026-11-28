@@ -843,3 +843,15 @@ test('a hash added by another coordinator during this sweep is seen before the n
   expect(h.rows.get('r2')!.data).toMatchObject({ result: 'refused', reason: 'already used' })
   expect(h.submitted).toHaveLength(1)
 })
+
+test('100 future-dated rows with a non-string or unknown result are deleted and a real answer gets through', async ($, on) => {
+  const h = await ansHarness($, on)
+  const results = [5, null, {}, 'x']
+  junk(h, 100, i => ({ createdAt: 9e15 + i, result: results[i % 4] }))
+  h.add('real', { row: { createdAt: T0 } })
+  await h.go()
+  await h.go()
+  expect([...h.rows.keys()].filter(k => k.startsWith('junk'))).toEqual([])
+  expect(h.result('real')).toBe('delivered')
+  expect(h.submitted).toHaveLength(1)
+})
