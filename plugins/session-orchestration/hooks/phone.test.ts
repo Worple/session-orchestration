@@ -384,23 +384,47 @@ test('Reject remembers the fp and marks it rejected; the row never returns', asy
   await again.unmount()
 })
 
+
 test("a doc older than 10 minutes, a doc whose id isn't its thumbprint, or a JWK with d shows no row", async ($, on) => {
   const other = { kty: 'EC', crv: 'P-256', x: 'A'.repeat(43), y: 'B'.repeat(43) } as const // shape-valid; only the thumbprint matters here
+  const stale = { kty: 'EC', crv: 'P-256', x: 'C'.repeat(43), y: 'D'.repeat(43) } as const
   const goodFp = (await thumbprint(other)).fp
+  const staleFp = (await thumbprint(stale)).fp
+  // The d doc's id is the real thumbprint of its public members, so only the d refusal can keep it out.
   const docs = [
-    dev(FP, { createdAt: T0 + 60_000 - PAIR_MAX_AGE_MS - 1 }), // 10 minutes and a millisecond old when swept
+    dev(staleFp, { jwk: stale, createdAt: T0 + 60_000 - PAIR_MAX_AGE_MS - 1 }), // 10 minutes and a millisecond old when swept
     dev('not-its-thumbprint'),
-    dev('withD', { jwk: { ...JWK, d: X } }),
+    dev(FP, { jwk: { ...JWK, d: X } }),
     dev(goodFp, { jwk: other, label: 'Control' }),
   ]
   const h = pairHarness($, on, () => docs)
   await openPhone($, h)
   const ui = await mountPane($)
   expect(await shown(ui, `phone-pair-${goodFp}`)).toBe(true) // the harness does show a valid row
-  for (const id of [FP, 'not-its-thumbprint', 'withD']) expect(await shown(ui, `phone-pair-${id}`)).toBe(false)
+  for (const id of [staleFp, 'not-its-thumbprint', FP]) expect(await shown(ui, `phone-pair-${id}`)).toBe(false)
   await ui.unmount()
 })
 
+test('a device label is cleaned, collapsed to one line and cut at 40 code points; an empty one shows as Phone', async ($, on) => {
+  const other = { kty: 'EC', crv: 'P-256', x: 'A'.repeat(43), y: 'B'.repeat(43) } as const
+  const otherFp = (await thumbprint(other)).fp
+  const hostile = `Line1\nLine2\t\u0001${String.fromCharCode(0x202e)}${'x'.repeat(16)}😀tail more text` // the emoji is code point 39 of the cleaned label
+  let docs = [dev(FP, { label: hostile })]
+  const h = pairHarness($, on, () => docs)
+  await openPhone($, h)
+  const ui = await mountPane($)
+  // clean() writes control and bidi-override characters out as visible text; the line is one line, 40 code points, the emoji whole
+  const label = `Line1 Line2 \\x01\\u202e${'x'.repeat(16)}😀…`
+  expect(Array.from(label)).toHaveLength(40)
+  expect(await ui.find({ type: 'Text', text: `Pair phone "${label}" ${CODE}? Pair only if your phone shows this code.` })).toBeDefined()
+  await ui.unmount()
+  docs = [dev(otherFp, { jwk: other, label: ' \n\t ' })]
+  await sweepOnce(h)
+  const again = await mountPane($)
+  const code = (await thumbprint(other)).code
+  expect(await again.find({ type: 'Text', text: `Pair phone "Phone" ${code}? Pair only if your phone shows this code.` })).toBeDefined()
+  await again.unmount()
+})
 test('Unpair removes the device', async ($, on) => {
   let docs = [dev(FP, {}, 1)]
   const h = pairHarness($, on, () => docs)
