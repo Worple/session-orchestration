@@ -1,4 +1,4 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 import type { Ask } from '../types'
 import { MIRROR_MAX_BYTES, PAIR_MAX_AGE_MS, judgePayload, mirrorDoc, parseAnswerRow, parsePayload, publicJwk, sha256hex, thumbprint } from './phone'
@@ -128,4 +128,117 @@ test('mirrorDoc stays within the byte budget for non-ASCII text and skips an ask
   const doc = mirrorDoc('p', asks, '', 1)
   expect(doc.asks.map(a => a.id)).toEqual(['n1', 'n2'])
   expect(size(doc)).toBeLessThanOrEqual(MIRROR_MAX_BYTES)
+})
+
+// The phone inbox's I/O, through the plugin's tools: the mirror goes out as ArtifactData calls.
+const URL1 = 'https://claude.ai/artifact/abcdef123456'
+const TOOL = 'mcp__session-orchestration__'
+type Call = Record<string, unknown>
+const harness = ($: Parameters<Parameters<typeof test>[1]>[0], on: Parameters<Parameters<typeof test>[1]>[1], answer: (c: Call, n: number) => unknown) => {
+  mock.clock(on)
+  mock.env(on, { HOME: '/h' })
+  mock.store(on)
+  on('session.id', async () => ({ value: 'sess-p' }))
+  on('ui.status', async () => ({ value: undefined }))
+  const calls: Call[] = []
+  on('tool.call', { tool: 'ArtifactData' }, async (_, e) => {
+    calls.push(e as unknown as Call)
+    return answer(e as unknown as Call, calls.length) as never
+  })
+  on('process.run', async (_, e) => ({ value: { exitCode: 0, stdout: e.argv.includes('--root') ? '/work/app' : '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('fs.read', async () => { throw new Error('ENOENT') })
+  on('fs.write', async () => ({ value: undefined }))
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  const ask = (key: string, question: string) =>
+    $.tool.call({ tool: `${TOOL}ask_approval`, key, question, options: [`Yes, ${question}`, `No, ${key}`] })
+  return { calls, ask }
+}
+const written = (v: number) => ({ result: { db_write: { op: 'set', collection: 'coordinators', doc_id: 'x', committed: true, version: v } } })
+
+test('phone_setup stores the url and mirrors the asks once', async ($, on) => {
+  const h = harness($, on, (_, n) => written(n))
+  await $.tool.call({ tool: `${TOOL}open_pane` })
+  await h.ask('PROJ-1', 'merge app#1')
+  const r = await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })
+  expect(r.result).toBe(`Phone inbox set: open ${URL1} on your phone, tap Pair this phone, and approve its code in the pane.`)
+  expect(h.calls).toHaveLength(1)
+  expect(h.calls[0]).toMatchObject({ action: 'set', url: URL1, collection: 'coordinators' })
+  expect(h.calls[0]!.if_version).toBeUndefined()
+  expect(h.calls[0]!.doc_id).toMatch(/^[0-9a-f]{16}$/)
+  const doc = h.calls[0]!.data as { v: number; project: string; asks: { key: string }[] }
+  expect(doc).toMatchObject({ v: 1, project: 'app' })
+  expect(doc.asks.map(a => a.key)).toEqual(['PROJ-1'])
+  await new Promise(r => setTimeout(r, 20)) // the ask's own background mirrors finish inside the test
+})
+
+test('a new ask mirrors; an unchanged list writes nothing', async ($, on) => {
+  const h = harness($, on, (_, n) => written(n))
+  await $.tool.call({ tool: `${TOOL}open_pane` })
+  await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })
+  expect(h.calls).toHaveLength(1) // the empty list
+  await h.ask('PROJ-1', 'merge app#1')
+  await new Promise(r => setTimeout(r, 20))
+  expect(h.calls).toHaveLength(2)
+  expect(h.calls[1]!.if_version).toBe(1) // pinned to the version the first write returned
+  expect((h.calls[1]!.data as { asks: unknown[] }).asks).toHaveLength(1)
+  // Queueing the same ask again changes nothing in the document: no write.
+  await h.ask('PROJ-1', 'merge app#1')
+  await new Promise(r => setTimeout(r, 20))
+  expect(h.calls).toHaveLength(2)
+})
+
+test('a version refusal re-reads and retries once', async ($, on) => {
+  const h = harness($, on, (c, n) => {
+    if (c.action === 'get') return { result: { db_read: { op: 'get', collection: 'coordinators', doc_id: 'x', doc: { version: 7, data: {} } } } }
+    if (n === 1) return { result: 'Error: db write failed (version_mismatch): … now at version 7 …', text: 'Error: db write failed (version_mismatch): … now at version 7 …', isError: true }
+    return written(8)
+  })
+  await $.tool.call({ tool: `${TOOL}open_pane` })
+  await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })
+  expect(h.calls.map(c => c.action)).toEqual(['set', 'get', 'set'])
+  expect(h.calls[2]!.if_version).toBe(7)
+  await h.ask('PROJ-1', 'merge app#1')
+  await new Promise(r => setTimeout(r, 20))
+  expect(h.calls.at(-1)!.if_version).toBe(8)
+})
+
+test('no url: nothing is written', async ($, on) => {
+  const h = harness($, on, (_, n) => written(n))
+  await $.tool.call({ tool: `${TOOL}open_pane` })
+  await h.ask('PROJ-1', 'merge app#1')
+  await new Promise(r => setTimeout(r, 20))
+  expect(h.calls).toEqual([])
+})
+
+test('phone_setup refuses a non-artifact url', async ($, on) => {
+  const h = harness($, on, (_, n) => written(n))
+  for (const url of ['http://claude.ai/artifact/abcdef123456', 'https://evil.example/artifact/abcdef123456', 'https://claude.ai/artifact/short', 'https://claude.ai/artifact/abcdef123456/x']) {
+    const r = await $.tool.call({ tool: `${TOOL}phone_setup`, url })
+    expect(r.result).toMatch(/^phone_setup: url must be .*https:\/\/claude\.ai\/artifact\/<id>/)
+  }
+  expect(h.calls).toEqual([])
+})
+
+test('phone_setup with "" turns it off', async ($, on) => {
+  const h = harness($, on, (_, n) => written(n))
+  await $.tool.call({ tool: `${TOOL}open_pane` })
+  await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })
+  const r = await $.tool.call({ tool: `${TOOL}phone_setup`, url: '' })
+  expect(r.result).toBe('Phone inbox off.')
+  const n = h.calls.length
+  await h.ask('PROJ-1', 'merge app#1')
+  await new Promise(r => setTimeout(r, 20))
+  expect(h.calls).toHaveLength(n)
+})
+
+test('a -p session (no ArtifactData tool) puts the error in PhoneView and does not throw', async ($, on) => {
+  const h = harness($, on, () => { throw new Error('no tool named ArtifactData') })
+  await $.tool.call({ tool: `${TOOL}open_pane` })
+  const r = await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })
+  expect(r.result).toMatch(/^Phone inbox set/)
+  expect(h.calls).toHaveLength(1)
+  // The failure is kept as the view's error and nothing is remembered as written: the next change tries again.
+  await h.ask('PROJ-1', 'merge app#1')
+  await new Promise(r => setTimeout(r, 20))
+  expect(h.calls).toHaveLength(2)
 })

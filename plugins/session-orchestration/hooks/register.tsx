@@ -17,6 +17,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Color, EngineInterface, Register, RenderElement, RenderNode, SessionRateLimit, ToolCallResult, ToolSpec, UiPressArgument } from 'claude-code'
 
+import { phoneMirror, phoneSetup, phoneSweep } from './phone'
 import type { ActionResult, Actions, Ask, AskBody, AskKind, Board, Handed, PaneAction, Peek, SectionState } from '../types'
 
 const PANE = 'coordinator'
@@ -904,6 +905,7 @@ async function setAsksNow($: EngineInterface, f: (l: Ask[]) => Ask[]) {
     src = disk ?? l
     return f(src.some(stuck) ? src.map(a => (stuck(a) ? unsent(a) : a)) : src)
   })
+  if (next !== src) void phoneMirror($) // the phone inbox shows the list as it changed
   if (!file) return next
   storeText = text
   // A missing or unreadable store takes this session's list.
@@ -1142,7 +1144,7 @@ async function runStatus($: EngineInterface, args: string[], init: { cwd?: strin
 // ponytail: the root is asked once per module life; a pane of another project is another session.
 let root: string | undefined
 let rootFailed = '' // why the last --root failed to run, for open_pane to name
-async function projectRoot($: EngineInterface) {
+export async function projectRoot($: EngineInterface) {
   if (!root) {
     const r = await runStatus($, ['--root'])
     rootFailed = r.startsWith('failed: ') ? r.slice(8) : ''
@@ -1362,7 +1364,7 @@ export function parseHanded(text: string): Handed | undefined {
   return { id, key: String(key), session, cwd, account, command: String(command), what: String(what), at }
 }
 // The first 16 hex digits of a text's sha256.
-const hex16 = async (text: string) =>
+export const hex16 = async (text: string) =>
   [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))]
     .slice(0, 8).map(b => b.toString(16).padStart(2, '0')).join('')
 export const handedId = (session: string, command: string) => hex16(`${session}\n${command}`)
@@ -1732,6 +1734,8 @@ async function open($: EngineInterface) {
     $.clock.every(60_000, () => void forwardOutbox($).catch(() => undefined))
     // Another coordinator's asks and answers (a handover's overlap) reach this pane within a minute.
     $.clock.every(60_000, () => void loadAsks($).then(() => notifyWaiting($)).catch(() => undefined))
+    // The phone's page shows activity too: mirrored again each minute, one sweep at a time.
+    $.clock.every(60_000, () => void phoneSweep($))
     void loadAsks($).catch(() => undefined)
     void refresh($)
   }
@@ -1754,6 +1758,11 @@ const TOOLS: ToolSpec[] = [
     name: 'cancel_approval',
     description: 'Coordinator only: remove asks queued with ask_approval from the coordinator pane, submitting no answer. Pass key alone to remove every ask for that key, or with id (as ask_approval returned it; it wins over question) or question (exact text) to remove one. To replace an ask, queue the new one, then cancel the old by id. Returns what it removed, or that nothing matched.',
     inputSchema: CANCEL_SCHEMA,
+  },
+  {
+    name: 'phone_setup',
+    description: 'Coordinator only: set the private claude.ai page (an artifact, https://claude.ai/artifact/<id> or https://claude.ai/code/artifact/<id>) that mirrors the open approval asks to the user\'s phone, and mirror them there at once. The user then opens the page on their phone, taps Pair this phone, and approves its code in the coordinator pane. Pass an empty string to turn the phone inbox off.',
+    inputSchema: { type: 'object', properties: { url: { type: 'string', description: 'The page\'s link, or "" to turn the phone inbox off' } }, required: ['url'] },
   },
   {
     name: 'reload_plugins',
@@ -2149,6 +2158,8 @@ export const register: Register = on => {
 
   // The coordinator's own plugin reload after `claude plugin update`, without the user typing it. A command can't
   // run inside the tool call: turn.complete runs it, as it runs /rename.
+  on('tool.call', { tool: 'mcp__session-orchestration__phone_setup' }, async ($, e) => ({ result: await phoneSetup($, e.url as string) }))
+
   on('tool.call', { tool: 'mcp__session-orchestration__reload_plugins' }, async $ => {
     await update($, reloading, () => true)
     return { result: 'Plugins reload (/reload-plugins) when this turn ends. A new tool registers then: load it with ToolSearch next turn.' }
