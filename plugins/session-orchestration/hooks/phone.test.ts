@@ -1,6 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import type { Ask } from '../types'
+import { answerText, hex16 } from './register'
 import { MIRROR_MAX_BYTES, PAIR_MAX_AGE_MS, judgePayload, mirrorDoc, parseAnswerRow, parsePayload, publicJwk, sha256hex, thumbprint } from './phone'
 import type { AnswerRow, Payload } from './phone'
 
@@ -465,4 +466,305 @@ test('a paired fp whose doc still lacks state gets the update again on the next 
   expect(await shown(again, `phone-pair-${FP}`)).toBe(false)
   expect(await shown(again, `phone-unpair-${FP}`)).toBe(true)
   await again.unmount()
+})
+
+// The answer sweep: the phone's signed rows are verified (Node, faked here by argv), judged, and submitted as a pane click.
+const ROOT = '/work/app'
+const OLD = 86_400_000
+const NOW = T0 + 500 // when the sweep runs: phone_answers sweeps 500 ms after it returns
+type On = Parameters<Parameters<typeof test>[1]>[1]
+type Row = { data: Record<string, unknown>; version: number }
+type Opts = {
+  verify?: (stdin: string) => number | Error // the verifier's exit code, or a spawn failure
+  paired?: boolean
+  submit?: (text: string) => unknown // what prompt.submit answers (a promise holds it)
+  stale?: string[] // row ids whose writes are refused as version_mismatch
+}
+const mismatchNow = { result: 'Error: db write failed (version_mismatch): now at version 9', text: 'Error: db write failed (version_mismatch): now at version 9', isError: true }
+const ansHarness = async ($: Env, on: On, o: Opts = {}) => {
+  const rows = new Map<string, Row>()
+  const verifies: { argv: string[]; stdin: string }[] = []
+  const submitted: { text: string; origin: unknown }[] = []
+  const calls: Call[] = []
+  const clock = mock.clock(on, { now: T0 })
+  mock.env(on, { HOME: '/h' })
+  mock.store(on, o.paired === false ? {} : { 'phone.devices': { [FP]: { jwk: JWK, label: 'Pixel', code: CODE, pairedAt: 1 } } })
+  on('session.id', async () => ({ value: 'sess-p' }))
+  on('ui.status', async () => ({ value: undefined }))
+  on('tool.call', { tool: 'ArtifactData' }, async (_, e) => {
+    const c = e as unknown as Call
+    calls.push(c)
+    const id = String(c.doc_id)
+    if (c.collection === 'devices') return queried([]) as never
+    if (c.collection !== 'answers') return written(calls.length) as never
+    if (c.action === 'query') return { result: { db_read: { op: 'query', collection: 'answers', docs: [...rows].map(([i, r]) => ({ id: i, data: r.data, version: r.version })) } } } as never
+    const row = rows.get(id)
+    if (!row || o.stale?.includes(id) || c.if_version !== row.version) return mismatchNow as never
+    if (c.action === 'delete') {
+      rows.delete(id)
+      return { result: { db_write: { op: 'delete', collection: 'answers', doc_id: id, committed: true } } } as never
+    }
+    row.data = { ...row.data, ...(c.data as object) }
+    row.version++
+    return { result: { db_write: { op: 'update', collection: 'answers', doc_id: id, committed: true, version: row.version } } } as never
+  })
+  const done = (exitCode: number, stdout = '') => ({ value: { exitCode, stdout, stderr: exitCode ? 'why' : '', isStdoutTruncated: false, isStderrTruncated: false } })
+  on('process.run', async (_, e) => {
+    if ((e.argv.at(-1) ?? '').endsWith('/hooks/verify-sig.mjs')) {
+      const stdin = String(e.init?.stdin ?? '')
+      verifies.push({ argv: e.argv, stdin })
+      const r = o.verify?.(stdin) ?? 0
+      if (r instanceof Error) throw r
+      return done(r)
+    }
+    return done(0, e.argv.includes('--root') ? ROOT : '')
+  })
+  on('prompt.submit', async (_, e) => {
+    submitted.push({ text: e.text, origin: e.origin })
+    const r = await o.submit?.(e.text)
+    return (r ?? { text: e.text }) as never
+  })
+  on('fs.read', async () => { throw new Error('ENOENT') })
+  on('fs.write', async () => ({ value: undefined }))
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  await $.tool.call({ tool: `${TOOL}open_pane` })
+  const asked = (await $.tool.call({ tool: `${TOOL}ask_approval`, key: 'PROJ-1', question: 'merge app#1', options: ['Yes, merge app#1', 'No, PROJ-1'] })).result
+  expect(asked).toMatch(/\(id 1\)/)
+  await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })
+  const root = await hex16(ROOT)
+  let n = 0
+  const add = (id: string, over: { payload?: Partial<Payload> | string; row?: Record<string, unknown>; version?: number } = {}) => {
+    const payload = typeof over.payload === 'string' ? over.payload
+      : JSON.stringify({ v: 1, root, askId: '1', key: 'PROJ-1', question: 'merge app#1', option: 'Yes, merge app#1', at: T0 - 1000, device: FP, ...over.payload })
+    rows.set(id, { version: over.version ?? 1, data: { root, payload, sig: 'sig', device: FP, createdAt: ++n, ...over.row } })
+    return payload
+  }
+  // phone_answers returns at once and sweeps from a timer a moment later (the host refuses a submit inside a tool.call
+  // hook); `go` calls it, lets the timer fire, and gives the sweep's line as the pane's status shows it.
+  const go = async () => {
+    const r = String((await $.tool.call({ tool: `${TOOL}phone_answers` })).result)
+    expect(r).toMatch(/^Phone: reading the answers now\./)
+    await clock.advance(500)
+    await settle()
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS })
+    const status = await ui.find({ type: 'Text', text: /^https/ })
+    await ui.unmount()
+    const text = String(status?.text ?? '')
+    return text.split(' · ').find(s => s.startsWith('Phone: ')) ?? 'Phone: nothing new'
+  }
+  const writes = (id?: string) => calls.filter(c => c.collection === 'answers' && c.action !== 'query' && (id === undefined || c.doc_id === id))
+  const result = (id: string) => rows.get(id)?.data.result
+  return { rows, verifies, submitted, calls, clock, add, go, writes, result, root }
+}
+const ASK = { id: '1', key: 'PROJ-1', question: 'merge app#1', options: ['Yes, merge app#1', 'No, PROJ-1'], at: T0 }
+const TAIL = ''
+
+test('a good answer gives exactly one prompt with the pane-answer text and marks the row delivered', async ($, on) => {
+  const h = await ansHarness($, on)
+  h.add('r1')
+  expect(await h.go()).toBe(`Phone: 1 delivered (PROJ-1), 0 refused${TAIL}`)
+  await settle()
+  expect(h.submitted).toHaveLength(1)
+  expect(h.submitted[0]!.text).toBe(answerText(ASK, 'Yes, merge app#1'))
+  expect(h.submitted[0]!.text).toBe('Approval pane answer for PROJ-1: Yes, merge app#1. Asked: merge app#1')
+  expect(h.submitted[0]!.origin).toMatchObject({ kind: 'plugin', asUser: true })
+  expect(h.result('r1')).toBe('delivered')
+  expect(h.rows.get('r1')!.data.resultAt).toBe(NOW)
+  expect(h.writes('r1').map(c => [c.action, (c.data as { result: string }).result, c.if_version])).toEqual([['update', 'queued', 1], ['update', 'delivered', 2]])
+  const q = h.calls.find(c => c.collection === 'answers' && c.action === 'query')!
+  expect(q).toMatchObject({ url: URL1, query: { where: [['root', '==', h.root]], limit: 100 } })
+  // the same sweep again finds nothing new
+  expect(await h.go()).toBe(`Phone: nothing new${TAIL}`)
+  expect(h.submitted).toHaveLength(1)
+})
+
+test('the verifier is node on the absolute verify-sig.mjs, fed the stored device key, never the row\'s', async ($, on) => {
+  const h = await ansHarness($, on)
+  const payload = h.add('r1', { row: { jwk: { kty: 'EC', crv: 'P-256', x: 'A'.repeat(43), y: 'B'.repeat(43) } } })
+  await h.go()
+  await settle()
+  expect(h.verifies).toHaveLength(1)
+  const { argv, stdin } = h.verifies[0]!
+  expect(argv.slice(-3, -1)).toEqual(['-c', 'exec node "$0"'])
+  expect(argv.at(-1)).toMatch(/^(\/|[A-Za-z]:[\\/]).*\/hooks\/verify-sig\.mjs$/)
+  expect(JSON.parse(stdin)).toEqual({ jwk: JWK, payload, sig: 'sig' })
+})
+
+const refusals: [string, string, Opts, Partial<Payload> | string | undefined][] = [
+  ['bad signature', 'bad signature', { verify: () => 1 }, undefined],
+  ['a verifier that finds the input malformed', 'malformed answer', { verify: () => 2 }, undefined],
+  ['a payload that is not JSON', 'malformed answer', {}, 'not json'],
+  ['unpaired device', 'unpaired device', { paired: false }, undefined],
+  ['expired', 'expired', {}, { at: NOW - 3_600_001 }],
+  ['clock ahead', 'clock ahead', {}, { at: NOW + 300_001 }],
+  ['withdrawn ask', 'withdrawn or changed', {}, { askId: '9' }],
+  ['changed question', 'withdrawn or changed', {}, { question: 'merge app#2' }],
+  ['not an option', 'not an option', {}, { option: 'Maybe' }],
+]
+for (const [name, reason, opts, payload] of refusals) {
+  test(`${name}: refused as "${reason}", no prompt`, async ($, on) => {
+    const h = await ansHarness($, on, opts)
+    h.add('r1', { payload })
+    expect(await h.go()).toBe(`Phone: 0 delivered, 1 refused (${reason})${TAIL}`)
+    await settle()
+    expect(h.submitted).toEqual([])
+    expect(h.result('r1')).toBe('refused')
+    expect(h.rows.get('r1')!.data).toMatchObject({ reason, resultAt: NOW })
+    expect(h.writes('r1').map(c => c.if_version)).toEqual([1])
+    if (name === 'unpaired device') expect(h.verifies).toEqual([])
+  })
+}
+
+test('a withdrawn ask (cancelled after the phone answered) is refused', async ($, on) => {
+  const h = await ansHarness($, on)
+  h.add('r1')
+  await $.tool.call({ tool: `${TOOL}cancel_approval`, key: 'PROJ-1' })
+  await h.go()
+  expect(h.rows.get('r1')!.data).toMatchObject({ result: 'refused', reason: 'withdrawn or changed' })
+  expect(h.submitted).toEqual([])
+})
+
+test('the same payload twice: the second is already used', async ($, on) => {
+  const h = await ansHarness($, on)
+  const p = h.add('r1')
+  h.add('r2', { payload: p })
+  expect(await h.go()).toBe(`Phone: 1 delivered (PROJ-1), 1 refused (already used)${TAIL}`)
+  await settle()
+  expect(h.submitted).toHaveLength(1)
+  expect(h.rows.get('r2')!.data).toMatchObject({ result: 'refused', reason: 'already used' })
+  // the replay is refused in a later sweep too
+  h.add('r3', { payload: p })
+  await h.go()
+  expect(h.rows.get('r3')!.data).toMatchObject({ result: 'refused', reason: 'already used' })
+  expect(h.submitted).toHaveLength(1)
+})
+
+test('Yes then No for one ask: one prompt, the second refused', async ($, on) => {
+  const h = await ansHarness($, on)
+  h.add('r1', { payload: { option: 'Yes, merge app#1' } })
+  h.add('r2', { payload: { option: 'No, PROJ-1' } })
+  await h.go()
+  await settle()
+  expect(h.submitted).toHaveLength(1)
+  expect(h.submitted[0]!.text).toContain('Yes, merge app#1')
+  expect(h.result('r1')).toBe('delivered')
+  expect(h.result('r2')).toBe('refused')
+  expect(String(h.rows.get('r2')!.data.reason)).toMatch(/^(already answered|withdrawn or changed)$/)
+})
+
+test('Yes then No while the first answer waits for its turn: the second is already answered', async ($, on) => {
+  const h = await ansHarness($, on, { submit: () => new Promise(() => undefined) })
+  h.add('r1', { payload: { option: 'Yes, merge app#1' } })
+  h.add('r2', { payload: { option: 'No, PROJ-1' } })
+  await h.go()
+  expect(h.submitted).toHaveLength(1)
+  expect(h.rows.get('r2')!.data).toMatchObject({ result: 'refused', reason: 'already answered' })
+})
+
+test('phone_answers returns while prompt.submit is still pending; the row goes queued, then delivered', async ($, on) => {
+  let release: () => void = () => undefined
+  const h = await ansHarness($, on, { submit: () => new Promise<void>(r => { release = r }) })
+  h.add('r1')
+  expect(await h.go()).toBe(`Phone: 1 delivered (PROJ-1), 0 refused${TAIL}`) // the tool had returned before the submit resolved
+  await settle()
+  expect(h.submitted).toHaveLength(1)
+  expect(h.result('r1')).toBe('queued')
+  release() // the turn starts
+  await settle()
+  expect(h.result('r1')).toBe('delivered')
+  expect(h.submitted).toHaveLength(1)
+})
+
+test('node failing leaves rows untouched and shows the error; the next sweep delivers', async ($, on) => {
+  let mode: 'spawn' | 'code3' | 'ok' = 'spawn'
+  const h = await ansHarness($, on, { verify: () => (mode === 'spawn' ? new Error('spawn node ENOENT') : mode === 'code3' ? 3 : 0) })
+  h.add('r1')
+  h.add('r2', { payload: { option: 'No, PROJ-1' } })
+  const line = await h.go()
+  expect(line).toMatch(/^Phone: nothing new/)
+  expect(h.verifies).toHaveLength(1) // the sweep stopped at the first failure
+  expect(h.writes()).toEqual([])
+  expect(h.rows.get('r1')!.data.result).toBeUndefined()
+  let ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS })
+  expect(await ui.find({ type: 'Text', text: /can't verify phone answers: / })).toBeDefined()
+  await ui.unmount()
+  mode = 'code3'
+  await h.go()
+  expect(h.writes()).toEqual([])
+  expect(h.submitted).toEqual([])
+  mode = 'ok'
+  expect(await h.go()).toMatch(/^Phone: 1 delivered \(PROJ-1\), 1 refused/)
+  await settle()
+  expect(h.submitted).toHaveLength(1)
+  expect(h.result('r1')).toBe('delivered')
+  ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS })
+  expect(await ui.find({ type: 'Text', text: /can't verify phone answers/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a row for another root is not touched', async ($, on) => {
+  const h = await ansHarness($, on)
+  h.add('other', { row: { root: 'ffffffffffffffff' } })
+  h.add('mine')
+  await h.go()
+  await settle()
+  expect(h.writes('other')).toEqual([])
+  expect(h.rows.get('other')!.data.result).toBeUndefined()
+  expect(h.verifies).toHaveLength(1) // only mine
+  expect(h.submitted).toHaveLength(1)
+  expect(h.result('mine')).toBe('delivered')
+})
+
+test('a version refusal on the queued write skips the row: no claim, no prompt', async ($, on) => {
+  const h = await ansHarness($, on, { stale: ['r1'] })
+  h.add('r1')
+  expect(await h.go()).toBe(`Phone: nothing new${TAIL}`)
+  await settle()
+  expect(h.writes('r1')).toHaveLength(1)
+  expect(h.submitted).toEqual([])
+  expect(h.rows.get('r1')!.data.result).toBeUndefined()
+  // the ask is still open in the pane
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS })
+  expect(await ui.find({ type: 'Button', key: 'ask-1-0' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a dropped submit marks not delivered and puts the ask back', async ($, on) => {
+  const h = await ansHarness($, on, { submit: () => ({ drop: 'busy' }) })
+  h.add('r1')
+  await h.go()
+  await settle()
+  expect(h.rows.get('r1')!.data).toMatchObject({ result: 'refused', reason: 'not delivered: busy' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS })
+  expect(await ui.find({ type: 'Button', key: 'ask-1-0' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a submit that throws marks not delivered with the error', async ($, on) => {
+  const h = await ansHarness($, on, { submit: () => { throw new Error('session gone') } })
+  h.add('r1')
+  await h.go()
+  await settle()
+  expect(h.rows.get('r1')!.data).toMatchObject({ result: 'refused', reason: expect.stringMatching(/^not delivered: /) })
+})
+
+test('a row whose result is older than a day is deleted', async ($, on) => {
+  const h = await ansHarness($, on)
+  h.add('old', { row: { result: 'delivered', resultAt: T0 - OLD - 1 }, version: 4 })
+  h.add('new', { row: { result: 'refused', reason: 'expired', resultAt: T0 - OLD + 1000 } })
+  expect(await h.go()).toBe(`Phone: nothing new${TAIL}`)
+  expect(h.rows.has('old')).toBe(false)
+  expect(h.rows.has('new')).toBe(true)
+  expect(h.writes('old').map(c => [c.action, c.if_version])).toEqual([['delete', 4]])
+  expect(h.submitted).toEqual([])
+})
+
+test('phone_answers with the inbox off says so and sweeps nothing', async ($, on) => {
+  const h = harness($, on, (_, n) => written(n))
+  await $.tool.call({ tool: `${TOOL}open_pane` })
+  const r = await $.tool.call({ tool: `${TOOL}phone_answers` })
+  expect(r.result).toBe('Phone inbox is off: call phone_setup first.')
+  await h.clock.advance(1000)
+  await settle()
+  expect(h.calls).toEqual([])
 })

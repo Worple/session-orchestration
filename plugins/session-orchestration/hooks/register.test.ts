@@ -1164,7 +1164,7 @@ test('a failed /reload-plugins says so and names the command to run', async ($, 
 })
 
 test('a tool the engine retracted mid-session is registered again at the turn\'s end, once per retraction; none missing, nothing',async ($, on) => {
-  const all = ['open_pane', 'ask_approval', 'cancel_approval', 'phone_setup', 'reload_plugins', 'name_session', 'hand_command', 'reply']
+  const all = ['open_pane', 'ask_approval', 'cancel_approval', 'phone_setup', 'phone_answers', 'reload_plugins', 'name_session', 'hand_command', 'reply']
   let listed = all
   const registered: string[] = []
   on('tool.list', async () => ({ value: listed.map(n => ({ name: `mcp__session-orchestration__${n}`, description: '', mcp: true })) }))

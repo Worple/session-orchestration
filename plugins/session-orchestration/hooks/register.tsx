@@ -17,7 +17,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Color, EngineInterface, Register, RenderElement, RenderNode, SessionRateLimit, ToolCallResult, ToolSpec, UiPressArgument } from 'claude-code'
 
-import { phoneMirror, phoneSection, phoneSetup, phoneSweep } from './phone'
+import { phoneMirror, phoneOff, phoneSection, phoneSetup, phoneSweep } from './phone'
 import type { ActionResult, Actions, Ask, AskBody, AskKind, Board, Handed, PaneAction, Peek, SectionState } from '../types'
 
 const PANE = 'coordinator'
@@ -299,7 +299,7 @@ const taken = (key: string) => /^\d$/.test(key) ? 'a 1-9 item key' : BUILTIN_KEY
 // path, label of the project's own or command text.
 // ponytail: one bash + lib.sh config read per press even with telemetry off; presses are human-paced. Cache the
 // setting in pane state if a press ever feels slow.
-export const USAGE_EXTRA = ['Stop', 'Run handed','Copy handed', 'Dismiss handed', 'Approval answer', 'Project action', 'Cancel stale']
+export const USAGE_EXTRA = ['Stop', 'Run handed','Copy handed', 'Dismiss handed', 'Approval answer', 'Phone answer', 'Project action', 'Cancel stale']
 // The sections whose title and row presses are logged as fold-SLUG and card-SLUG (retro.py inventories them); a
 // footer the status command or an adapter adds later isn't logged until it's listed here.
 // The status footer of what this coordinator queued in another project's inbox, until read (session-status).
@@ -1118,7 +1118,7 @@ const onWindows = async ($: EngineInterface) => (await (bashFound ??= findBash($
 // shortcut: only a drive path converts (a project root is one); an MSYS mount (/home, /tmp) would need cygpath -m.
 export const nativePath = (p: string, windows: boolean) =>
   windows ? p.replace(/^\/([a-z])(?:\/|$)/i, (_, d: string) => `${d.toUpperCase()}:/`) : p
-async function runBash($: EngineInterface, args: string[], init: Parameters<EngineInterface['process']['run']>[1] = {}) {
+export async function runBash($: EngineInterface, args: string[], init: Parameters<EngineInterface['process']['run']>[1] = {}) {
   const { bash, windows } = await (bashFound ??= findBash($))
   try {
     return await $.process.run([bash, ...args], init.cwd ? { ...init, cwd: nativePath(init.cwd, windows) } : init)
@@ -1726,6 +1726,10 @@ async function forwardOutbox($: EngineInterface) {
 // ponytail: the timers (sweep 10 min, activity 1 min, ~1s each) run for the module's life once opened, a
 // closed pane included; cancel both on ui.close if they cost too much.
 let timer: { cancel: () => void } | undefined
+// phone_answers' sweep, run with the `$` that started the pane's timers: the host refuses a prompt.submit made
+// through the `$` of a tool.call hook still running (it would wait on the turn the hook holds), and a sweep submits.
+let answersVia: (() => Promise<string>) | undefined
+const PHONE_ANSWERS_DELAY_MS = 500
 async function open($: EngineInterface) {
   const opened = await $.ui.open({ id: PANE, title: 'Coordinator' })
   if (!timer) {
@@ -1735,6 +1739,7 @@ async function open($: EngineInterface) {
     // Another coordinator's asks and answers (a handover's overlap) reach this pane within a minute.
     $.clock.every(60_000, () => void loadAsks($).then(() => notifyWaiting($)).catch(() => undefined))
     // The phone's page shows activity too: mirrored again each minute, one sweep at a time.
+    answersVia = () => phoneSweep($, true)
     $.clock.every(60_000, () => void phoneSweep($))
     void loadAsks($).catch(() => undefined)
     void refresh($)
@@ -1763,6 +1768,11 @@ const TOOLS: ToolSpec[] = [
     name: 'phone_setup',
     description: 'Coordinator only: set the private claude.ai page (an artifact, https://claude.ai/artifact/<id> or https://claude.ai/code/artifact/<id>) that mirrors the open approval asks to the user\'s phone, and mirror them there at once. The user then opens the page on their phone, taps Pair this phone, and approves its code in the coordinator pane. Pass an empty string to turn the phone inbox off.',
     inputSchema: { type: 'object', properties: { url: { type: 'string', description: 'The page\'s link, or "" to turn the phone inbox off' } }, required: ['url'] },
+  },
+  {
+    name: 'phone_answers',
+    description: 'Coordinator only: read the answers the user\'s paired phone wrote to the phone inbox page now, instead of at the next minute\'s sweep. Each answer is checked (signature, age, the ask still waiting) and, if it passes, submitted exactly as a click in the pane would. Returns at once; the sweep runs a moment later and each answer that passes arrives as a prompt once the current turn ends (the Phone line of the pane says how many were delivered and refused, and why).',
+    inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'reload_plugins',
@@ -2159,6 +2169,17 @@ export const register: Register = on => {
   // The coordinator's own plugin reload after `claude plugin update`, without the user typing it. A command can't
   // run inside the tool call: turn.complete runs it, as it runs /rename.
   on('tool.call', { tool: 'mcp__session-orchestration__phone_setup' }, async ($, e) => ({ result: await phoneSetup($, e.url as string) }))
+
+  // Returns at once and sweeps a moment later, from a timer: the sweep submits the answers it accepts, and the host
+  // refuses a prompt.submit while a tool.call hook runs (it would wait on the turn the hook holds). Each answer's row
+  // reads queued until its turn starts, then delivered; the pane's Phone line says what the sweep did.
+  on('tool.call', { tool: 'mcp__session-orchestration__phone_answers' }, async $ => {
+    const off = await phoneOff($)
+    if (off) return { result: off }
+    if (!answersVia) return { result: 'phone_answers: open the coordinator pane first (open_pane): its timer is what sweeps.' }
+    $.clock.after(PHONE_ANSWERS_DELAY_MS, () => void answersVia?.())
+    return { result: 'Phone: reading the answers now. Those that pass arrive as prompts once this turn ends; the pane\'s Phone line says what came of them.' }
+  })
 
   on('tool.call', { tool: 'mcp__session-orchestration__reload_plugins' }, async $ => {
     await update($, reloading, () => true)

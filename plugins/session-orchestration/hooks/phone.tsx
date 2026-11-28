@@ -3,7 +3,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Color, EngineInterface, RenderElement, RenderNode } from 'claude-code'
 
-import { clean, hex16, projectRoot } from './register'
+import { claimAndSubmit, clean, hex16, projectRoot, runBash } from './register'
 
 import type { Ask, PhoneView } from '../types'
 
@@ -341,29 +341,202 @@ async function sweepDevices($: EngineInterface, url: string): Promise<string | u
   return healed ? `${DEV_ERR}: ${healed}` : undefined
 }
 
-let sweeping = false
-// Each minute: the mirror again, so activity changes reach the phone, then the devices. One sweep at a time; never throws.
-export async function phoneSweep($: EngineInterface): Promise<string> {
-  if (sweeping) return 'sweep running'
-  sweeping = true
+// The answers. The phone writes answers/<id>; this sweep verifies each row's signature (in Node: verify-sig.mjs),
+// judges it against the asks, and submits it exactly as a pane click does (claimAndSubmit), so the approval gate that
+// trusts that text works unchanged. Every write to a row is pinned to the version this sweep last saw: that is the lock
+// between two coordinators of one project (a handover's overlap).
+const ANS_ERR = "can't verify phone answers"
+const ANS_FAIL = 'phone answers failed'
+const NOTHING = 'Phone: nothing new'
+const ANSWER_KEEP_MS = 86_400_000
+const errText = (err: unknown) => oneLine(err instanceof Error ? err.message : String(err))
+const hasOwn = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k)
+const storedUsed = (v: unknown, now: number): Record<string, number> => {
+  const out: Record<string, number> = {}
+  for (const [h, at] of Object.entries(asObject(v))) {
+    if (typeof at === 'number' && Number.isFinite(at) && now - at <= PHONE_MAX_AGE_MS + PHONE_SKEW_MS) out[h] = at
+  }
+  return out
+}
+
+// 'valid', 'bad' (exit 1) and 'malformed' (exit 2) are the verifier's verdicts; anything else (no node, a crash, a
+// timeout, another code) is that it couldn't verify.
+async function runNode($: EngineInterface, jwk: Jwk, payload: string, sig: string): Promise<'valid' | 'bad' | 'malformed' | { cant: string }> {
+  try {
+    const r = await runBash($, ['-c', 'exec node "$0"', `${$.plugin.root}/hooks/verify-sig.mjs`], { stdin: JSON.stringify({ jwk, payload, sig }), timeoutMs: 10_000 })
+    if (r.exitCode === 0) return 'valid'
+    if (r.exitCode === 1) return 'bad'
+    if (r.exitCode === 2) return 'malformed'
+    return { cant: `verifier exited ${r.exitCode}${r.stderr.trim() ? `: ${oneLine(r.stderr)}` : ''}` }
+  } catch (err) {
+    return { cant: errText(err) }
+  }
+}
+
+// One versioned update of an answer row: its new version, a version refusal (another session took the row), or an error line.
+async function writeRow($: EngineInterface, url: string, id: string, version: number, data: Record<string, unknown>): Promise<{ version: number } | { stale: true } | { error: string }> {
+  try {
+    const r = await artifactData($, url, { action: 'update', collection: 'answers', doc_id: id, data, if_version: version })
+    if (r.error) return r.error.includes('version_mismatch') ? { stale: true } : { error: r.error }
+    const v = asObject(r.result.db_write).version
+    return typeof v === 'number' ? { version: v } : { error: 'ArtifactData answered without a version' }
+  } catch (err) {
+    return { error: errText(err) }
+  }
+}
+
+// When the answer's submit settles (the turn started, or it was dropped): the row says delivered or why not. Never throws.
+async function settleRow($: EngineInterface, url: string, id: string, version: number, sent: Promise<string | undefined>): Promise<void> {
+  try {
+    let data: Record<string, unknown>
+    try {
+      const why = await sent
+      data = why === undefined ? { result: 'delivered' } : { result: 'refused', reason: `not delivered: ${oneLine(why)}` }
+    } catch (err) {
+      data = { result: 'refused', reason: `not delivered: ${errText(err)}` }
+    }
+    const w = await writeRow($, url, id, version, { ...data, resultAt: await $.clock.now() })
+    if ('error' in w) await patch($, { error: `${ANS_FAIL}: ${w.error}` })
+  } catch {
+    // the view can't be written either: nothing more to do
+  }
+}
+
+async function sweepAnswers($: EngineInterface, url: string): Promise<{ line: string; error?: string }> {
+  const rootPath = await projectRoot($)
+  if (!rootPath) return { line: NOTHING }
+  const root = await hex16(rootPath)
+  const q = await artifactData($, url, { action: 'query', collection: 'answers', query: { where: [['root', '==', root]], order_by: { field: 'createdAt', direction: 'asc' }, limit: 100 } })
+  if (q.error) return { line: NOTHING, error: `${ANS_FAIL}: ${q.error}` }
+  const raw = asObject(q.result.db_read).docs
+  // Only this project's rows are ever read further or written, whatever the query returned.
+  const docs = (Array.isArray(raw) ? raw : []).map(asObject).filter(d => str(d.id) && asObject(d.data).root === root)
+    .sort((a, b) => Number(asObject(a.data).createdAt ?? 0) - Number(asObject(b.data).createdAt ?? 0))
+  const devices = storedDevices(await $.store.get('phone.devices'))
+  const used = storedUsed(await $.store.get('phone.used'), await $.clock.now())
+  const keys: string[] = []
+  const reasons: string[] = []
+  let refused = 0
+  let error: string | undefined
+  const refuse = async (id: string, version: number, reason: string) => {
+    const w = await writeRow($, url, id, version, { result: 'refused', reason, resultAt: await $.clock.now() })
+    if ('version' in w) {
+      refused++
+      reasons.push(reason)
+    } else if ('error' in w) {
+      error ??= `${ANS_FAIL}: ${w.error}`
+    }
+  }
+  for (const d of docs) {
+    const data = asObject(d.data)
+    const id = d.id as string
+    const ver = d.version
+    if (data.result !== undefined || typeof ver !== 'number' || !Number.isInteger(ver)) continue
+    try {
+      const row = parseAnswerRow(id, ver, data)
+      if (!row) { await refuse(id, ver, 'malformed answer'); continue }
+      if (!hasOwn(devices, row.device)) { await refuse(id, ver, 'unpaired device'); continue }
+      const verdict = await runNode($, devices[row.device]!.jwk, row.payload, row.sig)
+      if (typeof verdict === 'object') {
+        error = `${ANS_ERR}: ${verdict.cant}`
+        break // the rest wait for a sweep that can verify
+      }
+      if (verdict === 'bad') { await refuse(id, ver, 'bad signature'); continue }
+      if (verdict === 'malformed') { await refuse(id, ver, 'malformed answer'); continue }
+      const p = parsePayload(row.payload)
+      if (!p) { await refuse(id, ver, 'malformed answer'); continue }
+      const now = await $.clock.now()
+      const hash = await sha256hex(row.payload)
+      const judged = judgePayload(p, row, { root, now, hash, used, asks: await read($, asks) })
+      if (!judged.ok) { await refuse(id, ver, judged.reason); continue }
+      // The lock: queued, pinned to the version read. A refusal means another session has the row.
+      const queued = await writeRow($, url, id, ver, { result: 'queued', resultAt: now })
+      if ('stale' in queued) continue
+      if ('error' in queued) {
+        error ??= `${ANS_FAIL}: ${queued.error}`
+        continue
+      }
+      used[hash] = now
+      await $.store.set('phone.used', used)
+      const claim = await claimAndSubmit($, judged.ask, p.option, 'Phone answer')
+      if (!claim) { await refuse(id, queued.version, 'already answered'); continue }
+      keys.push(judged.ask.key)
+      // The submit queues until this coordinator's turn ends: awaiting it here would hold the turn that has to end first.
+      void settleRow($, url, id, queued.version, claim.sent)
+    } catch (err) {
+      error ??= `${ANS_FAIL}: ${errText(err)}`
+      break
+    }
+  }
+  // Answered rows are kept a day for the phone to show, then deleted.
+  const now = await $.clock.now()
+  for (const d of docs) {
+    const data = asObject(d.data)
+    if (typeof data.result !== 'string' || typeof data.resultAt !== 'number' || now - data.resultAt <= ANSWER_KEEP_MS || typeof d.version !== 'number') continue
+    try {
+      const r = await artifactData($, url, { action: 'delete', collection: 'answers', doc_id: d.id as string, if_version: d.version })
+      if (r.error && !r.error.includes('version_mismatch')) error ??= `${ANS_FAIL}: ${r.error}`
+    } catch (err) {
+      error ??= `${ANS_FAIL}: ${errText(err)}`
+    }
+  }
+  const line = keys.length + refused === 0 ? NOTHING
+    : `Phone: ${keys.length} delivered${keys.length ? ` (${keys.join(', ')})` : ''}, ${refused} refused${refused ? ` (${[...new Set(reasons)].join(', ')})` : ''}`
+  return { line, error }
+}
+
+let sweepRun: Promise<string> | undefined
+let rerun = false
+// The mirror again, so activity changes reach the phone, then the devices, then the answers. Never throws.
+async function runSweep($: EngineInterface): Promise<string> {
   try {
     const url = await storedUrl($)
     if (!url) return 'phone inbox off'
     await phoneMirror($)
-    const devErr = await sweepDevices($, url).catch(err => `${DEV_ERR}: ${oneLine(err instanceof Error ? err.message : String(err))}`)
-    // The mirror owns the error line it left; a devices error from an earlier sweep is replaced by this one's.
+    const devErr = await sweepDevices($, url).catch(err => `${DEV_ERR}: ${errText(err)}`)
+    const ans = await sweepAnswers($, url).catch(err => ({ line: NOTHING, error: `${ANS_FAIL}: ${errText(err)}` }))
+    // The mirror owns the error line it left; the devices' and answers' from an earlier sweep are replaced by this one's.
     const cur = (await read($, phone)).error
-    const err = (cur && !cur.startsWith(DEV_ERR) ? cur : undefined) ?? devErr ?? null
+    const own = cur && ![DEV_ERR, ANS_ERR, ANS_FAIL].some(p => cur.startsWith(p))
+    const err = (own ? cur : undefined) ?? ans.error ?? devErr ?? null
     const t = new Date(await $.clock.now()).toISOString().slice(11, 16)
-    await patch($, { url, last: `${t} ${err ?? 'mirrored'}`, error: err })
+    // What the sweep did with the answers shows beside the time: the pane's status line is where the person (and a test) reads it.
+    await patch($, { url, last: `${t} ${err ?? 'mirrored'}${ans.line === NOTHING ? '' : ` · ${ans.line}`}`, error: err })
     return err ?? 'mirrored'
   } catch (err) {
-    const line = `phone sweep failed: ${oneLine(err instanceof Error ? err.message : String(err))}`
+    const line = `phone sweep failed: ${errText(err)}`
     await patch($, { error: line }).catch(() => undefined)
     return line
-  } finally {
-    sweeping = false
   }
+}
+
+// Each minute. One sweep at a time. `now` (phone_answers) asks for one more run when one is already going, so rows
+// written since it began are read too.
+export async function phoneSweep($: EngineInterface, now = false): Promise<string> {
+  if (sweepRun) {
+    if (now) rerun = true
+    return 'sweep running'
+  }
+  let status = ''
+  do {
+    rerun = false
+    const run = runSweep($)
+    sweepRun = run
+    try {
+      status = await run
+    } finally {
+      sweepRun = undefined
+    }
+  } while (rerun)
+  return status
+}
+
+// phone_answers: why there is nothing to sweep, or undefined. The sweep itself does not run in the tool's hook: the
+// host refuses a prompt.submit made while a tool.call hook runs (it would wait on the turn the hook holds), and a
+// sweep submits. register.tsx runs it from a timer.
+export async function phoneOff($: EngineInterface): Promise<string | undefined> {
+  const url = await storedUrl($).catch(() => null)
+  return url ? undefined : 'Phone inbox is off: call phone_setup first.'
 }
 
 // Pair a request listed in the pane: stored first (so a lost document write is sent again by the sweep), then the document.
