@@ -202,6 +202,8 @@ without asking the user: they signed in for it.
   Before telling the user, check it against what the status command shows (PR state, unpushed commits, tracker
   status, as far as the project's adapter gives them) and the check the report's `Done:` line names. Neither shows
   it: ask the session, and report the task as not done yet.
+- **Phone inbox: read [phone-inbox.md](phone-inbox.md)** for the phone inbox (`phone_setup`, `phone_answers`): setting it
+  up, an update, "I answered on my phone"; never write its page database yourself.
 - **Change a running session's model, effort or mode with `--set`**
   ([features/agent-settings.md](../../features/agent-settings.md)); never by handover alone.
 - **A worker's handover is not news.** A session at its context mark hands itself over (`--handover --self`; its
@@ -222,6 +224,7 @@ The files next to this one, each read whole when its event comes up, never at St
 |---|---|
 | [sessions.md](sessions.md) | Listing sessions (which to coordinate) or reading a `state: blocked`; before you start a session (`claude --bg`), give one task work, name or confirm a task's owner, or act on work in a folder below the root; a message `From the coordinator "NAME"`; a `PR events` section; the same failure twice; after a plugin update; the user names a start mode |
 | [approvals.md](approvals.md) | Before you put any decision to the user, queue or cancel an `ask_approval`, or relay an approval; a worker's `needs your approval:` line; an `Approval pane answer for …` prompt |
+| [phone-inbox.md](phone-inbox.md) | The user asks for the phone inbox or says they answered on the phone; after a plugin update with a phone inbox set up; `phone_setup` / `phone_answers` |
 | [resuming.md](resuming.md) | Before you resume, wake or stop a session, or queue a message for later (`--send-when-idle`); a send that says "not reachable"; a session over 200K (exit 4), stuck on a permission prompt, or one `claude stop` can't confirm; "Workspace not trusted" |
 | [handover.md](handover.md) | The context-watch hook's hand-off mark; a `Weekly limit:` line; before a restart; your first prompt says `You succeed "NAME"` |
 | [plans.md](plans.md) | A task too big for one session; a `handoff ready: KEY cN` or `handoff ready: KEY` message |
