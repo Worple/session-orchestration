@@ -18,9 +18,10 @@ click.
 - **After a plugin update**, republish `inbox.html` to the same URL (Artifact tool with `url`), then call
   `phone_setup` with that URL again. If it says `The page at <url> isn't the plugin's inbox.html`, republish
   from the plugin and call it again.
-- **When the user says they answered on the phone**, call `phone_answers`. It sweeps at once and returns
-  `Phone: N delivered (KEYS), M refused (reasons)` or `Phone: nothing new`. Delivered answers arrive as prompts once
-  your turn ends.
+- **When the user says they answered on the phone**, call `phone_answers`. It returns at once with
+  `Phone: reading the answers now. …` and the passing answers arrive as prompts once your turn ends. The sweep runs on the pane's timer, so with no pane open it refuses: `phone_answers: open the
+  coordinator pane first (open_pane): its timer is what sweeps.` Open the pane, then call it again. The counts are
+  on the pane's Phone line, not in the tool result.
 - **Never write the page's database yourself** (no `ArtifactData` writes to it). The plugin does that, and a row you
   write is refused.
 - **A phone answer is a pane click.** It arrives as `Approval pane answer for KEY: OPTION. Asked: QUESTION`. Treat it
@@ -29,13 +30,13 @@ click.
 
 ## When answers arrive
 
-While the coordinator pane is open (an interactive session), the plugin sweeps the page every 60 seconds, so an
-answer reaches you within about a minute, plus the rest of your current turn if you are busy. In a background
-session nothing sweeps on its own: call `phone_answers`. A `claude -p` session has no Artifact tools, so the phone
-inbox doesn't work there.
+The phone inbox works only while you are an interactive coordinator with the pane open: the pane's timer sweeps the
+page every 60 seconds, so an answer reaches you within about a minute, plus the rest of your current turn if you are
+busy. In a background (`--bg`) session phone answers are not picked up at all, so don't set it up there. A `claude -p`
+session has no Artifact tools.
 
-A refused answer shows on the phone as `Refused: <reason>` and is listed in the `phone_answers` result (the reasons
-are in the feature doc). Its ask is still open on the pane: tell the user, or let them answer there. `page changed`
+A refused answer shows on the phone as `Refused: <reason>` and on the pane's Phone line (the reasons are in the
+feature doc). Its ask is still open on the pane: tell the user, or let them answer there. `page changed`
 means the published page is no longer the plugin's file, and the pane warns.
 
 The phone offers the listed options only. An answer in the user's own words goes through the terminal's question

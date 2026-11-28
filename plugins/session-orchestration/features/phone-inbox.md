@@ -20,15 +20,19 @@ Two tools, both coordinator only:
   that the published page is exactly the plugin's `inbox.html`. If it isn't: `The page at <url> isn't the plugin's
   inbox.html: republish it from the plugin (phone-inbox.md), then call phone_setup again.` `phone_setup` with `""`
   turns the phone inbox off.
-- `phone_answers` takes no input and sweeps at once. It returns `Phone: N delivered (KEYS), M refused (reasons)` or
-  `Phone: nothing new`, plus `Delivered answers arrive as prompts once this turn ends.`
+- `phone_answers` takes no input. The engine refuses a prompt submitted while a tool call's hook is running, so the
+  tool can't sweep inside its own call. It schedules the sweep on the pane's timer and returns at once with `Phone:
+  reading the answers now. Those that pass arrive as prompts once this turn ends; the pane's Phone line says what
+  came of them.` The counts, `Phone: N delivered (KEYS), M refused (reasons)` or `Phone: nothing new`, appear in the
+  coordinator pane's Phone status line, not in the tool result. With no pane open it refuses with `phone_answers:
+  open the coordinator pane first (open_pane): its timer is what sweeps.`
 
 ## When answers arrive
 
-The automatic sweep runs every 60 seconds while the coordinator pane is open (an interactive session). Without the
-pane (a background session) nothing sweeps on its own: call `phone_answers`. `claude -p` sessions have no Artifact
-tools, so the phone inbox doesn't work there. A busy coordinator gets the answer as a prompt when its current turn
-ends. So an answer reaches the coordinator within about a minute, plus the rest of a busy turn.
+The phone inbox works only in an interactive coordinator with the pane open. The sweep runs from the pane's timer
+every 60 seconds, and `phone_answers` only speeds it up. In a background (`--bg`) session phone answers are not
+picked up at all. `claude -p` sessions have no Artifact tools. A busy coordinator gets the answer as a prompt when its
+current turn ends. So an answer reaches the coordinator within about a minute, plus the rest of a busy turn.
 
 ## Pairing
 
