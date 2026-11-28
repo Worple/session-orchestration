@@ -249,7 +249,8 @@ const PAGE_FILE = 'skills/orchestrating-sessions/phone-inbox/inbox.html'
 const PAGE_CHANGED = 'page changed'
 const CANT_CHECK = "can't check the phone page"
 const refusalText = (url: string) => `The page at ${url} isn't the plugin's inbox.html: republish it from the plugin (phone-inbox.md), then call phone_setup again.`
-type PageVerdict = { kind: 'match'; hash: string } | { kind: 'mismatch' } | { kind: 'unreadable'; why: string }
+type PagePin = { sha: string; ver: string }
+type PageVerdict = { kind: 'match'; hash: string; ver: string } | { kind: 'mismatch' } | { kind: 'unreadable'; why: string }
 
 // The body of the published page from the Artifact read's text, or why there is none.
 function pageBody(text: string): { body: string } | { why: string } {
@@ -266,7 +267,9 @@ function pageBody(text: string): { body: string } | { why: string } {
   return { body: block.slice(a + head.length, b).trim() }
 }
 
-async function pageVerdict($: EngineInterface, url: string): Promise<PageVerdict> {
+// With `pin` (the sha and published version id phone_setup accepted), the page also has to be that very version: a
+// republish of identical content still changes the version id, so an altered page put back between sweeps is caught.
+async function pageVerdict($: EngineInterface, url: string, pin?: PagePin): Promise<PageVerdict> {
   try {
     const mine = (await $.fs.read(`${$.plugin.root}/${PAGE_FILE}`)) as unknown
     if (typeof mine !== 'string') return { kind: 'unreadable', why: "the plugin's inbox.html is not text" }
@@ -275,8 +278,12 @@ async function pageVerdict($: EngineInterface, url: string): Promise<PageVerdict
     if (r.isError === true) return { kind: 'unreadable', why: oneLine(text || 'refused') }
     const got = pageBody(text)
     if ('why' in got) return { kind: 'unreadable', why: got.why }
+    const ver = asObject(asObject(r.result).artifactRead).ver
+    if (!filled(ver)) return { kind: 'unreadable', why: 'no version id in the answer' }
     const hash = await sha256hex(got.body)
-    return hash === (await sha256hex(mine.trim())) ? { kind: 'match', hash } : { kind: 'mismatch' }
+    if (hash !== (await sha256hex(mine.trim()))) return { kind: 'mismatch' }
+    if (pin && (pin.sha !== hash || pin.ver !== ver)) return { kind: 'mismatch' }
+    return { kind: 'match', hash, ver }
   } catch (err) {
     return { kind: 'unreadable', why: errText(err) }
   }
@@ -285,7 +292,16 @@ async function pageVerdict($: EngineInterface, url: string): Promise<PageVerdict
 // One read per sweep, made only when something needs it.
 function pageGate($: EngineInterface, url: string): () => Promise<PageVerdict> {
   let once: Promise<PageVerdict> | undefined
-  return () => (once ??= pageVerdict($, url))
+  return () => (once ??= pageGateRead($, url))
+}
+async function pageGateRead($: EngineInterface, url: string): Promise<PageVerdict> {
+  try {
+    const o = asObject(await $.store.get('phone.page'))
+    if (!filled(o.sha) || !filled(o.ver)) return { kind: 'unreadable', why: 'the page was not accepted by phone_setup: call it again' }
+    return await pageVerdict($, url, { sha: o.sha, ver: o.ver })
+  } catch (err) {
+    return { kind: 'unreadable', why: errText(err) }
+  }
 }
 const pageError = (v: PageVerdict, url: string) =>
   v.kind === 'mismatch' ? refusalText(url) : v.kind === 'unreadable' ? `${CANT_CHECK}: ${v.why}` : undefined
@@ -309,7 +325,7 @@ export async function phoneSetup($: EngineInterface, url: unknown): Promise<stri
   if (verdict.kind === 'mismatch') return refusalText(u)
   if (verdict.kind === 'unreadable') return `Couldn't read the page at ${u} back (${verdict.why}): check the URL, then call phone_setup again.`
   await $.store.set('phone.url', u)
-  await $.store.set('phone.page', verdict.hash)
+  await $.store.set('phone.page', { sha: verdict.hash, ver: verdict.ver })
   seenUrl = u
   forget()
   gen++

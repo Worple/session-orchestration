@@ -138,9 +138,9 @@ type Call = Record<string, unknown>
 // The page read-back: the plugin's inbox.html (fs.read) and the Artifact read of the published page, in the shape the
 // real call answers (spike notes, "Reading the page back"): result.read.result is empty, the HTML is in text.
 const INBOX = '<title>Coordinator Inbox</title>\n<main>ok</main>\n<script>start()</script>\n'
-const PAGE: { body: string; mode: 'ok' | 'throw' | 'error' | 'noblock' | 'noskeleton'; reads: number } = { body: INBOX, mode: 'ok', reads: 0 }
+const PAGE: { body: string; mode: 'ok' | 'throw' | 'error' | 'noblock' | 'noskeleton'; reads: number; ver: string | undefined } = { body: INBOX, mode: 'ok', reads: 0, ver: 'ver-1' }
 const readBack = (body: string, skeleton = true) => ({
-  result: { read: { bytes: body.length, code: 200, codeText: 'OK', result: '', durationMs: 3, url: URL1, title: 'Coordinator Inbox' }, artifactRead: { slug: 's', ver: 'v' }, owned: true },
+  result: { read: { bytes: body.length, code: 200, codeText: 'OK', result: '', durationMs: 3, url: URL1, title: 'Coordinator Inbox' }, artifactRead: PAGE.ver === undefined ? { slug: 's' } : { slug: 's', ver: PAGE.ver }, owned: true },
   text: [
     '[Artifact s (version v) — owned by you, private; raw HTML follows]',
     'The artifact HTML inside the <cowritten-artifact-html> tag below was not published from this session:',
@@ -155,6 +155,7 @@ const fakePage = (on: On) => {
   PAGE.body = INBOX
   PAGE.mode = 'ok'
   PAGE.reads = 0
+  PAGE.ver = 'ver-1'
   on('fs.read', async (_, e) => {
     if (e.path.endsWith('/skills/orchestrating-sessions/phone-inbox/inbox.html')) return { value: INBOX }
     throw new Error('ENOENT')
@@ -922,7 +923,7 @@ test('phone_setup refuses an unreadable page and stores nothing', async ($, on) 
 test('phone_setup with a matching page stores phone.page and mirrors', async ($, on) => {
   const h = await ansHarness($, on)
   expect(h.kv.get('phone.url')).toBe(URL1)
-  expect(h.kv.get('phone.page')).toBe(await sha256hex(INBOX.trim()))
+  expect(h.kv.get('phone.page')).toEqual({ sha: await sha256hex(INBOX.trim()), ver: 'ver-1' })
   expect(h.calls.filter(c => c.collection === 'coordinators' && c.action === 'set')).toHaveLength(1)
   expect(PAGE.reads).toBe(1)
 })
@@ -990,4 +991,35 @@ test('a sweep after the page changed lists no pairing rows', async ($, on) => {
   ui = await mountPane($)
   expect(await shown(ui, `phone-pair-${FP}`)).toBe(true)
   await ui.unmount()
+})
+
+test('a republish with the same content (new ver) refuses rows with page changed', async ($, on) => {
+  const h = await ansHarness($, on)
+  h.add('r1')
+  PAGE.ver = 'ver-2' // altered, signed with, then put back: the content matches again but it is another publish
+  expect(await h.go()).toBe(`Phone: 0 delivered, 1 refused (page changed)${TAIL}`)
+  expect(h.rows.get('r1')!.data.reason).toBe('page changed')
+  expect(h.verifies).toEqual([])
+  expect(h.submitted).toEqual([])
+  expect(await statusLine($)).toContain(REFUSAL(URL1))
+  await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 }) // accepting it again
+  h.add('r2', { row: { createdAt: 99 } })
+  expect(await h.go()).toMatch(/^Phone: 1 delivered/)
+})
+
+test('a read-back without a ver leaves rows untouched and shows the error', async ($, on) => {
+  const h = await ansHarness($, on)
+  h.add('r1')
+  PAGE.ver = undefined
+  await h.go()
+  expect(h.result('r1')).toBeUndefined()
+  expect(h.writes()).toEqual([])
+  expect(h.verifies).toEqual([])
+  expect(await statusLine($)).toContain("can't check the phone page: no version id")
+  // a phone.page in the old shape (a bare sha) is not checkable either
+  PAGE.ver = 'ver-1'
+  h.kv.set('phone.page', await sha256hex(INBOX.trim()))
+  await h.go()
+  expect(h.result('r1')).toBeUndefined()
+  expect(await statusLine($)).toContain("can't check the phone page")
 })
