@@ -7,6 +7,7 @@ export const PHONE_SKEW_MS = 300_000
 export const PAIR_MAX_AGE_MS = 600_000
 
 const MAX_ASKS = 50
+export const MIRROR_MAX_BYTES = 240_000
 const MAX_TEXT = 4000
 
 export type Jwk = { kty: 'EC'; crv: 'P-256'; x: string; y: string }
@@ -79,22 +80,35 @@ export const judgePayload = (
   return { ok: true, ask }
 }
 
-// A string over MAX_TEXT characters (code points) becomes its first MAX_TEXT - 1 plus an ellipsis.
+const enc = new TextEncoder()
+const bytes = (s: string) => enc.encode(s).length
+
+// Text over MAX_TEXT code points or MAX_TEXT UTF-8 bytes is cut at a code point to end in an ellipsis within both.
 const cut = (s: string) => {
   const cps = Array.from(s)
-  return cps.length > MAX_TEXT ? `${cps.slice(0, MAX_TEXT - 1).join('')}…` : s
+  if (cps.length <= MAX_TEXT && bytes(s) <= MAX_TEXT) return s
+  let out = '', n = 0, b = bytes('…')
+  for (const c of cps) {
+    const cb = bytes(c)
+    if (n + 1 >= MAX_TEXT || b + cb > MAX_TEXT) break
+    out += c; n++; b += cb
+  }
+  return `${out}…`
 }
 
 export const mirrorDoc = (project: string, asks: Ask[], activity: string, now: number):
-  { v: 1; project: string; asks: PhoneAsk[]; activity: string; updatedAt: number } => ({
-  v: 1,
-  project,
-  asks: [...asks].sort((a, b) => a.at - b.at).slice(0, MAX_ASKS).map(a => {
+  { v: 1; project: string; asks: PhoneAsk[]; activity: string; updatedAt: number } => {
+  const doc = { v: 1 as const, project, asks: [] as PhoneAsk[], activity: cut(activity), updatedAt: now }
+  let used = bytes(JSON.stringify(doc))
+  for (const a of [...asks].sort((x, y) => x.at - y.at)) {
+    if (doc.asks.length >= MAX_ASKS) break
     const o: PhoneAsk = { id: a.id, key: a.key, question: a.question, options: [...a.options], at: a.at }
     if (a.details !== undefined) o.details = cut(a.details)
     if (a.target !== undefined) o.target = a.target
-    return o
-  }),
-  activity: cut(activity),
-  updatedAt: now,
-})
+    const next = used + bytes(JSON.stringify(o)) + (doc.asks.length > 0 ? 1 : 0)
+    if (next > MIRROR_MAX_BYTES) continue
+    doc.asks.push(o)
+    used = next
+  }
+  return doc
+}

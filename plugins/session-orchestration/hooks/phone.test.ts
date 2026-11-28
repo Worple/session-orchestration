@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Ask } from '../types'
-import { judgePayload, mirrorDoc, parsePayload, publicJwk, thumbprint } from './phone'
+import { MIRROR_MAX_BYTES, PAIR_MAX_AGE_MS, judgePayload, mirrorDoc, parseAnswerRow, parsePayload, publicJwk, sha256hex, thumbprint } from './phone'
 import type { AnswerRow, Payload } from './phone'
 
 const X = 'CxijAnQFbFv29yvXuSU527dJRP1-fkjFNuFGLj9mbdw'
@@ -74,8 +74,8 @@ test('mirrorDoc keeps 50 oldest asks, cuts details and activity at 4000 with …
   expect(doc.asks).toHaveLength(50)
   expect(doc.asks[0].id).toBe('a59')
   expect(doc.asks[0].at).toBeLessThan(doc.asks[1].at)
-  expect(doc.asks[0].details).toBe(`${'d'.repeat(3999)}…`)
-  expect(doc.activity).toBe(`${'a'.repeat(3999)}…`)
+  expect(doc.asks[0].details).toBe(`${'d'.repeat(3997)}…`)
+  expect(doc.activity).toBe(`${'a'.repeat(3997)}…`)
   expect(doc.updatedAt).toBe(5)
   expect(doc.project).toBe('proj')
   expect('seen' in doc.asks[0]).toBe(false)
@@ -85,5 +85,47 @@ test('mirrorDoc keeps 50 oldest asks, cuts details and activity at 4000 with …
   expect(short.asks[0]).toEqual({ id: 'a1', key: 'k', question: 'Q?', options: ['yes', 'no'], at: 1 })
   expect(short.activity).toBe('ok')
   const emoji = mirrorDoc('p', [], '😀'.repeat(4001), 1).activity
-  expect(Array.from(emoji)).toHaveLength(4000)
+  expect(Array.from(emoji).length).toBeLessThanOrEqual(4000)
+  expect(new TextEncoder().encode(emoji).length).toBeLessThanOrEqual(4000)
+  expect(emoji.endsWith('…')).toBe(true)
+})
+
+test('parseAnswerRow keeps a good row and refuses the rest', () => {
+  const v = { root: 'r', payload: 'p', sig: 's', device: 'd' }
+  expect(parseAnswerRow('i', 3, v)).toEqual({ id: 'i', version: 3, ...v })
+  expect(parseAnswerRow('i', 0, { ...v, result: 'done', extra: 1 })).toEqual({ id: 'i', version: 0, ...v, result: 'done' })
+  expect(parseAnswerRow('i', 1, { ...v, result: 5 })).toEqual({ id: 'i', version: 1, ...v })
+  for (const k of ['root', 'payload', 'sig', 'device']) {
+    expect(parseAnswerRow('i', 1, { ...v, [k]: '' })).toBeNull()
+    const { [k]: _gone, ...rest } = v as Record<string, string>
+    expect(parseAnswerRow('i', 1, rest)).toBeNull()
+    expect(parseAnswerRow('i', 1, { ...v, [k]: 7 })).toBeNull()
+  }
+  expect(parseAnswerRow('i', -1, v)).toBeNull()
+  expect(parseAnswerRow('i', 1.5, v)).toBeNull()
+  expect(parseAnswerRow('i', Number.NaN, v)).toBeNull()
+  expect(parseAnswerRow('i', 1, null)).toBeNull()
+  expect(parseAnswerRow('i', 1, [v])).toBeNull()
+})
+
+test('sha256hex is the lowercase digest of the UTF-8 bytes', async () => {
+  expect(await sha256hex('abc')).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad')
+  expect(await sha256hex('héllo ж 😀')).toBe('da08a38b01435a5c58c45a42f4098a8c1b390a1e1ed8cda078fdd9d324e986ac')
+  expect(PAIR_MAX_AGE_MS).toBe(600_000)
+})
+
+test('mirrorDoc stays within the byte budget for non-ASCII text and skips an ask too big to fit', () => {
+  const size = (d: unknown) => new TextEncoder().encode(JSON.stringify(d)).length
+  for (const ch of ['ж', '😀']) {
+    const asks = Array.from({ length: 60 }, (_, i) => ask({ id: `a${i}`, at: i, details: ch.repeat(4000) }))
+    const doc = mirrorDoc('p', asks, ch.repeat(4000), 1)
+    expect(size(doc)).toBeLessThanOrEqual(MIRROR_MAX_BYTES)
+    expect(doc.asks.length).toBeGreaterThan(0)
+    for (const a of doc.asks) expect(new TextEncoder().encode(a.details).length).toBeLessThanOrEqual(4000)
+    expect(new TextEncoder().encode(doc.activity).length).toBeLessThanOrEqual(4000)
+  }
+  const asks = [ask({ id: 'big', at: 1, question: 'q'.repeat(300_000) }), ask({ id: 'n1', at: 2 }), ask({ id: 'n2', at: 3 })]
+  const doc = mirrorDoc('p', asks, '', 1)
+  expect(doc.asks.map(a => a.id)).toEqual(['n1', 'n2'])
+  expect(size(doc)).toBeLessThanOrEqual(MIRROR_MAX_BYTES)
 })
