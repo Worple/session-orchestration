@@ -475,7 +475,8 @@ const NOW = T0 + 500 // when the sweep runs: phone_answers sweeps 500 ms after i
 type On = Parameters<Parameters<typeof test>[1]>[1]
 type Row = { data: Record<string, unknown>; version: number }
 type Opts = {
-  verify?: (stdin: string) => number | Error // the verifier's exit code, or a spawn failure
+  leak?: boolean // the query answers every row, whatever its where says
+  verify?: (stdin: string, store: Map<string, unknown>) => number | Error // the verifier's exit code, or a spawn failure
   paired?: boolean
   submit?: (text: string) => unknown // what prompt.submit answers (a promise holds it)
   stale?: string[] // row ids whose writes are refused as version_mismatch
@@ -488,7 +489,11 @@ const ansHarness = async ($: Env, on: On, o: Opts = {}) => {
   const calls: Call[] = []
   const clock = mock.clock(on, { now: T0 })
   mock.env(on, { HOME: '/h' })
-  mock.store(on, o.paired === false ? {} : { 'phone.devices': { [FP]: { jwk: JWK, label: 'Pixel', code: CODE, pairedAt: 1 } } })
+  // the plugin's store, in memory, where a test can change it between two of the sweep's reads
+  const kv = new Map<string, unknown>(o.paired === false ? [] : [['phone.devices', { [FP]: { jwk: JWK, label: 'Pixel', code: CODE, pairedAt: 1 } }]])
+  on('store.get', async (_, e) => ({ value: kv.get(e.key) }))
+  on('store.set', async (_, e) => { kv.set(e.key, e.value); return { value: undefined } })
+  on('store.delete', async (_, e) => { kv.delete(e.key); return { value: undefined } })
   on('session.id', async () => ({ value: 'sess-p' }))
   on('ui.status', async () => ({ value: undefined }))
   on('tool.call', { tool: 'ArtifactData' }, async (_, e) => {
@@ -497,7 +502,15 @@ const ansHarness = async ($: Env, on: On, o: Opts = {}) => {
     const id = String(c.doc_id)
     if (c.collection === 'devices') return queried([]) as never
     if (c.collection !== 'answers') return written(calls.length) as never
-    if (c.action === 'query') return { result: { db_read: { op: 'query', collection: 'answers', docs: [...rows].map(([i, r]) => ({ id: i, data: r.data, version: r.version })) } } } as never
+    if (c.action === 'query') {
+      // as the real query would: where, then order_by, then limit
+      const q = c.query as { where?: unknown[][]; order_by?: { field: string; direction?: string }; limit?: number }
+      let docs = [...rows].map(([i, r]) => ({ id: i, data: r.data, version: r.version }))
+      if (!o.leak) for (const w of q.where ?? []) docs = docs.filter(d => d.data[String(w[0])] === w[2])
+      const num = (d: { data: Record<string, unknown> }) => (typeof d.data[q.order_by!.field] === 'number' ? (d.data[q.order_by!.field] as number) : -Infinity)
+      if (q.order_by) docs.sort((a, b) => (q.order_by!.direction === 'desc' ? num(b) - num(a) : num(a) - num(b)))
+      return { result: { db_read: { op: 'query', collection: 'answers', docs: docs.slice(0, q.limit ?? 100) } } } as never
+    }
     const row = rows.get(id)
     if (!row || o.stale?.includes(id) || c.if_version !== row.version) return mismatchNow as never
     if (c.action === 'delete') {
@@ -513,7 +526,7 @@ const ansHarness = async ($: Env, on: On, o: Opts = {}) => {
     if ((e.argv.at(-1) ?? '').endsWith('/hooks/verify-sig.mjs')) {
       const stdin = String(e.init?.stdin ?? '')
       verifies.push({ argv: e.argv, stdin })
-      const r = o.verify?.(stdin) ?? 0
+      const r = o.verify?.(stdin, kv) ?? 0
       if (r instanceof Error) throw r
       return done(r)
     }
@@ -572,7 +585,7 @@ test('a good answer gives exactly one prompt with the pane-answer text and marks
   expect(h.rows.get('r1')!.data.resultAt).toBe(NOW)
   expect(h.writes('r1').map(c => [c.action, (c.data as { result: string }).result, c.if_version])).toEqual([['update', 'queued', 1], ['update', 'delivered', 2]])
   const q = h.calls.find(c => c.collection === 'answers' && c.action === 'query')!
-  expect(q).toMatchObject({ url: URL1, query: { where: [['root', '==', h.root]], limit: 100 } })
+  expect(q).toMatchObject({ url: URL1, query: { where: [['root', '==', h.root]], order_by: { field: 'createdAt', direction: 'desc' }, limit: 100 } })
   // the same sweep again finds nothing new
   expect(await h.go()).toBe(`Phone: nothing new${TAIL}`)
   expect(h.submitted).toHaveLength(1)
@@ -703,7 +716,7 @@ test('node failing leaves rows untouched and shows the error; the next sweep del
 })
 
 test('a row for another root is not touched', async ($, on) => {
-  const h = await ansHarness($, on)
+  const h = await ansHarness($, on, { leak: true })
   h.add('other', { row: { root: 'ffffffffffffffff' } })
   h.add('mine')
   await h.go()
@@ -767,4 +780,66 @@ test('phone_answers with the inbox off says so and sweeps nothing', async ($, on
   await h.clock.advance(1000)
   await settle()
   expect(h.calls).toEqual([])
+})
+
+const junk = (h: Awaited<ReturnType<typeof ansHarness>>, n: number, row: (i: number) => Record<string, unknown>) => {
+  for (let i = 0; i < n; i++) h.add(`junk${i}`, { row: row(i), payload: 'junk' })
+}
+
+test("100 old junk rows with a preset result and a future resultAt don't stop a real answer", async ($, on) => {
+  const h = await ansHarness($, on)
+  junk(h, 100, i => ({ createdAt: -1 - i, result: 'x', resultAt: 9e15 }))
+  h.add('real', { row: { createdAt: T0 } })
+  await h.go()
+  await h.go()
+  expect(h.result('real')).toBe('delivered')
+  expect(h.submitted).toHaveLength(1)
+  expect([...h.rows.keys()].filter(k => k.startsWith('junk'))).toEqual([]) // their resultAt is in the future: deleted
+})
+
+test('100 future-dated rows are refused, then deleted, and a real answer gets through', async ($, on) => {
+  const h = await ansHarness($, on)
+  junk(h, 100, i => ({ createdAt: T0 + 10_000_000 + i, device: 'nobody' }))
+  h.add('real', { row: { createdAt: T0 } })
+  await h.go() // the 100 fill the page; each is refused without the verifier
+  expect(h.verifies).toEqual([])
+  expect(h.rows.get('junk0')!.data).toMatchObject({ result: 'refused', reason: 'clock ahead' })
+  expect(h.result('real')).toBeUndefined()
+  await h.go() // deleted
+  expect([...h.rows.keys()].filter(k => k.startsWith('junk'))).toEqual([])
+  await h.go()
+  expect(h.result('real')).toBe('delivered')
+  expect(h.submitted).toHaveLength(1)
+})
+
+test("a row whose createdAt isn't a number is deleted", async ($, on) => {
+  const h = await ansHarness($, on)
+  h.add('odd', { row: { createdAt: 'yesterday' }, version: 3 })
+  h.add('odd2', { row: { createdAt: null, result: 'delivered', resultAt: T0 } })
+  await h.go()
+  expect(h.rows.has('odd')).toBe(false)
+  expect(h.rows.has('odd2')).toBe(false)
+  expect(h.writes('odd').map(c => [c.action, c.if_version])).toEqual([['delete', 3]])
+  expect(h.verifies).toEqual([])
+  expect(h.submitted).toEqual([])
+})
+
+test('a hash added by another coordinator during this sweep is seen before the next row is judged', async ($, on) => {
+  let calls = 0
+  let second = ''
+  const h = await ansHarness($, on, {
+    verify: (_stdin, kv) => {
+      // while the first row is verified, another coordinator's sweep records the second row's hash
+      if (++calls === 1) kv.set('phone.used', { [second]: T0 })
+      return 0
+    },
+  })
+  h.add('r1', { payload: { option: 'Yes, merge app#1' } })
+  const p2 = h.add('r2', { payload: { option: 'No, PROJ-1', at: T0 - 2000 } })
+  second = await sha256hex(p2)
+  await h.go()
+  await settle()
+  expect(h.result('r1')).toBe('delivered')
+  expect(h.rows.get('r2')!.data).toMatchObject({ result: 'refused', reason: 'already used' })
+  expect(h.submitted).toHaveLength(1)
 })

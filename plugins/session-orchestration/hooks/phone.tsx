@@ -406,14 +406,17 @@ async function sweepAnswers($: EngineInterface, url: string): Promise<{ line: st
   const rootPath = await projectRoot($)
   if (!rootPath) return { line: NOTHING }
   const root = await hex16(rootPath)
-  const q = await artifactData($, url, { action: 'query', collection: 'answers', query: { where: [['root', '==', root]], order_by: { field: 'createdAt', direction: 'asc' }, limit: 100 } })
+  const q = await artifactData($, url, { action: 'query', collection: 'answers', query: { where: [['root', '==', root]], order_by: { field: 'createdAt', direction: 'desc' }, limit: 100 } })
   if (q.error) return { line: NOTHING, error: `${ANS_FAIL}: ${q.error}` }
   const raw = asObject(q.result.db_read).docs
   // Only this project's rows are ever read further or written, whatever the query returned.
+  // The newest 100 come back (a batch of old or junk rows can't push out newer answers); the unhandled ones are
+  // handled oldest first, so the first tap on an ask wins.
+  const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
   const docs = (Array.isArray(raw) ? raw : []).map(asObject).filter(d => str(d.id) && asObject(d.data).root === root)
     .sort((a, b) => Number(asObject(a.data).createdAt ?? 0) - Number(asObject(b.data).createdAt ?? 0))
   const devices = storedDevices(await $.store.get('phone.devices'))
-  const used = storedUsed(await $.store.get('phone.used'), await $.clock.now())
+  const mine: Record<string, number> = {} // the hashes this sweep accepted
   const keys: string[] = []
   const reasons: string[] = []
   let refused = 0
@@ -427,12 +430,26 @@ async function sweepAnswers($: EngineInterface, url: string): Promise<{ line: st
       error ??= `${ANS_FAIL}: ${w.error}`
     }
   }
+  const gone = new Set<string>()
+  const drop = async (d: Record<string, unknown>) => {
+    gone.add(d.id as string)
+    try {
+      const r = await artifactData($, url, { action: 'delete', collection: 'answers', doc_id: d.id as string, if_version: d.version })
+      if (r.error && !r.error.includes('version_mismatch')) error ??= `${ANS_FAIL}: ${r.error}`
+    } catch (err) {
+      error ??= `${ANS_FAIL}: ${errText(err)}`
+    }
+  }
+  const t0 = await $.clock.now()
   for (const d of docs) {
     const data = asObject(d.data)
     const id = d.id as string
     const ver = d.version
-    if (data.result !== undefined || typeof ver !== 'number' || !Number.isInteger(ver)) continue
+    if (typeof ver !== 'number' || !Number.isInteger(ver)) continue
+    if (!finite(data.createdAt)) { await drop(d); continue } // not a row the phone's page writes
+    if (data.result !== undefined) continue
     try {
+      if (data.createdAt - t0 > PHONE_SKEW_MS) { await refuse(id, ver, 'clock ahead'); continue } // no verifier spawned for it
       const row = parseAnswerRow(id, ver, data)
       if (!row) { await refuse(id, ver, 'malformed answer'); continue }
       if (!hasOwn(devices, row.device)) { await refuse(id, ver, 'unpaired device'); continue }
@@ -447,6 +464,8 @@ async function sweepAnswers($: EngineInterface, url: string): Promise<{ line: st
       if (!p) { await refuse(id, ver, 'malformed answer'); continue }
       const now = await $.clock.now()
       const hash = await sha256hex(row.payload)
+      // The used hashes are read again for each row: another coordinator may have added some since the sweep began.
+      const used = { ...storedUsed(await $.store.get('phone.used'), now), ...mine }
       const judged = judgePayload(p, row, { root, now, hash, used, asks: await read($, asks) })
       if (!judged.ok) { await refuse(id, ver, judged.reason); continue }
       // The lock: queued, pinned to the version read. A refusal means another session has the row.
@@ -456,8 +475,8 @@ async function sweepAnswers($: EngineInterface, url: string): Promise<{ line: st
         error ??= `${ANS_FAIL}: ${queued.error}`
         continue
       }
-      used[hash] = now
-      await $.store.set('phone.used', used)
+      mine[hash] = now
+      await $.store.set('phone.used', { ...used, [hash]: now })
       const claim = await claimAndSubmit($, judged.ask, p.option, 'Phone answer')
       if (!claim) { await refuse(id, queued.version, 'already answered'); continue }
       keys.push(judged.ask.key)
@@ -468,17 +487,15 @@ async function sweepAnswers($: EngineInterface, url: string): Promise<{ line: st
       break
     }
   }
-  // Answered rows are kept a day for the phone to show, then deleted.
+  // Answered rows are kept a day for the phone to show, then deleted; so is a row dated in the future or with no
+  // usable time (the page never writes one): a batch of them could otherwise fill the query's page for good.
   const now = await $.clock.now()
   for (const d of docs) {
     const data = asObject(d.data)
-    if (typeof data.result !== 'string' || typeof data.resultAt !== 'number' || now - data.resultAt <= ANSWER_KEEP_MS || typeof d.version !== 'number') continue
-    try {
-      const r = await artifactData($, url, { action: 'delete', collection: 'answers', doc_id: d.id as string, if_version: d.version })
-      if (r.error && !r.error.includes('version_mismatch')) error ??= `${ANS_FAIL}: ${r.error}`
-    } catch (err) {
-      error ??= `${ANS_FAIL}: ${errText(err)}`
-    }
+    if (gone.has(d.id as string) || typeof data.result !== 'string' || typeof d.version !== 'number') continue
+    const old = !finite(data.resultAt) || now - data.resultAt > ANSWER_KEEP_MS || data.resultAt - now > PHONE_SKEW_MS
+    const future = finite(data.createdAt) && data.createdAt - t0 > PHONE_SKEW_MS
+    if (old || future) await drop(d)
   }
   const line = keys.length + refused === 0 ? NOTHING
     : `Phone: ${keys.length} delivered${keys.length ? ` (${keys.join(', ')})` : ''}, ${refused} refused${refused ? ` (${[...new Set(reasons)].join(', ')})` : ''}`
