@@ -39,6 +39,13 @@ export type SectionState = 'open' | 'line' | 'hidden'
 // (--peek or --diff); loading while that runs; patch: the Diff shows the patch, not only the stat.
 export type Peek = { row: string; kind: 'peek' | 'diff'; text: string; loading?: true; patch?: true }
 
+// The phone inbox as the pane shows it: the page's url, the devices paired and those asking to pair (their code to
+// approve, when they asked), the last sweep's line, and the last error.
+export type PhoneView = {
+  url: string | null; devices: { fp: string; label: string; code: string }[]
+  pairing: { fp: string; label: string; code: string; at: number }[]; last: string | null; error: string | null
+}
+
 // refreshing: a sweep is running;
 // selected: the item whose actions show; dismissed: notices hidden for this session; rowsBusy: task keys
 // whose row is being refreshed; actions, actionResult, actionBusy: project actions, the last run's outcome, the
@@ -85,6 +92,8 @@ declare module 'claude-code' {
       terminal: string
       // The review inbox open_pane watched in this session: a reopen doesn't watch it again (or repeat its line).
       inboxWatched: string | null
+      // The phone inbox: its page, paired devices, and the last mirror's outcome.
+      phone: PhoneView
     }
   }
 }

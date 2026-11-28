@@ -17,6 +17,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Color, EngineInterface, Register, RenderElement, RenderNode, SessionRateLimit, ToolCallResult, ToolSpec, UiPressArgument } from 'claude-code'
 
+import { phoneMirror, phoneOff, phoneSection, phoneSetup, phoneSweep } from './phone'
 import type { ActionResult, Actions, Ask, AskBody, AskKind, Board, Handed, PaneAction, Peek, SectionState } from '../types'
 
 const PANE = 'coordinator'
@@ -298,7 +299,7 @@ const taken = (key: string) => /^\d$/.test(key) ? 'a 1-9 item key' : BUILTIN_KEY
 // path, label of the project's own or command text.
 // ponytail: one bash + lib.sh config read per press even with telemetry off; presses are human-paced. Cache the
 // setting in pane state if a press ever feels slow.
-export const USAGE_EXTRA = ['Stop', 'Run handed','Copy handed', 'Dismiss handed', 'Approval answer', 'Project action', 'Cancel stale']
+export const USAGE_EXTRA = ['Stop', 'Run handed','Copy handed', 'Dismiss handed', 'Approval answer', 'Phone answer', 'Project action', 'Cancel stale']
 // The sections whose title and row presses are logged as fold-SLUG and card-SLUG (retro.py inventories them); a
 // footer the status command or an adapter adds later isn't logged until it's listed here.
 // The status footer of what this coordinator queued in another project's inbox, until read (session-status).
@@ -800,6 +801,49 @@ async function dropAsks($: EngineInterface, hit: (a: Ask) => boolean) {
   return dropped
 }
 
+// Claims an ask and submits its answer as the user's prompt. Resolves null when the ask is gone or already claimed
+// (the caller says so), else once the claim is written and the submit started: `sent` is separate because the submit
+// queues until the session is idle and resolves only when that turn starts. A pane click awaits it; a caller outside
+// a click (a background sweep inside a tool handler) must not, or it deadlocks. `sent` resolves undefined once
+// delivered (the ask dropped), or the drop reason (the ask put back); it rejects, ask put back, if the submit throws.
+export async function claimAndSubmit($: EngineInterface, a: Ask, option: string, label: string): Promise<{ sent: Promise<string | undefined> } | null> {
+  // Claim it in one write: a second click, or a click on a removed ask's stale drawing, finds nothing to answer.
+  // The store's list: another coordinator's pane may have answered or withdrawn it. Key and question too: an id
+  // freed by a cancel can be given to another coordinator's next ask.
+  const now = await $.clock.now()
+  const same = (x: Ask) => x.id === a.id && x.key === a.key && x.question === a.question
+  let claimed = false
+  await setAsks($, l => {
+    claimed = l.some(x => same(x) && x.sending === undefined)
+    return claimed ? l.map((x): Ask => (same(x) ? { ...x, sending: now } : x)) : l
+  })
+  if (!claimed) return null
+  logPress($, label)
+  await syncStatus($)
+  // Not delivered (a throw, or a hook's drop): answerable again in its place, unless cancel_approval took it meanwhile.
+  const putBack = async () => {
+    await setAsks($, l => l.map(x => (same(x) ? unsent(x) : x)))
+    await syncStatus($)
+  }
+  const sent = (async () => {
+    try {
+      const r = await $.prompt.submit({ text: answerText(a, option), asUser: true })
+      if (r.drop !== undefined) {
+        await putBack()
+        return r.drop
+      }
+    } catch (err) {
+      await putBack()
+      throw err
+    }
+    await dropAsks($, same)
+    return undefined
+  })()
+  // A caller that never awaits `sent` mustn't leave an unhandled rejection (awaiting callers still see it).
+  sent.catch(() => undefined)
+  return { sent }
+}
+
 // The queued asks outlive the session that queued them (a restart, a handover, a plugin release): one file per
 // project root, the store each change reads and writes, so every coordinator of the project and its pane show the
 // same asks until they are answered or cancelled. A worker never sets asksFile (it calls no ask tool and opens no
@@ -861,6 +905,7 @@ async function setAsksNow($: EngineInterface, f: (l: Ask[]) => Ask[]) {
     src = disk ?? l
     return f(src.some(stuck) ? src.map(a => (stuck(a) ? unsent(a) : a)) : src)
   })
+  if (next !== src) void phoneMirror($) // the phone inbox shows the list as it changed
   if (!file) return next
   storeText = text
   // A missing or unreadable store takes this session's list.
@@ -1073,7 +1118,7 @@ const onWindows = async ($: EngineInterface) => (await (bashFound ??= findBash($
 // shortcut: only a drive path converts (a project root is one); an MSYS mount (/home, /tmp) would need cygpath -m.
 export const nativePath = (p: string, windows: boolean) =>
   windows ? p.replace(/^\/([a-z])(?:\/|$)/i, (_, d: string) => `${d.toUpperCase()}:/`) : p
-async function runBash($: EngineInterface, args: string[], init: Parameters<EngineInterface['process']['run']>[1] = {}) {
+export async function runBash($: EngineInterface, args: string[], init: Parameters<EngineInterface['process']['run']>[1] = {}) {
   const { bash, windows } = await (bashFound ??= findBash($))
   try {
     return await $.process.run([bash, ...args], init.cwd ? { ...init, cwd: nativePath(init.cwd, windows) } : init)
@@ -1099,7 +1144,7 @@ async function runStatus($: EngineInterface, args: string[], init: { cwd?: strin
 // ponytail: the root is asked once per module life; a pane of another project is another session.
 let root: string | undefined
 let rootFailed = '' // why the last --root failed to run, for open_pane to name
-async function projectRoot($: EngineInterface) {
+export async function projectRoot($: EngineInterface) {
   if (!root) {
     const r = await runStatus($, ['--root'])
     rootFailed = r.startsWith('failed: ') ? r.slice(8) : ''
@@ -1319,7 +1364,7 @@ export function parseHanded(text: string): Handed | undefined {
   return { id, key: String(key), session, cwd, account, command: String(command), what: String(what), at }
 }
 // The first 16 hex digits of a text's sha256.
-const hex16 = async (text: string) =>
+export const hex16 = async (text: string) =>
   [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))]
     .slice(0, 8).map(b => b.toString(16).padStart(2, '0')).join('')
 export const handedId = (session: string, command: string) => hex16(`${session}\n${command}`)
@@ -1681,6 +1726,10 @@ async function forwardOutbox($: EngineInterface) {
 // ponytail: the timers (sweep 10 min, activity 1 min, ~1s each) run for the module's life once opened, a
 // closed pane included; cancel both on ui.close if they cost too much.
 let timer: { cancel: () => void } | undefined
+// phone_answers' sweep, run with the `$` that started the pane's timers: the host refuses a prompt.submit made
+// through the `$` of a tool.call hook still running (it would wait on the turn the hook holds), and a sweep submits.
+let answersVia: (() => Promise<string>) | undefined
+const PHONE_ANSWERS_DELAY_MS = 500
 async function open($: EngineInterface) {
   const opened = await $.ui.open({ id: PANE, title: 'Coordinator' })
   if (!timer) {
@@ -1689,6 +1738,9 @@ async function open($: EngineInterface) {
     $.clock.every(60_000, () => void forwardOutbox($).catch(() => undefined))
     // Another coordinator's asks and answers (a handover's overlap) reach this pane within a minute.
     $.clock.every(60_000, () => void loadAsks($).then(() => notifyWaiting($)).catch(() => undefined))
+    // The phone's page shows activity too: mirrored again each minute, one sweep at a time.
+    answersVia = () => phoneSweep($, true)
+    $.clock.every(60_000, () => void phoneSweep($))
     void loadAsks($).catch(() => undefined)
     void refresh($)
   }
@@ -1711,6 +1763,16 @@ const TOOLS: ToolSpec[] = [
     name: 'cancel_approval',
     description: 'Coordinator only: remove asks queued with ask_approval from the coordinator pane, submitting no answer. Pass key alone to remove every ask for that key, or with id (as ask_approval returned it; it wins over question) or question (exact text) to remove one. To replace an ask, queue the new one, then cancel the old by id. Returns what it removed, or that nothing matched.',
     inputSchema: CANCEL_SCHEMA,
+  },
+  {
+    name: 'phone_setup',
+    description: 'Coordinator only: set the private claude.ai page (an artifact, https://claude.ai/artifact/<id> or https://claude.ai/code/artifact/<id>) that mirrors the open approval asks to the user\'s phone, and mirror them there at once. The user then opens the page on their phone, taps Pair this phone, and approves its code in the coordinator pane. Pass an empty string to turn the phone inbox off.',
+    inputSchema: { type: 'object', properties: { url: { type: 'string', description: 'The page\'s link, or "" to turn the phone inbox off' } }, required: ['url'] },
+  },
+  {
+    name: 'phone_answers',
+    description: 'Coordinator only: read the answers the user\'s paired phone wrote to the phone inbox page now, instead of at the next minute\'s sweep. Each answer is checked (signature, age, the ask still waiting) and, if it passes, submitted exactly as a click in the pane would. Returns at once; the sweep runs a moment later and each answer that passes arrives as a prompt once the current turn ends (the Phone line of the pane says how many were delivered and refused, and why).',
+    inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'reload_plugins',
@@ -2106,6 +2168,23 @@ export const register: Register = on => {
 
   // The coordinator's own plugin reload after `claude plugin update`, without the user typing it. A command can't
   // run inside the tool call: turn.complete runs it, as it runs /rename.
+  // Like phone_answers, it needs this session's pane: the timer that sweeps is the pane's. Off needs nothing.
+  on('tool.call', { tool: 'mcp__session-orchestration__phone_setup' }, async ($, e) => {
+    if (typeof e.url === 'string' && e.url.trim() !== '' && !answersVia) return { result: 'phone_setup: open the coordinator pane first (open_pane).' }
+    return { result: await phoneSetup($, e.url as string) }
+  })
+
+  // Returns at once and sweeps a moment later, from a timer: the sweep submits the answers it accepts, and the host
+  // refuses a prompt.submit while a tool.call hook runs (it would wait on the turn the hook holds). Each answer's row
+  // reads queued until its turn starts, then delivered; the pane's Phone line says what the sweep did.
+  on('tool.call', { tool: 'mcp__session-orchestration__phone_answers' }, async $ => {
+    const off = await phoneOff($)
+    if (off) return { result: off }
+    if (!answersVia) return { result: 'phone_answers: open the coordinator pane first (open_pane): its timer is what sweeps.' }
+    $.clock.after(PHONE_ANSWERS_DELAY_MS, () => void answersVia?.())
+    return { result: 'Phone: reading the answers now. Those that pass arrive as prompts once this turn ends; the pane\'s Phone line says what came of them.' }
+  })
+
   on('tool.call', { tool: 'mcp__session-orchestration__reload_plugins' }, async $ => {
     await update($, reloading, () => true)
     return { result: 'Plugins reload (/reload-plugins) when this turn ends. A new tool registers then: load it with ToolSearch next turn.' }
@@ -2137,6 +2216,7 @@ export const register: Register = on => {
     const ranLast = await read($, handedResult)
     const term = await read($, terminal)
     const myAccount = await accountOf($)
+    const phoneSec = await phoneSection($, { Box, Text, Button })
     const actsAll = parseActivity(await read($, activity))
     // Other projects' sessions stay out of this project's rows (a reading from before all projects went off has
     // them too); with all projects on, they get their own section.
@@ -2163,35 +2243,10 @@ export const register: Register = on => {
     }
     const cols = e.props.bodyColumns
     const answer = (a: Ask, option: string) => async () => {
-      // Claim it in one write: a second click, or a click on a removed ask's stale drawing, finds nothing to answer.
-      // The store's list: another coordinator's pane may have answered or withdrawn it. Key and question too: an id
-      // freed by a cancel can be given to another coordinator's next ask.
-      const now = await $.clock.now()
-      const same = (x: Ask) => x.id === a.id && x.key === a.key && x.question === a.question
-      let claimed = false
-      await setAsks($, l => {
-        claimed = l.some(x => same(x) && x.sending === undefined)
-        return claimed ? l.map((x): Ask => (same(x) ? { ...x, sending: now } : x)) : l
-      })
-      if (!claimed) return $.ui.toast('That ask is gone: withdrawn or answered.')
-      logPress($, 'Approval answer')
-      await syncStatus($)
-      // Not delivered (a throw, or a hook's drop): answerable again in its place, unless cancel_approval took it meanwhile.
-      const putBack = async () => {
-        await setAsks($, l => l.map(x => (same(x) ? unsent(x) : x)))
-        await syncStatus($)
-      }
-      try {
-        const r = await $.prompt.submit({ text: answerText(a, option), asUser: true })
-        if (r.drop !== undefined) {
-          await putBack()
-          return $.ui.toast(`The answer wasn't sent (${r.drop}); the ask is back in the pane.`)
-        }
-      } catch (err) {
-        await putBack()
-        throw err
-      }
-      await dropAsks($, same)
+      const c = await claimAndSubmit($, a, option, 'Approval answer')
+      if (!c) return $.ui.toast('That ask is gone: withdrawn or answered.')
+      const why = await c.sent
+      if (why !== undefined) $.ui.toast(`The answer wasn't sent (${why}); the ask is back in the pane.`)
     }
     // A conditional or redirected answer ("no, delete the old one instead") in one round: the question dialog, its
     // options plus Other for the user's own words, submitted like a click. Dismissed: nothing is sent. Chat about this:
@@ -2999,6 +3054,7 @@ export const register: Register = on => {
         {st?.sections.filter(s => s !== waitSec && s.title !== RESOLVED).map(footer)}
         {elsewhere.length > 0 && section(OTHER_PROJECTS, elsewhere.length, accent => elsewhere.flatMap(a => elseRow(a, accent)))}
 
+        {phoneSec.nodes.length > 0 && section('Phone', phoneSec.count, () => phoneSec.nodes)}
         {restPend.length > 0 && section('Pending', restPend.length, accent => restPend.flatMap(p => pendRow(p, accent)))}
         {st?.sections.filter(s => s.title === RESOLVED).map(footer)}
         {hiddenLine()}
