@@ -1,11 +1,11 @@
 // Pure helpers for the phone inbox: the signed payload, the device thumbprint and the mirror document.
 // No Node APIs: only crypto.subtle, TextEncoder and btoa; the I/O (phoneMirror and the rest) goes through $.tool.call and $.store.
 import { atom, read, update } from 'claude-code'
-import type { Color, EngineInterface, RenderNode } from 'claude-code'
+import type { Color, EngineInterface, RenderElement, RenderNode } from 'claude-code'
 
-import { hex16, projectRoot } from './register'
+import { clean, hex16, projectRoot } from './register'
 
-import type { Ask } from '../types'
+import type { Ask, PhoneView } from '../types'
 
 export const PHONE_MAX_AGE_MS = 3_600_000
 export const PHONE_SKEW_MS = 300_000
@@ -143,7 +143,7 @@ const forget = () => {
   lastText = undefined
   version = undefined
 }
-type ViewPatch = { url?: string | null; last?: string | null; error?: string | null }
+type ViewPatch = { url?: string | null; last?: string | null; error?: string | null; pairing?: PhoneView['pairing']; devices?: PhoneView['devices'] }
 function patch($: EngineInterface, p: ViewPatch) {
   return update($, phone, v => ({ ...v, ...p }))
 }
@@ -267,8 +267,82 @@ export async function phoneSetup($: EngineInterface, url: unknown): Promise<stri
   return `Phone inbox set: open ${u} on your phone, tap Pair this phone, and approve its code in the pane.`
 }
 
+// Pairing. The page writes devices/<fp>; the sweep lists the requests that are fresh, valid and not yet decided.
+const DEV_ERR = 'phone devices failed'
+const LABEL_MAX = 40
+const labelOf = (v: unknown) => {
+  const cps = Array.from(clean(typeof v === 'string' ? v : '').replace(/\s+/g, ' ').trim() || 'Phone')
+  return cps.length > LABEL_MAX ? `${cps.slice(0, LABEL_MAX - 1).join('')}…` : cps.join('')
+}
+const storedDevices = (v: unknown): Record<string, Device> => {
+  const out: Record<string, Device> = {}
+  for (const [fp, d] of Object.entries(asObject(v))) {
+    const o = asObject(d)
+    const jwk = publicJwk(o.jwk)
+    if (jwk && str(o.label) && str(o.code) && typeof o.pairedAt === 'number') out[fp] = { jwk, label: o.label, code: o.code, pairedAt: o.pairedAt }
+  }
+  return out
+}
+const storedRejected = (v: unknown): string[] => (Array.isArray(v) ? v.filter(str) : [])
+const deviceViews = (d: Record<string, Device>): PhoneView['devices'] =>
+  Object.entries(d).sort((a, b) => a[1].pairedAt - b[1].pairedAt).map(([fp, x]) => ({ fp, label: x.label, code: x.code }))
+// The documents behind the pairing rows (their JWK and version), as the last sweep read them.
+let pairDocs = new Map<string, { jwk: Jwk; version: number | undefined }>()
+
+// Writes the decision to the device's document; the refusal's line, if any.
+async function markDoc($: EngineInterface, url: string, fp: string, state: 'paired' | 'rejected', version: number | undefined, now: number) {
+  try {
+    const r = await artifactData($, url, { action: 'update', collection: 'devices', doc_id: fp, data: { state, stateAt: now }, ...(version !== undefined ? { if_version: version } : {}) })
+    return r.error
+  } catch (err) {
+    return oneLine(err instanceof Error ? err.message : String(err))
+  }
+}
+
+// Lists the pairing requests and the paired devices in the view; sends a decision again to a document that lost it.
+// Returns its error line, if any.
+async function sweepDevices($: EngineInterface, url: string): Promise<string | undefined> {
+  const mine = gen
+  const q = await artifactData($, url, { action: 'query', collection: 'devices', query: { order_by: { field: 'createdAt', direction: 'desc' }, limit: 50 } })
+  if (q.error) return `${DEV_ERR}: ${q.error}`
+  const raw = asObject(q.result.db_read).docs
+  const now = await $.clock.now()
+  const paired = storedDevices(await $.store.get('phone.devices'))
+  const rejected = storedRejected(await $.store.get('phone.rejected'))
+  const rows: PhoneView['pairing'] = []
+  const docs = new Map<string, { jwk: Jwk; version: number | undefined }>()
+  const heals: Promise<string | undefined>[] = []
+  for (const doc of Array.isArray(raw) ? raw : []) {
+    const id = asObject(doc).id
+    const data = asObject(asObject(doc).data)
+    const version = asObject(doc).version
+    const ver = typeof version === 'number' ? version : undefined
+    const jwk = publicJwk(data.jwk)
+    if (!str(id) || !jwk) continue
+    const { fp, code } = await thumbprint(jwk) // never the doc's own idea of its fp
+    if (fp !== id) continue
+    if (Object.prototype.hasOwnProperty.call(paired, fp)) {
+      if (data.state !== 'paired') heals.push(markDoc($, url, fp, 'paired', ver, now))
+      continue
+    }
+    if (rejected.includes(fp)) {
+      if (data.state !== 'rejected') heals.push(markDoc($, url, fp, 'rejected', ver, now))
+      continue
+    }
+    const at = data.createdAt
+    if (data.state !== undefined || typeof at !== 'number' || !Number.isFinite(at) || now - at > PAIR_MAX_AGE_MS) continue
+    rows.push({ fp, label: labelOf(data.label), code, at })
+    docs.set(fp, { jwk, version: ver })
+  }
+  const healed = (await Promise.all(heals)).find(e => e)
+  if (mine !== gen) return undefined
+  pairDocs = docs
+  await patch($, { pairing: rows.sort((a, b) => a.at - b.at), devices: deviceViews(paired) })
+  return healed ? `${DEV_ERR}: ${healed}` : undefined
+}
+
 let sweeping = false
-// Each minute: the mirror again, so activity changes reach the phone. One sweep at a time; never throws.
+// Each minute: the mirror again, so activity changes reach the phone, then the devices. One sweep at a time; never throws.
 export async function phoneSweep($: EngineInterface): Promise<string> {
   if (sweeping) return 'sweep running'
   sweeping = true
@@ -276,10 +350,13 @@ export async function phoneSweep($: EngineInterface): Promise<string> {
     const url = await storedUrl($)
     if (!url) return 'phone inbox off'
     await phoneMirror($)
-    const line = (await read($, phone)).error ?? 'mirrored'
+    const devErr = await sweepDevices($, url).catch(err => `${DEV_ERR}: ${oneLine(err instanceof Error ? err.message : String(err))}`)
+    // The mirror owns the error line it left; a devices error from an earlier sweep is replaced by this one's.
+    const cur = (await read($, phone)).error
+    const err = (cur && !cur.startsWith(DEV_ERR) ? cur : undefined) ?? devErr ?? null
     const t = new Date(await $.clock.now()).toISOString().slice(11, 16)
-    await patch($, { url, last: `${t} ${line}` })
-    return line
+    await patch($, { url, last: `${t} ${err ?? 'mirrored'}`, error: err })
+    return err ?? 'mirrored'
   } catch (err) {
     const line = `phone sweep failed: ${oneLine(err instanceof Error ? err.message : String(err))}`
     await patch($, { error: line }).catch(() => undefined)
@@ -289,9 +366,91 @@ export async function phoneSweep($: EngineInterface): Promise<string> {
   }
 }
 
-// The status line (the url, the last sweep, any error) as plain text; the pane section that dims it comes with pairing.
+// Pair a request listed in the pane: stored first (so a lost document write is sent again by the sweep), then the document.
+export async function phonePair($: EngineInterface, fp: string): Promise<void> {
+  try {
+    const url = await storedUrl($)
+    const row = (await read($, phone)).pairing.find(r => r.fp === fp)
+    const doc = pairDocs.get(fp)
+    if (!url || !row || !doc) return // a stale press
+    pairDocs.delete(fp)
+    const t = await thumbprint(doc.jwk)
+    if (t.fp !== fp) return
+    const now = await $.clock.now()
+    const paired = storedDevices(await $.store.get('phone.devices'))
+    paired[fp] = { jwk: doc.jwk, label: row.label, code: t.code, pairedAt: now }
+    await $.store.set('phone.devices', paired)
+    await update($, phone, v => ({ ...v, pairing: v.pairing.filter(r => r.fp !== fp), devices: deviceViews(paired) }))
+    const err = await markDoc($, url, fp, 'paired', doc.version, now)
+    if (err) await patch($, { error: `${DEV_ERR}: ${err}` })
+  } catch (err) {
+    await patch($, { error: `${DEV_ERR}: ${oneLine(err instanceof Error ? err.message : String(err))}` }).catch(() => undefined)
+  }
+}
+
+export async function phoneReject($: EngineInterface, fp: string): Promise<void> {
+  try {
+    const url = await storedUrl($)
+    const row = (await read($, phone)).pairing.find(r => r.fp === fp)
+    if (!url || !row) return
+    const now = await $.clock.now()
+    const rejected = storedRejected(await $.store.get('phone.rejected'))
+    if (!rejected.includes(fp)) await $.store.set('phone.rejected', [...rejected, fp])
+    const version = pairDocs.get(fp)?.version
+    pairDocs.delete(fp)
+    await update($, phone, v => ({ ...v, pairing: v.pairing.filter(r => r.fp !== fp) }))
+    const err = await markDoc($, url, fp, 'rejected', version, now)
+    if (err) await patch($, { error: `${DEV_ERR}: ${err}` })
+  } catch (err) {
+    await patch($, { error: `${DEV_ERR}: ${oneLine(err instanceof Error ? err.message : String(err))}` }).catch(() => undefined)
+  }
+}
+
+export async function phoneUnpair($: EngineInterface, fp: string): Promise<void> {
+  try {
+    const paired = storedDevices(await $.store.get('phone.devices'))
+    delete paired[fp]
+    await $.store.set('phone.devices', paired)
+    await update($, phone, v => ({ ...v, devices: v.devices.filter(d => d.fp !== fp) }))
+  } catch (err) {
+    await patch($, { error: `${DEV_ERR}: ${oneLine(err instanceof Error ? err.message : String(err))}` }).catch(() => undefined)
+  }
+}
+
+// The status line (the url, the last sweep, any error) as plain text; phoneSection draws it dim.
 export async function phoneRows($: EngineInterface, _accent: Color): Promise<RenderNode[]> {
   const v = await read($, phone)
   if (!v.url && !v.error) return []
   return [[v.url ?? 'phone inbox off', v.last, v.error].filter(Boolean).join(' · ')]
+}
+
+// The pane's Phone section: nothing while the inbox is off; else a row per pairing request (Pair, Reject), a line per
+// paired device (Unpair) and a dim status line. `ui` is the pane's resolved components.
+export async function phoneSection($: EngineInterface, ui: Pick<ReturnType<EngineInterface['ui']['resolve']>, 'Box' | 'Text' | 'Button'>): Promise<{ count: number; nodes: RenderElement[] }> {
+  // A store that can't be read (a session without one) is an inbox that is off: the pane draws without the section.
+  const url = await storedUrl($).catch(() => null)
+  if (!url) return { count: 0, nodes: [] }
+  const { Box, Text, Button } = ui
+  const v = await read($, phone)
+  const first = (await phoneRows($, 'inactive'))[0]
+  const status = typeof first === 'string' ? first : url
+  const nodes: RenderElement[] = [
+    ...v.pairing.map(r => (
+      <Box key={`phone-row-${r.fp}`} flexDirection="column">
+        <Text>{`Pair phone "${r.label}" ${r.code}? Pair only if your phone shows this code.`}</Text>
+        <Box columnGap={2}>
+          <Button key={`phone-pair-${r.fp}`} plain label="Pair" onPress={() => phonePair($, r.fp)} />
+          <Button key={`phone-reject-${r.fp}`} plain label="Reject" onPress={() => phoneReject($, r.fp)} />
+        </Box>
+      </Box>
+    )),
+    ...v.devices.map(d => (
+      <Box key={`phone-dev-${d.fp}`} columnGap={2}>
+        <Text>{`Paired: ${d.label} ${d.code}`}</Text>
+        <Button key={`phone-unpair-${d.fp}`} plain label="Unpair" onPress={() => phoneUnpair($, d.fp)} />
+      </Box>
+    )),
+    <Text key="phone-status" dimColor wrap="truncate-end">{status}</Text>,
+  ]
+  return { count: v.pairing.length + v.devices.length, nodes }
 }

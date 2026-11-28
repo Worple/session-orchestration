@@ -17,7 +17,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Color, EngineInterface, Register, RenderElement, RenderNode, SessionRateLimit, ToolCallResult, ToolSpec, UiPressArgument } from 'claude-code'
 
-import { phoneMirror, phoneSetup, phoneSweep } from './phone'
+import { phoneMirror, phoneSection, phoneSetup, phoneSweep } from './phone'
 import type { ActionResult, Actions, Ask, AskBody, AskKind, Board, Handed, PaneAction, Peek, SectionState } from '../types'
 
 const PANE = 'coordinator'
@@ -2191,6 +2191,7 @@ export const register: Register = on => {
     const ranLast = await read($, handedResult)
     const term = await read($, terminal)
     const myAccount = await accountOf($)
+    const phoneSec = await phoneSection($, { Box, Text, Button })
     const actsAll = parseActivity(await read($, activity))
     // Other projects' sessions stay out of this project's rows (a reading from before all projects went off has
     // them too); with all projects on, they get their own section.
@@ -3028,6 +3029,7 @@ export const register: Register = on => {
         {st?.sections.filter(s => s !== waitSec && s.title !== RESOLVED).map(footer)}
         {elsewhere.length > 0 && section(OTHER_PROJECTS, elsewhere.length, accent => elsewhere.flatMap(a => elseRow(a, accent)))}
 
+        {phoneSec.nodes.length > 0 && section('Phone', phoneSec.count, () => phoneSec.nodes)}
         {restPend.length > 0 && section('Pending', restPend.length, accent => restPend.flatMap(p => pendRow(p, accent)))}
         {st?.sections.filter(s => s.title === RESOLVED).map(footer)}
         {hiddenLine()}

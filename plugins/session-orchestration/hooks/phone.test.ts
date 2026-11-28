@@ -134,8 +134,8 @@ test('mirrorDoc stays within the byte budget for non-ASCII text and skips an ask
 const URL1 = 'https://claude.ai/artifact/abcdef123456'
 const TOOL = 'mcp__session-orchestration__'
 type Call = Record<string, unknown>
-const harness = ($: Parameters<Parameters<typeof test>[1]>[0], on: Parameters<Parameters<typeof test>[1]>[1], answer: (c: Call, n: number) => unknown, root = '/work/app') => {
-  mock.clock(on)
+const harness = ($: Parameters<Parameters<typeof test>[1]>[0], on: Parameters<Parameters<typeof test>[1]>[1], answer: (c: Call, n: number) => unknown, root = '/work/app', startAt = 0) => {
+  const clock = mock.clock(on, { now: startAt })
   mock.env(on, { HOME: '/h' })
   mock.store(on)
   on('session.id', async () => ({ value: 'sess-p' }))
@@ -151,7 +151,7 @@ const harness = ($: Parameters<Parameters<typeof test>[1]>[0], on: Parameters<Pa
   on('ui.open', async () => ({ value: { isPlaced: true } }))
   const ask = (key: string, question: string) =>
     $.tool.call({ tool: `${TOOL}ask_approval`, key, question, options: [`Yes, ${question}`, `No, ${key}`] })
-  return { calls, ask }
+  return { calls, ask, clock }
 }
 const written = (v: number) => ({ result: { db_write: { op: 'set', collection: 'coordinators', doc_id: 'x', committed: true, version: v } } })
 
@@ -312,4 +312,133 @@ test('phone_setup with no project root says nothing is mirrored and writes nothi
   expect(r.result).toBe("Phone inbox set, but this folder has no project root, so nothing is mirrored yet: run it from the coordinator's project folder.")
   expect(h.calls).toEqual([])
   await settle()
+})
+
+// Pairing: the sweep lists the phone's request, the pane shows its code, Pair / Reject / Unpair act on it.
+const PANE = { plugin: 'session-orchestration', component: 'Pane', requestId: 'coordinator' } as const
+const PROPS = { title: 'Coordinator', isFocused: false, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} } as const
+const T0 = 1_000_000
+const FP = 'h3lQ9rYMb8Y4b1jtz1xMXr8nWCFztltYAKjaYNRNJs0'
+const CODE = '8779-50F6-B60C-6FC6'
+type Env = Parameters<Parameters<typeof test>[1]>[0]
+type DevDoc = { id: string; data: Record<string, unknown>; version: number }
+const dev = (id: string, o: Record<string, unknown> = {}, version = 1): DevDoc => ({ id, data: { jwk: JWK, label: 'Pixel', createdAt: T0, ...o }, version })
+const queried = (docs: DevDoc[]) => ({ result: { db_read: { op: 'query', collection: 'devices', docs } } })
+const updated = (v: number) => ({ result: { db_write: { op: 'update', collection: 'devices', doc_id: FP, committed: true, version: v } } })
+// A phone page whose devices collection is `docs()`; everything else answers like the mirror's tests.
+const pairHarness = ($: Env, on: Parameters<Parameters<typeof test>[1]>[1], docs: () => DevDoc[]) =>
+  harness($, on, (c, n) => (c.action === 'query' ? queried(docs()) : c.action === 'update' ? updated(n) : written(n)), '/work/app', T0)
+const updates = (calls: Call[]) => calls.filter(c => c.action === 'update')
+const sweepOnce = async (h: ReturnType<typeof harness>) => { await h.clock.advance(60_000); await settle() }
+const openPhone = async ($: Env, h: ReturnType<typeof harness>) => {
+  await $.tool.call({ tool: `${TOOL}open_pane` })
+  await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })
+  await sweepOnce(h)
+}
+const mountPane = ($: Env) => $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS })
+const shown = async (ui: Awaited<ReturnType<typeof mountPane>>, key: string) => (await ui.find({ type: 'Button', key })) !== undefined
+
+test('a fresh device doc shows a pairing row; Pair stores it and marks the doc paired', async ($, on) => {
+  let docs = [dev(FP, {}, 4)]
+  const h = pairHarness($, on, () => docs)
+  await openPhone($, h)
+  const q = h.calls.find(c => c.action === 'query')!
+  expect(q).toMatchObject({ url: URL1, collection: 'devices' })
+  expect((q.query as { limit: number }).limit).toBe(50)
+  let ui = await mountPane($)
+  expect(await ui.find({ type: 'Text', text: `Pair phone "Pixel" ${CODE}? Pair only if your phone shows this code.` })).toBeDefined()
+  expect(await shown(ui, `phone-pair-${FP}`)).toBe(true)
+  expect(await shown(ui, `phone-reject-${FP}`)).toBe(true)
+  await ui.press({ key: `phone-pair-${FP}` })
+  await settle()
+  expect(updates(h.calls)).toHaveLength(1)
+  expect(updates(h.calls)[0]).toMatchObject({ url: URL1, collection: 'devices', doc_id: FP, if_version: 4, data: { state: 'paired', stateAt: T0 + 60_000 } })
+  await ui.unmount()
+  // the page now reports it paired: no row, an Unpair button, and no second update
+  docs = [dev(FP, { state: 'paired' }, 5)]
+  await sweepOnce(h)
+  ui = await mountPane($)
+  expect(await shown(ui, `phone-pair-${FP}`)).toBe(false)
+  expect(await shown(ui, `phone-unpair-${FP}`)).toBe(true)
+  expect(updates(h.calls)).toHaveLength(1)
+  await ui.unmount()
+})
+
+test('Reject remembers the fp and marks it rejected; the row never returns', async ($, on) => {
+  const h = pairHarness($, on, () => [dev(FP, {}, 2)])
+  await openPhone($, h)
+  const ui = await mountPane($)
+  await ui.press({ key: `phone-reject-${FP}` })
+  await settle()
+  expect(updates(h.calls)).toHaveLength(1)
+  expect(updates(h.calls)[0]).toMatchObject({ doc_id: FP, if_version: 2, data: { state: 'rejected' } })
+  expect(await shown(ui, `phone-pair-${FP}`)).toBe(false)
+  await ui.unmount()
+  // the doc still carries no state (the update was lost): the row stays away, and the rejection is sent again
+  await sweepOnce(h)
+  const again = await mountPane($)
+  expect(await shown(again, `phone-pair-${FP}`)).toBe(false)
+  expect(await shown(again, `phone-unpair-${FP}`)).toBe(false)
+  expect(updates(h.calls)).toHaveLength(2)
+  expect(updates(h.calls)[1]).toMatchObject({ doc_id: FP, data: { state: 'rejected' } })
+  await again.unmount()
+})
+
+test("a doc older than 10 minutes, a doc whose id isn't its thumbprint, or a JWK with d shows no row", async ($, on) => {
+  const other = { kty: 'EC', crv: 'P-256', x: 'A'.repeat(43), y: 'B'.repeat(43) } as const // shape-valid; only the thumbprint matters here
+  const goodFp = (await thumbprint(other)).fp
+  const docs = [
+    dev(FP, { createdAt: T0 + 60_000 - PAIR_MAX_AGE_MS - 1 }), // 10 minutes and a millisecond old when swept
+    dev('not-its-thumbprint'),
+    dev('withD', { jwk: { ...JWK, d: X } }),
+    dev(goodFp, { jwk: other, label: 'Control' }),
+  ]
+  const h = pairHarness($, on, () => docs)
+  await openPhone($, h)
+  const ui = await mountPane($)
+  expect(await shown(ui, `phone-pair-${goodFp}`)).toBe(true) // the harness does show a valid row
+  for (const id of [FP, 'not-its-thumbprint', 'withD']) expect(await shown(ui, `phone-pair-${id}`)).toBe(false)
+  await ui.unmount()
+})
+
+test('Unpair removes the device', async ($, on) => {
+  let docs = [dev(FP, {}, 1)]
+  const h = pairHarness($, on, () => docs)
+  await openPhone($, h)
+  const ui = await mountPane($)
+  await ui.press({ key: `phone-pair-${FP}` })
+  await settle()
+  docs = [dev(FP, { state: 'paired' }, 2)]
+  await ui.unmount()
+  await sweepOnce(h)
+  const paired = await mountPane($)
+  expect(await shown(paired, `phone-unpair-${FP}`)).toBe(true)
+  await paired.press({ key: `phone-unpair-${FP}` })
+  await settle()
+  expect(await shown(paired, `phone-unpair-${FP}`)).toBe(false)
+  await paired.unmount()
+  // gone after the next sweep too; unpairing writes no document and the paired doc is not offered again
+  await sweepOnce(h)
+  const after = await mountPane($)
+  expect(await shown(after, `phone-unpair-${FP}`)).toBe(false)
+  expect(await shown(after, `phone-pair-${FP}`)).toBe(false)
+  expect(updates(h.calls)).toHaveLength(1)
+  await after.unmount()
+})
+
+test('a paired fp whose doc still lacks state gets the update again on the next sweep', async ($, on) => {
+  const h = pairHarness($, on, () => [dev(FP, {}, 3)])
+  await openPhone($, h)
+  const ui = await mountPane($)
+  await ui.press({ key: `phone-pair-${FP}` })
+  await settle()
+  await ui.unmount()
+  expect(updates(h.calls)).toHaveLength(1)
+  await sweepOnce(h)
+  expect(updates(h.calls)).toHaveLength(2)
+  expect(updates(h.calls)[1]).toMatchObject({ doc_id: FP, if_version: 3, data: { state: 'paired' } })
+  const again = await mountPane($)
+  expect(await shown(again, `phone-pair-${FP}`)).toBe(false)
+  expect(await shown(again, `phone-unpair-${FP}`)).toBe(true)
+  await again.unmount()
 })
