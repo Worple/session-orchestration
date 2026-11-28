@@ -6,17 +6,17 @@ Task 1 of `docs/superpowers/plans/2026-11-28-phase2-phone-inbox.md`. Run on 2026
 
 | Decision | Result | What it changes |
 |---|---|---|
-| `MODULE_DB` | **yes**, in main-loop sessions only | The plan stands: the module mirrors and sweeps through `$.tool.call('ArtifactData')`. In `claude -p` there are no Artifact tools (`$.tool.call` fails with "no tool named ArtifactData"), so the coordinator must be interactive or `--bg`. The docs (Task 10) say so, and `mirror` / `sweep` put that error in `PhoneView.error` rather than throwing. |
-| `IDB_KEEPS` | **yes** | Task 8 keeps the key in IndexedDB; no "pair again each visit" fallback. |
-| `KEEPS_ACROSS_REPUBLISH` | **yes** | Republishing the page to the same URL (a plugin update) keeps the pairing. The docs say no re-pairing is needed. |
+| `MODULE_DB` | **yes**, verified in a `--bg` session; an interactive session has the same main-loop tool set and is expected to work but was not run. Task 10's end-to-end check (an interactive coordinator) verifies it. | The plan stands: the module mirrors and sweeps through `$.tool.call('ArtifactData')`. In `claude -p` there are no Artifact tools (`$.tool.call` fails with "no tool named ArtifactData"). Coordinators are interactive by design (the pane), so no coordinator runs under `-p` (controller ruling R5). The docs (Task 10) say so, and `mirror` / `sweep` put that error in `PhoneView.error` rather than throwing. |
+| `IDB_KEEPS` | **yes**, from the claude.ai app on one Android 16 phone; the phone's own browser and iOS were not tested | Task 8 keeps the key in IndexedDB; no "pair again each visit" fallback. Task 10's end-to-end check on the user's phone re-confirms it. |
+| `KEEPS_ACROSS_REPUBLISH` | **yes**, from the claude.ai app on one Android 16 phone; the phone's own browser and iOS were not tested | Republishing the page to the same URL (a plugin update) keeps the pairing. The docs say no re-pairing is needed. Task 10's end-to-end check on the user's phone re-confirms it. |
 | `READBACK_EXACT` | **yes**, after trimming surrounding whitespace | Task 9 runs. See "Reading the page back" for where the HTML sits. |
 | `NODE_VERIFIES_BROWSER_SIG` | **yes** | Task 2 proceeds with the format in Global Constraints. |
 
 ## What was run
 
-**S6, the phone.** A page with capabilities `{db:{}, user:{}}` generated a P-256 key pair (private key non-extractable, `exportKey` refused it) and kept it in IndexedDB `phone-inbox` / `keys` / `device`. After the app was fully closed and reopened, the page found the same key and showed the same code. The page was then republished with a one-word change (a new version id at the same URL); on reopening, the same code again.
+**S6, the phone.** A page with capabilities `{db:{}, user:{}}` generated a P-256 key pair (private key non-extractable, `exportKey` refused it) and kept it in IndexedDB `phone-inbox` / `keys` / `device`. After the app was fully closed and reopened, the page found the same key and showed the same code. The page was then republished with a one-word change (a new version id at the same URL); on reopening, the same code again. This was tested only in the claude.ai Android app on one Android 16 phone; the phone's own browser and iOS were not tested.
 
-**Signature format.** The phone signed `JSON.stringify({v:1, spike:true, page, at})` and wrote `{payload, sig, sigBytes, jwk, code, createdAt, ua}` to `spike/<auto id>`. Read back with ArtifactData and checked in Node 22 `globalThis.crypto.subtle`:
+**Signature format.** The phone signed `JSON.stringify({v:1, spike:true, page, at})` and wrote `{payload, sig, sigBytes, jwk, code, createdAt, ua}` to `spike/<auto id>`. Read back with ArtifactData and checked in Node 22 `globalThis.crypto.subtle` (same scope: the claude.ai Android app on one Android 16 phone):
 
 - `sig` is 64 bytes (IEEE P1363, r‖s), base64url without padding, as WebCrypto's `sign` produces it.
 - `verify({name:'ECDSA', hash:'SHA-256'}, key, sig, utf8(payload))` is true; the payload with one character appended is false.
