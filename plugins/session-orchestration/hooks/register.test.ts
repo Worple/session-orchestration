@@ -1,7 +1,7 @@
 import type { On, ToolCallResult } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { HIDDEN_BY_MARKDOWN, overdueAsks, parseAsks, queuedText, byKind, kindCounts, attachFor, clip, fixesOf, groupOf, keyIn, leftoverCommand, notice, wrapText, facts, orderTasks, parsePending, parseStatus, parseTask, pendingOf, prsOf, BUILTIN_KEYS, USAGE_EXTRA, USAGE_SECTIONS, usageName, GROUPS, RESOLVED, STALE, STALE_ITEMS, OTHER_PROJECTS, SENT, REPORT_PAGES, staleOf, weakStale, pendingLabel, foldOf, LEFTOVERS, OTHER, cancelText, onYouOf, sectionSlug, sectionState, parseSections, nativePath } from './register'
+import { HIDDEN_BY_MARKDOWN, overdueAsks, parseAsks, queuedText, byKind, kindCounts, attachFor, clip, fixesOf, groupOf, keyIn, leftoverCommand, notice, wrapText, facts, orderTasks, parsePending, parseStatus, parseTask, pendingOf, prsOf, BUILTIN_KEYS, USAGE_EXTRA, USAGE_SECTIONS, usageName, GROUPS, RESOLVED, STALE, STALE_ITEMS, OTHER_PROJECTS, SENT, REPORT_PAGES, staleOf, weakStale, pendingLabel, foldOf, LEFTOVERS, OTHER, cancelText, onYouOf, sectionSlug, sectionState, parseSections, nativePath, claimAndSubmit } from './register'
 
 test('status rows parse whatever the columns hold', async () => {
   const pad = (k: string, st: string) => `${k.padEnd(9)} ${st.padEnd(14)} `
@@ -203,6 +203,47 @@ test('a queued approval becomes buttons; a click submits the answer once and cle
   expect(await again.find({ type: 'Button', text: 'Yes, merge ABC-1' })).toBeUndefined()
   expect(await again.find({ type: 'Text', text: 'STATUS TEXT' })).toBeDefined()
   expect(await again.find({ type: 'Text', text: 'PENDING TEXT' })).toBeDefined()
+})
+
+test('claimAndSubmit resolves before delivery; sent settles when the turn starts', async () => {
+  // A hand-made `$` (a test body's own has no clock and no state the plugin's helpers can use): an in-memory
+  // state store and a submit that stays pending until the test lets it go.
+  const store = new Map<string, { value: unknown; version: number }>()
+  const ask = { id: '1', key: 'ABC-9', question: 'Merge ABC-9?', options: ['Yes', 'No'], at: 0 }
+  store.set('session-orchestration/asks', { value: [ask], version: 1 })
+  let release: (r: { text: string }) => void = () => undefined
+  const submits: string[] = []
+  const $ = {
+    state: {
+      get: async (ref: { plugin: string; key: string }) => store.get(`${ref.plugin}/${ref.key}`) ?? { value: undefined, version: 0 },
+      set: async (ref: { plugin: string; key: string }, value: unknown) => {
+        const k = `${ref.plugin}/${ref.key}`
+        const version = (store.get(k)?.version ?? 0) + 1
+        store.set(k, { value, version })
+        return { isSet: true, version }
+      },
+    },
+    clock: { now: async () => 1000 },
+    env: { get: async () => undefined },
+    fs: { read: async () => '', write: async () => undefined },
+    process: { run: async () => ({ exitCode: 0, stdout: '', stderr: '' }) },
+    plugin: { root: '/plugin' },
+    ui: { status: () => undefined, toast: () => undefined },
+    prompt: { submit: (e: { text: string }) => new Promise<{ text: string }>(done => {
+      submits.push(e.text)
+      release = done
+    }) },
+  } as unknown as Parameters<typeof claimAndSubmit>[0]
+  const sending = () => (store.get('session-orchestration/asks')?.value as { sending?: number }[]).map(a => a.sending)
+  const claim = await claimAndSubmit($, ask, 'Yes', 'Approval answer') // resolves while the submit is still pending
+  expect(claim).not.toBeNull()
+  expect(submits).toEqual(['Approval pane answer for ABC-9: Yes. Asked: Merge ABC-9?'])
+  expect(sending()).toEqual([1000]) // claimed, being sent
+  expect(await claimAndSubmit($, ask, 'No', 'Approval answer')).toBeNull() // a second claim finds it taken
+  release({ text: submits[0]! })
+  expect(await claim!.sent).toBeUndefined()
+  expect(sending()).toEqual([]) // dropped on delivery
+  expect(submits).toHaveLength(1)
 })
 
 test('Approve all merges answers each waiting merge ask with its own answer line, after a confirm', async ($, on) => {

@@ -800,6 +800,49 @@ async function dropAsks($: EngineInterface, hit: (a: Ask) => boolean) {
   return dropped
 }
 
+// Claims an ask and submits its answer as the user's prompt. Resolves null when the ask is gone or already claimed
+// (the caller says so), else once the claim is written and the submit started: `sent` is separate because the submit
+// queues until the session is idle and resolves only when that turn starts. A pane click awaits it; a caller outside
+// a click (a background sweep inside a tool handler) must not, or it deadlocks. `sent` resolves undefined once
+// delivered (the ask dropped), or the drop reason (the ask put back); it rejects, ask put back, if the submit throws.
+export async function claimAndSubmit($: EngineInterface, a: Ask, option: string, label: string): Promise<{ sent: Promise<string | undefined> } | null> {
+  // Claim it in one write: a second click, or a click on a removed ask's stale drawing, finds nothing to answer.
+  // The store's list: another coordinator's pane may have answered or withdrawn it. Key and question too: an id
+  // freed by a cancel can be given to another coordinator's next ask.
+  const now = await $.clock.now()
+  const same = (x: Ask) => x.id === a.id && x.key === a.key && x.question === a.question
+  let claimed = false
+  await setAsks($, l => {
+    claimed = l.some(x => same(x) && x.sending === undefined)
+    return claimed ? l.map((x): Ask => (same(x) ? { ...x, sending: now } : x)) : l
+  })
+  if (!claimed) return null
+  logPress($, label)
+  await syncStatus($)
+  // Not delivered (a throw, or a hook's drop): answerable again in its place, unless cancel_approval took it meanwhile.
+  const putBack = async () => {
+    await setAsks($, l => l.map(x => (same(x) ? unsent(x) : x)))
+    await syncStatus($)
+  }
+  const sent = (async () => {
+    try {
+      const r = await $.prompt.submit({ text: answerText(a, option), asUser: true })
+      if (r.drop !== undefined) {
+        await putBack()
+        return r.drop
+      }
+    } catch (err) {
+      await putBack()
+      throw err
+    }
+    await dropAsks($, same)
+    return undefined
+  })()
+  // A caller that never awaits `sent` mustn't leave an unhandled rejection (awaiting callers still see it).
+  sent.catch(() => undefined)
+  return { sent }
+}
+
 // The queued asks outlive the session that queued them (a restart, a handover, a plugin release): one file per
 // project root, the store each change reads and writes, so every coordinator of the project and its pane show the
 // same asks until they are answered or cancelled. A worker never sets asksFile (it calls no ask tool and opens no
@@ -2163,35 +2206,10 @@ export const register: Register = on => {
     }
     const cols = e.props.bodyColumns
     const answer = (a: Ask, option: string) => async () => {
-      // Claim it in one write: a second click, or a click on a removed ask's stale drawing, finds nothing to answer.
-      // The store's list: another coordinator's pane may have answered or withdrawn it. Key and question too: an id
-      // freed by a cancel can be given to another coordinator's next ask.
-      const now = await $.clock.now()
-      const same = (x: Ask) => x.id === a.id && x.key === a.key && x.question === a.question
-      let claimed = false
-      await setAsks($, l => {
-        claimed = l.some(x => same(x) && x.sending === undefined)
-        return claimed ? l.map((x): Ask => (same(x) ? { ...x, sending: now } : x)) : l
-      })
-      if (!claimed) return $.ui.toast('That ask is gone: withdrawn or answered.')
-      logPress($, 'Approval answer')
-      await syncStatus($)
-      // Not delivered (a throw, or a hook's drop): answerable again in its place, unless cancel_approval took it meanwhile.
-      const putBack = async () => {
-        await setAsks($, l => l.map(x => (same(x) ? unsent(x) : x)))
-        await syncStatus($)
-      }
-      try {
-        const r = await $.prompt.submit({ text: answerText(a, option), asUser: true })
-        if (r.drop !== undefined) {
-          await putBack()
-          return $.ui.toast(`The answer wasn't sent (${r.drop}); the ask is back in the pane.`)
-        }
-      } catch (err) {
-        await putBack()
-        throw err
-      }
-      await dropAsks($, same)
+      const c = await claimAndSubmit($, a, option, 'Approval answer')
+      if (!c) return $.ui.toast('That ask is gone: withdrawn or answered.')
+      const why = await c.sent
+      if (why !== undefined) $.ui.toast(`The answer wasn't sent (${why}); the ask is back in the pane.`)
     }
     // A conditional or redirected answer ("no, delete the old one instead") in one round: the question dialog, its
     // options plus Other for the user's own words, submitted like a click. Dismissed: nothing is sent. Chat about this:
