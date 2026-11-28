@@ -5,7 +5,8 @@
 //   exit 0 valid; 1 bad signature; 2 malformed input; 3 anything unexpected (could not verify).
 //   Prints nothing on 0 and one reason line on stderr otherwise.
 // Module: verifySig(jwk, payload, sig) resolves true/false, and throws MalformedInput for malformed input.
-import { pathToFileURL } from 'node:url';
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const MAX_PAYLOAD_BYTES = 8192;
 
@@ -28,13 +29,15 @@ export async function verifySig(jwk, payload, sig) {
   const sigBytes = Buffer.from(sig, 'base64url');
   if (sigBytes.length !== 64) bad('sig is not 64 bytes');
 
-  const { subtle } = globalThis.crypto;
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) throw new Error('crypto.subtle is not available');
   let key;
   try {
     key = await subtle.importKey('jwk', { kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y },
       { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
   } catch (e) {
-    bad(`jwk cannot be imported: ${e.message}`);
+    if (e?.name === 'DataError' || e?.name === 'SyntaxError') bad(`jwk cannot be imported: ${e.message}`);
+    throw e;
   }
   return subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, sigBytes, data);
 }
@@ -48,7 +51,13 @@ async function main() {
   return verifySig(input.jwk, input.payload, input.sig);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Entry point only: compare real paths, since import.meta.url is realpath-resolved and argv[1] may be a symlink or contain "..".
+// If argv[1] is missing or unresolvable, the module is being imported: run nothing.
+const isEntry = (() => {
+  try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; }
+})();
+
+if (isEntry) {
   try {
     if (await main()) process.exit(0);
     console.error('bad signature');

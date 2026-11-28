@@ -68,4 +68,35 @@ check payloadtype 2
 check wrongcrv 2
 check wrongkty 2
 check badpoint 2
+
+# The CLI must run however it is reached: a symlink, a path with "..", the way the hooks module launches it.
+ln -s "$cli" "$tmp/link.mjs"
+runvia() { # $1 label, $2 case file, $3 wanted exit; the rest is the command
+  local label=$1 f=$2 want=$3 got=0; shift 3
+  "$@" < "$tmp/$f" >"$tmp/out" 2>"$tmp/err" || got=$?
+  [ "$got" = "$want" ] || { echo "FAIL $label $f: exit $got, want $want ($(head -c 200 "$tmp/err"))"; exit 1; }
+}
+for c in "valid 0" "notjson 2" "tampered 1"; do
+  set -- $c
+  runvia symlink "$1" "$2" node "$tmp/link.mjs"
+  runvia dotdot "$1" "$2" node "$(dirname "$cli")/../hooks/verify-sig.mjs"
+  runvia exec-form "$1" "$2" bash -c 'exec node "$0"' "$cli"
+  runvia exec-symlink "$1" "$2" bash -c 'exec node "$0"' "$tmp/link.mjs"
+done
+
+# Imported, the module runs no CLI: it neither reads stdin nor exits, and verifySig resolves true for a valid triple.
+cat > "$tmp/imp.mjs" <<'EOF'
+import { readFileSync } from 'node:fs';
+const { verifySig } = await import(process.argv[2]);
+const c = JSON.parse(readFileSync(process.argv[3], 'utf8'));
+if ((await verifySig(c.jwk, c.payload, c.sig)) !== true) throw new Error('verifySig did not resolve true');
+console.log('imported');
+EOF
+got=0; out=$(node "$tmp/imp.mjs" "file://$cli" "$tmp/valid" < /dev/null 2>&1) || got=$?
+[ "$got" = 0 ] && [ "$out" = imported ] || { echo "FAIL import: exit $got: $out"; exit 1; }
+
+# No crypto.subtle is an unexpected failure: exit 3, one stderr line (never 1 or 2).
+echo "Object.defineProperty(globalThis, 'crypto', { value: {}, configurable: true });" > "$tmp/nosubtle.mjs"
+got=0; node --import "$tmp/nosubtle.mjs" "$cli" < "$tmp/valid" >"$tmp/out" 2>"$tmp/err" || got=$?
+[ "$got" = 3 ] && [ ! -s "$tmp/out" ] && [ "$(wc -l < "$tmp/err" | tr -d ' ')" = 1 ] || { echo "FAIL no subtle: exit $got, want 3 ($(head -c 200 "$tmp/err"))"; exit 1; }
 echo ok
