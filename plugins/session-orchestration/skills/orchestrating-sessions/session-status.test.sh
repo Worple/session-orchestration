@@ -1474,7 +1474,7 @@ grep -q '^cfg --bg --model sonnet --effort low -n PROJ-9-c3b ' <<<"$c" && [ ! -e
 echo '{"permissions":{"defaultMode":"plan"}}' > "$tmp/cfg/settings.json"
 echo '{"policy":{"modes":["default","manual","acceptEdits","auto"]}}' > "$root/.claude/coordination.local.json"   # a lead may loosen to acceptEdits
 calls >/dev/null; run --handover "$kid" --mode acceptEdits -- 'x' >/dev/null; c=$(calls)
-[ "$(grep -o -- '--permission-mode' <<<"$c" | wc -l)" = 1 ] && grep -qF -- '--permission-mode acceptEdits' <<<"$c" || { echo "handover --mode: $c"; exit 1; }
+[ "$(grep -o -- '--permission-mode' <<<"$c" | wc -l | tr -d ' ')" = 1 ] && grep -qF -- '--permission-mode acceptEdits' <<<"$c" || { echo "handover --mode: $c"; exit 1; }
 rm "$root/.claude/coordination.local.json"
 calls >/dev/null; run --handover "$kid" -- 'x' >/dev/null; c=$(calls)
 grep -qF -- '--permission-mode default' <<<"$c" || { echo "handover kept no plan-default override: $c"; exit 1; }
@@ -1486,7 +1486,7 @@ calls >/dev/null; out=$(run --handover "$kid" --mode bypassPermissions -- 'x') &
 [ "$rc" = 5 ] && [ "$(tail -1 <<<"$out")" = 'needs your approval: handover "PROJ-9-c3b" (dddddddd) with mode bypassPermissions' ] && ! calls | grep -q 'stop\|--bg' ||
   { echo "handover --mode bypassPermissions by lead: $rc $out"; exit 1; }
 calls >/dev/null; run --handover "$kid" --mode bypassPermissions --by pane -- 'x' >/dev/null; c=$(calls)
-[ "$(grep -o -- '--permission-mode' <<<"$c" | wc -l)" = 1 ] && grep -qF -- '--permission-mode bypassPermissions' <<<"$c" || { echo "handover --by pane: $c"; exit 1; }
+[ "$(grep -o -- '--permission-mode' <<<"$c" | wc -l | tr -d ' ')" = 1 ] && grep -qF -- '--permission-mode bypassPermissions' <<<"$c" || { echo "handover --by pane: $c"; exit 1; }
 # A lead capped by policy.models or policy.max_effort: a --model or --effort given, or the half --escalate changes,
 # outside it is refused (exit 5) before anything is stopped or started, the approval line naming only those parts.
 echo '{"policy":{"models":["sonnet","haiku"],"max_effort":"high","modes":["manual"]}}' > "$root/.claude/coordination.local.json"
