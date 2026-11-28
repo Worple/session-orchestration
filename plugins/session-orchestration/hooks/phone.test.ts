@@ -134,7 +134,7 @@ test('mirrorDoc stays within the byte budget for non-ASCII text and skips an ask
 const URL1 = 'https://claude.ai/artifact/abcdef123456'
 const TOOL = 'mcp__session-orchestration__'
 type Call = Record<string, unknown>
-const harness = ($: Parameters<Parameters<typeof test>[1]>[0], on: Parameters<Parameters<typeof test>[1]>[1], answer: (c: Call, n: number) => unknown) => {
+const harness = ($: Parameters<Parameters<typeof test>[1]>[0], on: Parameters<Parameters<typeof test>[1]>[1], answer: (c: Call, n: number) => unknown, root = '/work/app') => {
   mock.clock(on)
   mock.env(on, { HOME: '/h' })
   mock.store(on)
@@ -145,7 +145,7 @@ const harness = ($: Parameters<Parameters<typeof test>[1]>[0], on: Parameters<Pa
     calls.push(e as unknown as Call)
     return answer(e as unknown as Call, calls.length) as never
   })
-  on('process.run', async (_, e) => ({ value: { exitCode: 0, stdout: e.argv.includes('--root') ? '/work/app' : '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('process.run', async (_, e) => ({ value: { exitCode: 0, stdout: e.argv.includes('--root') ? root : '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('fs.read', async () => { throw new Error('ENOENT') })
   on('fs.write', async () => ({ value: undefined }))
   on('ui.open', async () => ({ value: { isPlaced: true } }))
@@ -168,7 +168,7 @@ test('phone_setup stores the url and mirrors the asks once', async ($, on) => {
   const doc = h.calls[0]!.data as { v: number; project: string; asks: { key: string }[] }
   expect(doc).toMatchObject({ v: 1, project: 'app' })
   expect(doc.asks.map(a => a.key)).toEqual(['PROJ-1'])
-  await new Promise(r => setTimeout(r, 20)) // the ask's own background mirrors finish inside the test
+  await new Promise(r => setTimeout(r, 60)) // the ask's own background mirrors finish inside the test
 })
 
 test('a new ask mirrors; an unchanged list writes nothing', async ($, on) => {
@@ -177,36 +177,22 @@ test('a new ask mirrors; an unchanged list writes nothing', async ($, on) => {
   await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })
   expect(h.calls).toHaveLength(1) // the empty list
   await h.ask('PROJ-1', 'merge app#1')
-  await new Promise(r => setTimeout(r, 20))
+  await new Promise(r => setTimeout(r, 60))
   expect(h.calls).toHaveLength(2)
   expect(h.calls[1]!.if_version).toBe(1) // pinned to the version the first write returned
   expect((h.calls[1]!.data as { asks: unknown[] }).asks).toHaveLength(1)
   // Queueing the same ask again changes nothing in the document: no write.
   await h.ask('PROJ-1', 'merge app#1')
-  await new Promise(r => setTimeout(r, 20))
+  await new Promise(r => setTimeout(r, 60))
   expect(h.calls).toHaveLength(2)
 })
 
-test('a version refusal re-reads and retries once', async ($, on) => {
-  const h = harness($, on, (c, n) => {
-    if (c.action === 'get') return { result: { db_read: { op: 'get', collection: 'coordinators', doc_id: 'x', doc: { version: 7, data: {} } } } }
-    if (n === 1) return { result: 'Error: db write failed (version_mismatch): … now at version 7 …', text: 'Error: db write failed (version_mismatch): … now at version 7 …', isError: true }
-    return written(8)
-  })
-  await $.tool.call({ tool: `${TOOL}open_pane` })
-  await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })
-  expect(h.calls.map(c => c.action)).toEqual(['set', 'get', 'set'])
-  expect(h.calls[2]!.if_version).toBe(7)
-  await h.ask('PROJ-1', 'merge app#1')
-  await new Promise(r => setTimeout(r, 20))
-  expect(h.calls.at(-1)!.if_version).toBe(8)
-})
 
 test('no url: nothing is written', async ($, on) => {
   const h = harness($, on, (_, n) => written(n))
   await $.tool.call({ tool: `${TOOL}open_pane` })
   await h.ask('PROJ-1', 'merge app#1')
-  await new Promise(r => setTimeout(r, 20))
+  await new Promise(r => setTimeout(r, 60))
   expect(h.calls).toEqual([])
 })
 
@@ -227,11 +213,11 @@ test('phone_setup with "" turns it off', async ($, on) => {
   expect(r.result).toBe('Phone inbox off.')
   const n = h.calls.length
   await h.ask('PROJ-1', 'merge app#1')
-  await new Promise(r => setTimeout(r, 20))
+  await new Promise(r => setTimeout(r, 60))
   expect(h.calls).toHaveLength(n)
 })
 
-test('a -p session (no ArtifactData tool) puts the error in PhoneView and does not throw', async ($, on) => {
+test('a -p session (no ArtifactData tool) does not throw and retries on the next change', async ($, on) => {
   const h = harness($, on, () => { throw new Error('no tool named ArtifactData') })
   await $.tool.call({ tool: `${TOOL}open_pane` })
   const r = await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })
@@ -239,6 +225,91 @@ test('a -p session (no ArtifactData tool) puts the error in PhoneView and does n
   expect(h.calls).toHaveLength(1)
   // The failure is kept as the view's error and nothing is remembered as written: the next change tries again.
   await h.ask('PROJ-1', 'merge app#1')
-  await new Promise(r => setTimeout(r, 20))
+  await new Promise(r => setTimeout(r, 60))
   expect(h.calls).toHaveLength(2)
+})
+
+const got = (version: number) => ({ result: { db_read: { op: 'get', collection: 'coordinators', doc_id: 'x', found: true, docs: [{ id: 'x', data: {}, version }] } } })
+const mismatch = { result: 'Error: db write failed (version_mismatch): … now at version 7 …', text: 'Error: db write failed (version_mismatch): … now at version 7 …', isError: true }
+const settle = () => new Promise(r => setTimeout(r, 60))
+
+test('a version refusal re-reads (docs[0].version) and retries once', async ($, on) => {
+  const h = harness($, on, (c, n) => (c.action === 'get' ? got(7) : n === 2 ? mismatch : written(n === 1 ? 1 : 8)))
+  await $.tool.call({ tool: `${TOOL}open_pane` })
+  await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })
+  await h.ask('PROJ-1', 'merge app#1')
+  await settle()
+  expect(h.calls.map(c => c.action)).toEqual(['set', 'set', 'get', 'set'])
+  expect(h.calls[1]!.if_version).toBe(1)
+  expect(h.calls[3]!.if_version).toBe(7)
+  await h.ask('PROJ-2', 'merge app#2')
+  await settle()
+  expect(h.calls.at(-1)!.if_version).toBe(8)
+})
+
+test('a failed first write (no if_version) reads the document and retries with its version', async ($, on) => {
+  const h = harness($, on, (c, n) => (c.action === 'get' ? got(3) : n === 1 ? { result: 'Error: read the document first', text: 'Error: read the document first', isError: true } : written(4)))
+  await $.tool.call({ tool: `${TOOL}open_pane` })
+  await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })
+  expect(h.calls.map(c => c.action)).toEqual(['set', 'get', 'set'])
+  expect(h.calls[2]!.if_version).toBe(3)
+  await settle()
+})
+
+test('any other refusal of a pinned write is one call: no get, no retry', async ($, on) => {
+  const h = harness($, on, (_, n) => (n === 1 ? written(1) : { result: 'Error: too big', text: 'Error: too big', isError: true }))
+  await $.tool.call({ tool: `${TOOL}open_pane` })
+  await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })
+  await h.ask('PROJ-1', 'merge app#1')
+  await settle()
+  expect(h.calls.map(c => c.action)).toEqual(['set', 'set'])
+})
+
+test('a change made while a write is in flight is mirrored once more, with the latest list', async ($, on) => {
+  let release: () => void = () => undefined
+  let first = true
+  const h = harness($, on, (_, n) => {
+    if (!first) return written(n)
+    first = false
+    return new Promise(r => { release = () => r(written(1)) })
+  })
+  await $.tool.call({ tool: `${TOOL}open_pane` })
+  const setup = $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })
+  await settle()
+  await h.ask('PROJ-1', 'merge app#1') // while the first write is pending
+  release()
+  await setup
+  await settle()
+  expect(h.calls).toHaveLength(2)
+  expect((h.calls[1]!.data as { asks: unknown[] }).asks).toHaveLength(1)
+  expect(h.calls[1]!.if_version).toBe(1)
+})
+
+test('a write in flight when phone_setup "" runs commits nothing; the next url starts unpinned', async ($, on) => {
+  let release: () => void = () => undefined
+  let first = true
+  const h = harness($, on, (_, n) => {
+    if (!first) return written(n)
+    first = false
+    return new Promise(r => { release = () => r(written(5)) })
+  })
+  await $.tool.call({ tool: `${TOOL}open_pane` })
+  const pending = $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })
+  await settle()
+  expect((await $.tool.call({ tool: `${TOOL}phone_setup`, url: '' })).result).toBe('Phone inbox off.')
+  release()
+  await pending
+  await settle()
+  await $.tool.call({ tool: `${TOOL}phone_setup`, url: 'https://claude.ai/artifact/zyxwvu987654' })
+  expect(h.calls).toHaveLength(2)
+  expect(h.calls[1]).toMatchObject({ action: 'set', url: 'https://claude.ai/artifact/zyxwvu987654' })
+  expect(h.calls[1]!.if_version).toBeUndefined()
+})
+
+test('phone_setup with no project root says nothing is mirrored and writes nothing', async ($, on) => {
+  const h = harness($, on, (_, n) => written(n), '')
+  const r = await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })
+  expect(r.result).toBe("Phone inbox set, but this folder has no project root, so nothing is mirrored yet: run it from the coordinator's project folder.")
+  expect(h.calls).toEqual([])
+  await settle()
 })

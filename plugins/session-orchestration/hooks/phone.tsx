@@ -129,18 +129,6 @@ export const PHONE_URL = /^https:\/\/claude\.ai\/(code\/)?artifact\/[A-Za-z0-9_-
 
 const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim().slice(0, 200)
 const asObject = (v: unknown): Record<string, unknown> => (isObject(v) ? v : {})
-// The first numeric `version` in a result (a get's document carries it where a write's result puts its own).
-const findVersion = (v: unknown): number | undefined => {
-  if (Array.isArray(v)) return v.map(findVersion).find(x => x !== undefined)
-  if (!isObject(v)) return undefined
-  if (typeof v.version === 'number') return v.version
-  for (const x of Object.values(v)) {
-    const f = findVersion(x)
-    if (f !== undefined) return f
-  }
-  return undefined
-}
-
 // The engine follows $ only into functions declared at the top of a file of this module, so these are plain
 // functions over module state (one phone inbox per module), not a factory taking callbacks.
 // The last document text written (updatedAt left out) and the version it left, for the url they were written to.
@@ -149,6 +137,7 @@ let lastText: string | undefined
 let version: number | undefined
 let running: Promise<void> | undefined
 let again = false
+let gen = 0 // bumped whenever the phone url changes or is cleared
 
 const forget = () => {
   lastText = undefined
@@ -164,6 +153,7 @@ async function storedUrl($: EngineInterface) {
   if (url !== seenUrl) {
     seenUrl = url
     forget()
+    gen++
   }
   return url
 }
@@ -178,29 +168,43 @@ async function artifactData($: EngineInterface, url: string, input: Record<strin
 
 async function mirrorOnce($: EngineInterface) {
   let url: string | null = null
+  const mine = gen
   try {
     url = await storedUrl($)
     if (!url) return
+    // A url change or "" while this run was in flight: its url is no longer the phone's, so it commits nothing.
+    const current = () => mine === gen
     const rootPath = await projectRoot($)
-    if (!rootPath) return
+    if (!rootPath) {
+      if (current()) await patch($, { url, error: 'no project root: nothing mirrored' })
+      return
+    }
     const root = await hex16(rootPath)
     const project = rootPath.split('/').filter(Boolean).at(-1) ?? ''
     const doc = mirrorDoc(project, await read($, asks), await read($, activity), await $.clock.now())
     const text = JSON.stringify({ ...doc, updatedAt: 0 })
     if (text === lastText) return
-    const put = async (): Promise<{ error: string } | { version: number }> => {
-      const r = await artifactData($, url, { action: 'set', collection: 'coordinators', doc_id: root, data: doc, ...(version !== undefined ? { if_version: version } : {}) })
-      if (r.error) return { error: r.error }
+    const put = async (pin: number | undefined): Promise<{ error: string; stale: boolean } | { version: number }> => {
+      const r = await artifactData($, url, { action: 'set', collection: 'coordinators', doc_id: root, data: doc, ...(pin !== undefined ? { if_version: pin } : {}) })
+      if (r.error) return { error: r.error, stale: r.error.includes('version_mismatch') }
       const v = asObject(r.result.db_write).version
-      return typeof v === 'number' ? { version: v } : { error: 'ArtifactData answered without a version' }
+      return typeof v === 'number' ? { version: v } : { error: 'ArtifactData answered without a version', stale: false }
     }
-    let w = await put()
-    if ('error' in w) {
-      // A stale version (another writer), or a document this run has not read: read it, then once more.
+    const pinned = version
+    let w = await put(pinned)
+    // Read the document and write once more only for a version refusal, or for a first write (no version known: after
+    // a start or a url change) that may have met a document that already exists. Any other refusal is final.
+    if ('error' in w && (w.stale || pinned === undefined)) {
       const g = await artifactData($, url, { action: 'get', collection: 'coordinators', doc_id: root })
-      version = g.error ? undefined : findVersion(g.result.db_read ?? g.result)
-      if (version !== undefined) w = await put()
+      if (g.error) {
+        w = { error: g.error, stale: false }
+      } else {
+        const d = Array.isArray(asObject(g.result.db_read).docs) ? (asObject(g.result.db_read).docs as unknown[])[0] : undefined
+        const v = asObject(d).version
+        w = await put(typeof v === 'number' ? v : undefined)
+      }
     }
+    if (!current()) return
     if ('error' in w) {
       forget()
       await patch($, { url, error: `phone mirror failed: ${w.error}` })
@@ -210,6 +214,7 @@ async function mirrorOnce($: EngineInterface) {
     version = w.version
     await patch($, { url, error: null })
   } catch (err) {
+    if (mine !== gen) return
     forget()
     // A store that cannot be read leaves no url to show it under: the view keeps its last state.
     if (url) await patch($, { url, error: `phone mirror failed: ${oneLine(err instanceof Error ? err.message : String(err))}` }).catch(() => undefined)
@@ -222,12 +227,17 @@ export function phoneMirror($: EngineInterface): Promise<void> {
     again = true
     return running
   }
+  // `running` is cleared inside, right after the loop's last check, so a request can't land between the two.
   running = (async () => {
-    do {
-      again = false
-      await mirrorOnce($)
-    } while (again)
-  })().finally(() => { running = undefined })
+    try {
+      do {
+        again = false
+        await mirrorOnce($)
+      } while (again)
+    } finally {
+      running = undefined
+    }
+  })()
   return running
 }
 
@@ -240,12 +250,20 @@ export async function phoneSetup($: EngineInterface, url: unknown): Promise<stri
     await $.store.delete('phone.url')
     seenUrl = null
     forget()
+    gen++
     await patch($, { url: null, last: null, error: null })
     return 'Phone inbox off.'
   }
   await $.store.set('phone.url', u)
+  seenUrl = u
+  forget()
+  gen++
   await patch($, { url: u, error: null })
   await phoneMirror($)
+  const v = await read($, phone)
+  if (v.error === 'no project root: nothing mirrored') {
+    return 'Phone inbox set, but this folder has no project root, so nothing is mirrored yet: run it from the coordinator\'s project folder.'
+  }
   return `Phone inbox set: open ${u} on your phone, tap Pair this phone, and approve its code in the pane.`
 }
 
