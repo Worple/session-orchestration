@@ -106,6 +106,7 @@ export const mirrorDoc = (project: string, asks: Ask[], activity: string, now: n
   const doc = { v: 1 as const, project, asks: [] as PhoneAsk[], activity: cut(activity), updatedAt: now }
   let used = bytes(JSON.stringify(doc))
   for (const a of [...asks].sort((x, y) => x.at - y.at)) {
+    if (a.body !== undefined) continue // a comment post: its text is read, with its sha256, in the pane only
     if (doc.asks.length >= MAX_ASKS) break
     const o: PhoneAsk = { id: a.id, key: a.key, question: a.question, options: [...a.options], at: a.at }
     if (a.details !== undefined) o.details = cut(a.details)
@@ -430,16 +431,22 @@ export async function phoneSetup($: EngineInterface, url: unknown): Promise<stri
   // page was until now, and a swap-and-restore followed by this call must not accept them. When that can't be done,
   // nothing is stored. The very first acceptance has no pin to move and no rows from an earlier page: best effort.
   const prev = asObject(await $.store.get('phone.page'))
-  if (prev.sha !== verdict.hash || prev.ver !== verdict.ver || (await $.store.get('phone.url')) !== u) {
+  const moved = prev.sha !== verdict.hash || prev.ver !== verdict.ver || prev.url !== u
+  if (moved) {
     const why = await refuseOpenRows($, u)
     if (why !== undefined && filled(prev.sha)) return `Couldn't clear the phone's pending answers (${oneLine(why)}): call phone_setup again.`
   }
+  // An existing pin that moves unpairs every phone: what a phone signed while the page was another is not taken later
+  // (the payload's time is the signer's own), and a key paired through the old page is not trusted on the new one.
+  const unpaired = moved && filled(prev.sha)
+  if (unpaired) await $.store.set('phone.devices', {})
   await $.store.set('phone.url', u)
-  await $.store.set('phone.page', { sha: verdict.hash, ver: verdict.ver })
+  await $.store.set('phone.page', { sha: verdict.hash, ver: verdict.ver, url: u })
   seenUrl = u
   forget()
   gen++
-  await patch($, { url: u, error: null })
+  pairDocs = new Map()
+  await patch($, { url: u, error: null, ...(unpaired ? { devices: [], pairing: [] } : {}) })
   await phoneMirror($)
   const v = await read($, phone)
   if (v.error === 'no project root: nothing mirrored') {
@@ -517,7 +524,7 @@ async function sweepDevices($: EngineInterface, url: string, gate: () => Promise
       continue
     }
     const at = data.createdAt
-    if (data.state !== undefined || typeof at !== 'number' || !Number.isFinite(at) || now - at > PAIR_MAX_AGE_MS) continue
+    if (data.state !== undefined || typeof at !== 'number' || !Number.isFinite(at) || now - at > PAIR_MAX_AGE_MS || at - now > PHONE_SKEW_MS) continue
     cands.push({ fp, label: labelOf(data.label), code, at, jwk, version: ver })
   }
   // A request is listed only while the page is the plugin's own: a changed or unreadable page lists none.
@@ -552,14 +559,16 @@ const storedUsed = (v: unknown, now: number): Record<string, number> => {
   return out
 }
 
-// 'valid', 'bad' (exit 1) and 'malformed' (exit 2) are the verifier's verdicts; anything else (no node, a crash, a
-// timeout, another code) is that it couldn't verify.
+// 'valid', 'bad' and 'malformed' are the verifier's verdicts, each only with the exit code AND the text verify-sig.mjs
+// prints with it (stdout `valid`; stderr `bad signature`; stderr `malformed input: ...`). Anything else (no node, a
+// crash, a timeout, node's own exit 1 for a module that won't load, an exit 0 that verified nothing) is that it
+// couldn't verify.
 async function runNode($: EngineInterface, jwk: Jwk, payload: string, sig: string): Promise<'valid' | 'bad' | 'malformed' | { cant: string }> {
   try {
     const r = await runBash($, ['-c', 'exec node "$0"', `${$.plugin.root}/hooks/verify-sig.mjs`], { stdin: JSON.stringify({ jwk, payload, sig }), timeoutMs: 10_000 })
-    if (r.exitCode === 0) return 'valid'
-    if (r.exitCode === 1) return 'bad'
-    if (r.exitCode === 2) return 'malformed'
+    if (r.exitCode === 0 && r.stdout.trim() === 'valid') return 'valid'
+    if (r.exitCode === 1 && r.stderr.trim() === 'bad signature') return 'bad'
+    if (r.exitCode === 2 && r.stderr.trim().startsWith('malformed input: ')) return 'malformed'
     return { cant: `verifier exited ${r.exitCode}${r.stderr.trim() ? `: ${oneLine(r.stderr)}` : ''}` }
   } catch (err) {
     return { cant: errText(err) }
@@ -605,14 +614,15 @@ async function sweepAnswers($: EngineInterface, url: string, gate: () => Promise
   // The newest 100 come back (a batch of old or junk rows can't push out newer answers); the unhandled ones are
   // handled oldest first, so the first tap on an ask wins.
   const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
-  const docs = dbDocs(q).filter(d => d.data.root === root)
+  const all = dbDocs(q)
+  const unread = Array.isArray(asObject(q.result.db_read).docs) && (asObject(q.result.db_read).docs as unknown[]).length !== all.length
+  const docs = all.filter(d => d.data.root === root)
     .sort((a, b) => Number(a.data.createdAt ?? 0) - Number(b.data.createdAt ?? 0))
-  const devices = storedDevices(await $.store.get('phone.devices'))
   const mine: Record<string, number> = {} // the hashes this sweep accepted
   const keys: string[] = []
   const reasons: string[] = []
   let refused = 0
-  let error: string | undefined
+  let error: string | undefined = unread ? `${ANS_FAIL}: some answer rows could not be read` : undefined
   const refuse = async (id: string, version: number, reason: string) => {
     const w = await writeRow($, url, id, version, { result: 'refused', reason, resultAt: await $.clock.now() })
     if ('version' in w) {
@@ -650,6 +660,8 @@ async function sweepAnswers($: EngineInterface, url: string, gate: () => Promise
       if (data.createdAt - t0 > PHONE_SKEW_MS) { await refuse(id, ver, 'clock ahead'); continue } // no verifier spawned for it
       const row = parseAnswerRow(id, ver, data)
       if (!row) { await refuse(id, ver, 'malformed answer'); continue }
+      // Read again for each row: a phone unpaired during this sweep gets no further answer accepted.
+      const devices = storedDevices(await $.store.get('phone.devices'))
       if (!hasOwn(devices, row.device)) { await refuse(id, ver, 'unpaired device'); continue }
       const verdict = await runNode($, devices[row.device]!.jwk, row.payload, row.sig)
       if (typeof verdict === 'object') {
@@ -727,7 +739,7 @@ async function runSweep($: EngineInterface): Promise<string> {
     // A page check made by this sweep replaces an earlier verdict; with no work to gate, the earlier one stands.
     const kept = cur && isPageError(cur) && !checked ? cur : undefined
     const err = (own ? cur : undefined) ?? (checked ? pageError(checked, url) : undefined) ?? kept ?? ans.error ?? devErr ?? null
-    const t = new Date(await $.clock.now()).toISOString().slice(11, 16)
+    const t = new Date(await $.clock.now()).toTimeString().slice(0, 5)
     // What the sweep did with the answers shows beside the time: the pane's status line is where the person (and a test) reads it.
     await patch($, { url, last: `${t} ${err ?? 'mirrored'}${ans.line === NOTHING ? '' : ` · ${ans.line}`}`, error: err })
     return err ?? 'mirrored'

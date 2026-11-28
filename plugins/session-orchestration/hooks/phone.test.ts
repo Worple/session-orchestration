@@ -260,11 +260,13 @@ test('no url: nothing is written', async ($, on) => {
 
 test('phone_setup refuses a non-artifact url', async ($, on) => {
   const h = harness($, on, (_, n) => written(n))
+  await $.tool.call({ tool: `${TOOL}open_pane` })
   for (const url of ['http://claude.ai/artifact/abcdef123456', 'https://evil.example/artifact/abcdef123456', 'https://claude.ai/artifact/short', 'https://claude.ai/artifact/abcdef123456/x']) {
     const r = await $.tool.call({ tool: `${TOOL}phone_setup`, url })
     expect(r.result).toMatch(/^phone_setup: url must be .*https:\/\/claude\.ai\/artifact\/<id>/)
   }
   expect(h.calls).toEqual([])
+  await settle()
 })
 
 test('phone_setup with "" turns it off', async ($, on) => {
@@ -370,6 +372,7 @@ test('a write in flight when phone_setup "" runs commits nothing; the next url s
 
 test('phone_setup with no project root says nothing is mirrored and writes nothing', async ($, on) => {
   const h = harness($, on, (_, n) => written(n), '')
+  await $.tool.call({ tool: `${TOOL}open_pane` })
   const r = await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })
   expect(r.result).toBe("Phone inbox set, but this folder has no project root, so nothing is mirrored yet: run it from the coordinator's project folder.")
   expect(h.calls).toEqual([])
@@ -536,13 +539,13 @@ const NOW = T0 + 500 // when the sweep runs: phone_answers sweeps 500 ms after i
 type Row = { data: Record<string, unknown>; version: number }
 type Opts = {
   leak?: boolean // the query answers every row, whatever its where says
-  verify?: (stdin: string, store: Map<string, unknown>) => number | Error // the verifier's exit code, or a spawn failure
+  verify?: (stdin: string, store: Map<string, unknown>) => number | Error | { exitCode: number; stdout: string; stderr: string } // the verifier's exit code, or a spawn failure
   paired?: boolean
   submit?: (text: string) => unknown // what prompt.submit answers (a promise holds it)
   stale?: string[] // row ids whose writes are refused as version_mismatch
   devices?: DevDoc[] // the device docs the phone page holds
   env?: { root: string } // the project root the process answers with (a test can change it)
-  fail?: { query?: boolean; write?: boolean; nodocs?: boolean } // answers queries or writes the page refuses, set by a test
+  fail?: { query?: boolean; write?: boolean; nodocs?: boolean; notext?: boolean } // answers queries or writes the page refuses, set by a test
 }
 const mismatchNow = { result: 'Error: db write failed (version_mismatch): now at version 9', text: 'Error: db write failed (version_mismatch): now at version 9', isError: true }
 const ansHarness = async ($: Env, on: On, o: Opts = {}) => {
@@ -567,6 +570,7 @@ const ansHarness = async ($: Env, on: On, o: Opts = {}) => {
     if (c.collection === 'answers' && (c.action === 'query' || c.action === 'list') && o.fail?.query) return { result: 'Error: db query failed (boom)', text: 'Error: db query failed (boom)', isError: true } as never
     if (c.collection === 'answers' && c.action === 'update' && o.fail?.write) return { result: 'Error: db write failed (boom)', text: 'Error: db write failed (boom)', isError: true } as never
     if (c.collection === 'answers' && c.action === 'list' && o.fail?.nodocs) return { result: { db_read: { op: 'list', collection: 'answers' } }, text: 'nothing' } as never
+    if (c.collection === 'answers' && c.action === 'query' && o.fail?.notext) return { result: { db_read: { op: 'query', collection: 'answers', docs: [{ id: 'ghost', data: {}, version: 1 }] } }, text: '1 documents from collection "answers":' } as never
     if (c.collection === 'devices') return queried(o.devices ?? []) as never
     if (c.collection !== 'answers') return written(calls.length) as never
     if (c.action === 'list') {
@@ -605,7 +609,8 @@ const ansHarness = async ($: Env, on: On, o: Opts = {}) => {
       verifies.push({ argv: e.argv, stdin })
       const r = o.verify?.(stdin, kv) ?? 0
       if (r instanceof Error) throw r
-      return done(r)
+      if (typeof r === 'object') return { value: { ...r, isStdoutTruncated: false, isStderrTruncated: false } }
+      return { value: { exitCode: r, stdout: r === 0 ? 'valid\n' : '', stderr: r === 0 ? '' : r === 1 ? 'bad signature\n' : r === 2 ? 'malformed input: why\n' : 'why', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     return done(0, e.argv.includes('--root') ? (o.env?.root ?? ROOT) : '')
   })
@@ -945,15 +950,18 @@ const statusLine = async ($: Env) => {
 
 test('setup refuses a page that differs from the plugin file', async ($, on) => {
   const h = harness($, on, (_, n) => written(n))
+  await $.tool.call({ tool: `${TOOL}open_pane` })
   PAGE.body = CHANGED
   const r = await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })
   expect(r.result).toBe(REFUSAL(URL1))
   expect(h.calls).toEqual([]) // no mirror
   expect((await $.tool.call({ tool: `${TOOL}phone_answers` })).result).toBe('Phone inbox is off: call phone_setup first.')
+  await settle()
 })
 
 test('phone_setup refuses an unreadable page and stores nothing', async ($, on) => {
   const h = harness($, on, (_, n) => written(n))
+  await $.tool.call({ tool: `${TOOL}open_pane` })
   for (const mode of ['throw', 'error', 'noblock', 'noskeleton'] as const) {
     PAGE.mode = mode
     const r = String((await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })).result)
@@ -961,12 +969,13 @@ test('phone_setup refuses an unreadable page and stores nothing', async ($, on) 
   }
   expect(h.calls).toEqual([])
   expect((await $.tool.call({ tool: `${TOOL}phone_answers` })).result).toBe('Phone inbox is off: call phone_setup first.')
+  await settle()
 })
 
 test('phone_setup with a matching page stores phone.page and mirrors', async ($, on) => {
   const h = await ansHarness($, on)
   expect(h.kv.get('phone.url')).toBe(URL1)
-  expect(h.kv.get('phone.page')).toEqual({ sha: await sha256hex(INBOX.trim()), ver: 'ver-1' })
+  expect(h.kv.get('phone.page')).toEqual({ sha: await sha256hex(INBOX.trim()), ver: 'ver-1', url: URL1 })
   expect(h.calls.filter(c => c.collection === 'coordinators' && c.action === 'set')).toHaveLength(1)
   expect(PAGE.reads).toBe(1)
 })
@@ -1045,9 +1054,9 @@ test('a republish with the same content (new ver) refuses rows with page changed
   expect(h.verifies).toEqual([])
   expect(h.submitted).toEqual([])
   expect(await statusLine($)).toContain(REFUSAL(URL1))
-  await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 }) // accepting it again
+  await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 }) // accepting it again unpairs every phone
   h.add('r2', { row: { createdAt: 99 } })
-  expect(await h.go()).toMatch(/^Phone: 1 delivered/)
+  expect(await h.go()).toBe(`Phone: 0 delivered, 1 refused (unpaired device)${TAIL}`)
 })
 
 test('a read-back without a ver leaves rows untouched and shows the error', async ($, on) => {
@@ -1091,6 +1100,7 @@ test('a doc line with another nonce, or after the END line, is not read', async 
 
 test('a page read back bare (the publishing session) is accepted; a cut-short read is not', async ($, on) => {
   harness($, on, (_, n) => written(n))
+  await $.tool.call({ tool: `${TOOL}open_pane` })
   PAGE.mode = 'bare'
   expect(String((await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })).result)).toMatch(/^Phone inbox set/)
   PAGE.mode = 'ok'
@@ -1098,16 +1108,19 @@ test('a page read back bare (the publishing session) is accepted; a cut-short re
   expect(String((await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })).result)).toMatch(/^Couldn't read the page at .* \(the page wasn't read in full\)/)
   PAGE.mode = 'bare'
   expect(String((await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })).result)).toMatch(/^Couldn't read the page/)
+  await settle()
 })
 
 test('a page with a fake ending followed by more is not taken for the plugin page', async ($, on) => {
   harness($, on, (_, n) => written(n))
+  await $.tool.call({ tool: `${TOOL}open_pane` })
   PAGE.body = `${INBOX}</body></html>\n<script>evil()</script>`
   PAGE.extra = 0 // the read is whole: the extra script is part of the document, so it differs
   const r = String((await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })).result)
   expect(r).toBe(REFUSAL(URL1))
   PAGE.extra = 30 // cut short at the fake ending
   expect(String((await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })).result)).toMatch(/^Couldn't read the page/)
+  await settle()
 })
 
 test('the answers are read from the page after their own query, not under the devices read', async ($, on) => {
@@ -1265,7 +1278,7 @@ test('more than 10 pages of rows is refused, with the old pin kept', async ($, o
   PAGE.ver = 'ver-3'
   const r = String((await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })).result)
   expect(r).toMatch(/^Couldn't clear the phone's pending answers \(too many rows\): call phone_setup again\.$/)
-  expect(h3.kv.get('phone.page')).toMatchObject({ ver: 'ver-1' })
+  expect(h3.kv.get('phone.page')).toMatchObject({ ver: 'ver-1', url: URL1 })
 })
 
 test('a query result without a docs array makes phone_setup refuse and keep the old pin', async ($, on) => {
@@ -1278,4 +1291,92 @@ test('a query result without a docs array makes phone_setup refuse and keep the 
   expect(String((await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })).result)).toMatch(/^Couldn't clear the phone's pending answers \(.+\): call phone_setup again\.$/)
   expect(h.kv.get('phone.page')).toEqual(pin)
   expect(h.result('r1')).toBeUndefined()
+})
+
+// Final review fix wave.
+test('moving the pin unpairs every phone; their later answers are refused unpaired device', async ($, on) => {
+  const h = await ansHarness($, on)
+  await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 }) // the same page again: nothing moves
+  expect(Object.keys(h.kv.get('phone.devices') as object)).toEqual([FP])
+  PAGE.ver = 'ver-2'
+  await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })
+  expect(h.kv.get('phone.devices')).toEqual({})
+  expect(h.kv.get('phone.page')).toMatchObject({ ver: 'ver-2', url: URL1 })
+  h.add('r1', { payload: { at: T0 - 1000 } }) // signed earlier by a phone that was paired before
+  expect(await h.go()).toBe(`Phone: 0 delivered, 1 refused (unpaired device)${TAIL}`)
+  expect(h.verifies).toEqual([])
+  expect(h.submitted).toEqual([])
+  await settle()
+})
+
+test('a comment post (an ask with a body) is not mirrored: it is answered in the pane', () => {
+  const body = { sha256: 'a'.repeat(64), text: 'the text' } as never
+  const doc = mirrorDoc('p', [ask({ id: 'a1' }), ask({ id: 'a2', key: 'k2', body }), ask({ id: 'a3', key: 'k3' })], '', 1)
+  expect(doc.asks.map(a => a.id)).toEqual(['a1', 'a3'])
+})
+
+test('a node startup failure (exit 1, other stderr) leaves the row untouched and shows the error', async ($, on) => {
+  const h = await ansHarness($, on, { verify: () => ({ exitCode: 1, stdout: '', stderr: "Error: Cannot find module '/x/verify-sig.mjs'\n" }) })
+  h.add('r1')
+  await h.go()
+  expect(h.result('r1')).toBeUndefined()
+  expect(h.writes()).toEqual([])
+  expect(await statusLine($)).toMatch(/can't verify phone answers: verifier exited 1/)
+  await settle()
+})
+
+test('exit 0 without valid on stdout is not accepted', async ($, on) => {
+  const h = await ansHarness($, on, { verify: () => ({ exitCode: 0, stdout: '', stderr: '' }) })
+  h.add('r1')
+  await h.go()
+  expect(h.result('r1')).toBeUndefined()
+  expect(h.submitted).toEqual([])
+  expect(await statusLine($)).toMatch(/can't verify phone answers: verifier exited 0/)
+  await settle()
+})
+
+test('a device doc dated in the future is never listed', async ($, on) => {
+  const h = pairHarness($, on, () => [dev(FP, { createdAt: T0 + 1_000_000 }, 4)])
+  await openPhone($, h)
+  const ui = await mountPane($)
+  expect(await shown(ui, `phone-pair-${FP}`)).toBe(false)
+  await ui.unmount()
+  await settle()
+})
+
+test('phone_setup needs the coordinator pane; off does not', async ($, on) => {
+  const h = harness($, on, (_, n) => written(n))
+  expect((await $.tool.call({ tool: `${TOOL}phone_setup`, url: URL1 })).result).toBe('phone_setup: open the coordinator pane first (open_pane).')
+  expect((await $.tool.call({ tool: `${TOOL}phone_setup`, url: '' })).result).toBe('Phone inbox off.')
+  expect(h.calls).toEqual([])
+  await settle()
+})
+
+test('answer rows the sweep could not read are named in the error line and stay untouched', async ($, on) => {
+  const fail = { notext: false }
+  const h = await ansHarness($, on, { fail })
+  fail.notext = true
+  await h.go()
+  expect(await statusLine($)).toContain('some answer rows could not be read')
+  expect(h.writes()).toEqual([])
+  await settle()
+})
+
+test('a phone unpaired during the sweep gets no further answer accepted', async ($, on) => {
+  const h = await ansHarness($, on, { verify: (_s, kv) => { kv.set('phone.devices', {}); return 0 } })
+  h.add('r1')
+  h.add('r2', { payload: { askId: '2' }, row: { createdAt: 99 } })
+  await h.go()
+  expect(h.result('r1')).toBe('delivered')
+  expect(h.result('r2')).toBe('refused')
+  expect(h.rows.get('r2')!.data.reason).toBe('unpaired device')
+  await settle()
+})
+
+test('the Phone line shows the time as the board does, in local time', async ($, on) => {
+  const h = await ansHarness($, on)
+  h.add('r1')
+  await h.go()
+  expect(await statusLine($)).toContain(`${new Date(NOW).toTimeString().slice(0, 5)} `)
+  await settle()
 })

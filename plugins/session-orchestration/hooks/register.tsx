@@ -2168,7 +2168,11 @@ export const register: Register = on => {
 
   // The coordinator's own plugin reload after `claude plugin update`, without the user typing it. A command can't
   // run inside the tool call: turn.complete runs it, as it runs /rename.
-  on('tool.call', { tool: 'mcp__session-orchestration__phone_setup' }, async ($, e) => ({ result: await phoneSetup($, e.url as string) }))
+  // Like phone_answers, it needs this session's pane: the timer that sweeps is the pane's. Off needs nothing.
+  on('tool.call', { tool: 'mcp__session-orchestration__phone_setup' }, async ($, e) => {
+    if (typeof e.url === 'string' && e.url.trim() !== '' && !answersVia) return { result: 'phone_setup: open the coordinator pane first (open_pane).' }
+    return { result: await phoneSetup($, e.url as string) }
+  })
 
   // Returns at once and sweeps a moment later, from a timer: the sweep submits the answers it accepts, and the host
   // refuses a prompt.submit while a tool.call hook runs (it would wait on the turn the hook holds). Each answer's row

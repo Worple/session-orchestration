@@ -20,7 +20,8 @@ Two tools, both coordinator only:
   that the published page is exactly the plugin's `inbox.html` (see "The page check" below). If it isn't: `The page at
   <url> isn't the plugin's inbox.html: republish it from the plugin (phone-inbox.md), then call phone_setup again.`
   If the page can't be read back: `Couldn't read the page at <url> back (<why>): check the URL, then call phone_setup
-  again.` `phone_setup` with `""` turns the phone inbox off.
+  again.` It needs the coordinator pane open in this session and otherwise refuses with `phone_setup: open the
+  coordinator pane first (open_pane).` `phone_setup` with `""` turns the phone inbox off and needs no pane.
 - `phone_answers` takes no input. The engine refuses a prompt submitted while a tool call's hook is running, so the
   tool can't sweep inside its own call. It schedules the sweep on the pane's timer and returns at once with `Phone:
   reading the answers now. Those that pass arrive as prompts once this turn ends; the pane's Phone line says what
@@ -57,6 +58,8 @@ question changed), `not an option`, `already answered`, `not delivered: <why>`, 
 
 ## Limits
 
+- An ask that carries a comment body (a comment post) is not shown on the phone: its text and sha256 are read in the
+  pane, so it is answered there.
 - The phone offers the listed options only. Answers in your own words stay in the terminal's question dialog.
 - The mirror shows up to 50 of the oldest asks that fit the page's size limit. An ask too large to mirror is skipped
   and must be answered in the pane.
@@ -65,10 +68,12 @@ question changed), `not an option`, `already answered`, `not delivered: <why>`, 
 
 ## Updating the page
 
-After a plugin update the coordinator publishes the new `inbox.html` over the old page and calls `phone_setup` once
-more. The phone keeps its pairing across a republish to the same URL. That was tested in
-the claude.ai app on one Android phone; other browsers and iOS are untested. Then close the phone page and open it
-again (see "The page check").
+After a plugin update the coordinator calls `phone_setup` first. If the published page is still the plugin's current
+`inbox.html`, nothing more is needed. Only if it refuses does the coordinator republish `inbox.html` over the old
+page (same URL) and call `phone_setup` again. Every republish, including one after a plugin update, makes
+`phone_setup` unpair every phone (see "The page check"), so each phone pairs again. That was tested in the claude.ai
+app on one Android phone; other browsers and iOS are untested. After a republish, close the phone page and open it
+again.
 
 ## The page check
 
@@ -82,9 +87,11 @@ even an identical republish. While the page counts as changed:
 - the pane's Phone line shows `The page at <url> isn't the plugin's inbox.html: republish it from the plugin
   (phone-inbox.md), then call phone_setup again.`
 
-When `phone_setup` accepts a new version, it first refuses the answers still waiting with `page changed`, so nothing
-written while the page was different gets through. If it can't clear them, it refuses with `Couldn't clear the
-phone's pending answers (<why>): call phone_setup again.` and changes nothing.
+When `phone_setup` accepts a new version or URL, it first refuses every answer still waiting, for every project, with
+`page changed`. Then it unpairs every phone, so a signature made while the page was different (the signer picks the
+time it carries) can't be used later, and a key paired through an old page isn't trusted on the new one. Every phone
+pairs again. If it can't clear the waiting answers, it refuses with `Couldn't clear the phone's pending answers
+(<why>): call phone_setup again.` and changes nothing.
 
 If the page can't be read back during a sweep, waiting answers are left untouched and the Phone line shows `can't
 check the phone page: <why>`.
